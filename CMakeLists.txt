@@ -24,6 +24,8 @@ option(ENABLE_WEB_SERVICE "Enable web services (telemetry, etc.)" ON)
 
 option(ENABLE_CUBEB "Enables the cubeb audio backend" ON)
 
+option(ENABLE_VULKAN "Enables the use of the Vulkan API" ON)
+
 option(ENABLE_FFMPEG_AUDIO_DECODER "Enable FFmpeg audio (AAC) decoder" OFF)
 option(ENABLE_FFMPEG_VIDEO_DUMPER "Enable FFmpeg video dumper" OFF)
 

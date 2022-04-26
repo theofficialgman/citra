@@ -68,8 +68,21 @@ add_library(video_core STATIC
     renderer_opengl/texture_filters/xbrz/xbrz_freescale.cpp
     renderer_opengl/texture_filters/xbrz/xbrz_freescale.h
     #temporary, move these back in alphabetical order before merging
-    renderer_opengl/gl_format_reinterpreter.cpp
-    renderer_opengl/gl_format_reinterpreter.h
+    renderer_vulkan/pica_to_vulkan.h
+    renderer_vulkan/renderer_vulkan.cpp
+    renderer_vulkan/renderer_vulkan.h
+    renderer_vulkan/vk_buffer.cpp
+    renderer_vulkan/vk_buffer.h
+    renderer_vulkan/vk_context.cpp
+    renderer_vulkan/vk_context.h
+    renderer_vulkan/vk_resource_manager.cpp
+    renderer_vulkan/vk_resource_manager.h
+    renderer_vulkan/vk_state.cpp
+    renderer_vulkan/vk_state.h
+    renderer_vulkan/vk_swapchain.cpp
+    renderer_vulkan/vk_swapchain.h
+    renderer_vulkan/vk_texture.cpp
+    renderer_vulkan/vk_texture.h
     shader/debug_data.h
     shader/shader.cpp
     shader/shader.h
@@ -142,6 +155,12 @@ if(ARCHITECTURE_x86_64)
     )
 endif()
 
+if (ENABLE_VULKAN)
+    # Find the VulkanSDK
+    find_package(Vulkan REQUIRED)
+    find_library(SHADERC_LIB shaderc shaderc_shared)
+endif()
+
 create_target_directory_groups(video_core)
 
 target_link_libraries(video_core PUBLIC common core)
@@ -149,4 +168,9 @@ target_link_libraries(video_core PRIVATE glad nihstro-headers Boost::serializati
 
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak)
+endif()
+
+if (ENABLE_VULKAN)
+    target_include_directories(video_core PRIVATE ${Vulkan_INCLUDE_DIRS})
+    target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_LIB})
 endif()
