@@ -41,6 +41,15 @@ constexpr uint ShadowTextureNZ = 6;
 
 class VulkanState {
 public:
+    struct Messenger {
+        bool cull_state;
+        bool depth_state;
+        bool color_mask;
+        bool stencil_state;
+        bool logic_op;
+        bool texture_state;
+    };
+
     struct {
         bool enabled;
         vk::CullModeFlags mode;
@@ -130,18 +139,8 @@ public:
         return cur_state;
     }
 
-    /// Apply this state as the current OpenGL state
-    void Apply() const;
-
-    /// Resets any references to the given resource
-    VulkanState& ResetTexture(GLuint handle);
-    VulkanState& ResetSampler(GLuint handle);
-    VulkanState& ResetProgram(GLuint handle);
-    VulkanState& ResetPipeline(GLuint handle);
-    VulkanState& ResetBuffer(GLuint handle);
-    VulkanState& ResetVertexArray(GLuint handle);
-    VulkanState& ResetFramebuffer(GLuint handle);
-    VulkanState& ResetRenderbuffer(GLuint handle);
+    /// Apply all dynamic state to the provided Vulkan command buffer
+    void Apply(vk::CommandBuffer& command_buffer) const;
 
 private:
     static VulkanState cur_state;

@@ -1,16 +1,20 @@
-﻿#include "vk_texture.h"
-#include "vk_buffer.h"
-#include "vk_context.h"
+﻿// Copyright 2022 Citra Emulator Project
+// Licensed under GPLv2 or any later version
+// Refer to the license.txt file included.
 
-VkTexture::VkTexture(const std::shared_ptr<VkContext>& context) :
-    context(context), staging(context)
-{
-}
+#include "common/assert.h"
+#include "common/logging/log.h"
+#include "video_core/renderer_vulkan/vk_texture.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 
-void VkTexture::create(int width_, int height_, vk::ImageType type, vk::Format format_)
+namespace Vulkan {
+
+void VKTexture::Create(const Info& info)
 {
-    auto& device = context->device;
-    format = format_; width = width_; height = height_;
+    auto& device = g_vk_instace->GetDevice();
+    format = info.format;
+    width = info.width;
+    height = info.height;
 
     switch (format)
     {
@@ -23,57 +27,73 @@ void VkTexture::create(int width_, int height_, vk::ImageType type, vk::Format f
         channels = 3;
         break;
     default:
-        throw std::runtime_error("[VK] Unknown texture format");
+        LOG_CRITICAL(Render_Vulkan, "Unknown texture format {}", format);
     }
 
-    int image_size = width * height * channels;
-    staging.create(image_size, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+    // Create staging memory buffer for pixel transfers
+    u32 image_size = width * height * channels;
+    staging.Create(image_size, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                    vk::BufferUsageFlagBits::eTransferSrc);
     pixels = staging.memory;
 
     // Create the texture
+    vk::ImageCreateFlags flags = info.view_type == vk::ImageViewType::eCube ? vk::ImageCreateFlagBits::eCubeCompatible : {};
     vk::ImageCreateInfo image_info
     (
-        {},
-        type,
+        flags,
+        info.type,
         format,
-        { width, height, 1 }, 1, 1,
+        { width, height, 1 }, info.mipmap_levels, info.array_layers,
         vk::SampleCountFlagBits::e1,
         vk::ImageTiling::eOptimal,
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled
     );
 
-    texture = device->createImageUnique(image_info);
+    texture = device.createImageUnique(image_info);
 
     // Create texture memory
-    auto requirements = device->getImageMemoryRequirements(texture.get());
-    auto memory_index = Buffer::find_memory_type(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal, context);
+    auto requirements = device.getImageMemoryRequirements(texture.get());
+    auto memory_index = VKBuffer::FindMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo alloc_info(requirements.size, memory_index);
 
-    texture_memory = device->allocateMemoryUnique(alloc_info);
-    device->bindImageMemory(texture.get(), texture_memory.get(), 0);
+    texture_memory = device.allocateMemoryUnique(alloc_info);
+    device.bindImageMemory(texture.get(), texture_memory.get(), 0);
 
     // Create texture view
-    vk::ImageViewCreateInfo view_info({}, texture.get(), vk::ImageViewType::e1D, format, {},
-                                     vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    texture_view = device->createImageViewUnique(view_info);
+    vk::ImageViewCreateInfo view_info({}, texture.get(), info.view_type, format, {},
+                                      vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+    texture_view = device.createImageViewUnique(view_info);
 
     // Create texture sampler
-    auto props = context->physical_device.getProperties();
-    vk::SamplerCreateInfo sampler_info({}, vk::Filter::eNearest, vk::Filter::eNearest, vk::SamplerMipmapMode::eNearest, vk::SamplerAddressMode::eClampToEdge,
-                                      vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge, {}, true, props.limits.maxSamplerAnisotropy,
-                                      false, vk::CompareOp::eAlways, {}, {}, vk::BorderColor::eIntOpaqueBlack, false);
+    auto properties = g_vk_instace->GetPhysicalDevice().getProperties();
+    vk::SamplerCreateInfo sampler_info
+    (
+        {},
+        info.sampler_info.mag_filter,
+        info.sampler_info.min_filter,
+        info.sampler_info.mipmap_mode,
+        info.sampler_info.wrapping[0], info.sampler_info.wrapping[1], info.sampler_info.wrapping[2],
+        {},
+        true,
+        properties.limits.maxSamplerAnisotropy,
+        false,
+        vk::CompareOp::eAlways,
+        {},
+        {},
+        vk::BorderColor::eIntOpaqueBlack,
+        false
+    );
 
-    texture_sampler = device->createSamplerUnique(sampler_info);
+    texture_sampler = device.createSamplerUnique(sampler_info);
 }
 
-void VkTexture::transition_layout(vk::ImageLayout old_layout, vk::ImageLayout new_layout)
+void VKTexture::TransitionLayout(vk::ImageLayout old_layout, vk::ImageLayout new_layout)
 {
-    auto& device = context->device;
-    auto& queue = context->graphics_queue;
+    auto& device = g_vk_instace->GetDevice();
+    auto& queue = g_vk_instace->graphics_queue;
 
-    vk::CommandBufferAllocateInfo alloc_info(context->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::CommandBuffer command_buffer = device->allocateCommandBuffers(alloc_info)[0];
+    vk::CommandBufferAllocateInfo alloc_info(g_vk_instace->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
+    vk::CommandBuffer command_buffer = device.allocateCommandBuffers(alloc_info)[0];
 
     command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -82,25 +102,23 @@ void VkTexture::transition_layout(vk::ImageLayout old_layout, vk::ImageLayout ne
     std::array<vk::ImageMemoryBarrier, 1> barriers = { barrier };
 
     vk::PipelineStageFlags source_stage, destination_stage;
-    if (old_layout == vk::ImageLayout::eUndefined && new_layout == vk::ImageLayout::eTransferDstOptimal)
-    {
+    if (old_layout == vk::ImageLayout::eUndefined && new_layout == vk::ImageLayout::eTransferDstOptimal) {
         barrier.srcAccessMask = vk::AccessFlagBits::eNone;
         barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
 
         source_stage = vk::PipelineStageFlagBits::eTopOfPipe;
         destination_stage = vk::PipelineStageFlagBits::eTransfer;
     }
-    else if (old_layout == vk::ImageLayout::eTransferDstOptimal && new_layout == vk::ImageLayout::eShaderReadOnlyOptimal)
-    {
+    else if (old_layout == vk::ImageLayout::eTransferDstOptimal && new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
         barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
         barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
 
         source_stage = vk::PipelineStageFlagBits::eTransfer;
         destination_stage = vk::PipelineStageFlagBits::eFragmentShader;
     }
-    else
-    {
-        throw std::invalid_argument("[VK] Unsupported layout transition!");
+    else {
+        LOG_CRITICAL(Render_Vulkan, "Unsupported layout transition");
+        UNREACHABLE();
     }
 
     command_buffer.pipelineBarrier(source_stage, destination_stage, vk::DependencyFlagBits::eByRegion, {}, {}, barriers);
@@ -110,23 +128,23 @@ void VkTexture::transition_layout(vk::ImageLayout old_layout, vk::ImageLayout ne
     queue.submit(submit_info, nullptr);
     queue.waitIdle();
 
-    device->freeCommandBuffers(context->command_pool.get(), command_buffer);
+    device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
 }
 
-void VkTexture::copy_pixels(uint8_t* new_pixels, uint32_t count)
+void VKTexture::CopyPixels(std::span<u32> new_pixels)
 {
-    auto& device = context->device;
-    auto& queue = context->graphics_queue;
+    auto& device = g_vk_instace->GetDevice();
+    auto& queue = g_vk_instace->graphics_queue;
 
     // Transition image to transfer format
-    transition_layout(vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    TransitionLayout(vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
     // Copy pixels to staging buffer
-    std::memcpy(pixels, new_pixels, count * channels);
+    std::memcpy(pixels, new_pixels.data(), new_pixels.size() * channels);
 
     // Copy the staging buffer to the image
-    vk::CommandBufferAllocateInfo alloc_info(context->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::CommandBuffer command_buffer = device->allocateCommandBuffers(alloc_info)[0];
+    vk::CommandBufferAllocateInfo alloc_info(g_vk_instace->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
+    vk::CommandBuffer command_buffer = device.allocateCommandBuffers(alloc_info)[0];
 
     command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -140,8 +158,10 @@ void VkTexture::copy_pixels(uint8_t* new_pixels, uint32_t count)
     queue.submit(submit_info, nullptr);
     queue.waitIdle();
 
-    device->freeCommandBuffers(context->command_pool.get(), command_buffer);
+    device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
 
     // Prepare for shader reads
-    transition_layout(vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    TransitionLayout(vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
 }

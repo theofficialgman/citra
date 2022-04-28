@@ -73,12 +73,23 @@ add_library(video_core STATIC
     renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/vk_buffer.cpp
     renderer_vulkan/vk_buffer.h
-    renderer_vulkan/vk_context.cpp
-    renderer_vulkan/vk_context.h
-    renderer_vulkan/vk_resource_manager.cpp
-    renderer_vulkan/vk_resource_manager.h
+    renderer_vulkan/vk_instance.cpp
+    renderer_vulkan/vk_instance.h
+    renderer_vulkan/vk_resource_cache.cpp
+    renderer_vulkan/vk_resource_cache.h
+    renderer_vulkan/vk_rasterizer_cache.cpp
+    renderer_vulkan/vk_rasterizer_cache.h
+    renderer_vulkan/vk_rasterizer.cpp
+    renderer_vulkan/vk_rasterizer.h
+    renderer_vulkan/vk_pipeline.cpp
+    renderer_vulkan/vk_pipeline.h
+    renderer_vulkan/vk_pipeline_manager.h
+    renderer_vulkan/vk_pipeline_manager.cpp
+    renderer_vulkan/vk_shader_state.h
     renderer_vulkan/vk_state.cpp
     renderer_vulkan/vk_state.h
+    renderer_vulkan/vk_surface_params.cpp
+    renderer_vulkan/vk_surface_params.h
     renderer_vulkan/vk_swapchain.cpp
     renderer_vulkan/vk_swapchain.h
     renderer_vulkan/vk_texture.cpp

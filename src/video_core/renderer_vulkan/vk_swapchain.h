@@ -72,7 +72,6 @@ private:
 
 public:
     // Window attributes
-    GLFWwindow* window;
     uint32_t width = 0, height = 0;
     bool framebuffer_resized = false;
     std::string_view name;

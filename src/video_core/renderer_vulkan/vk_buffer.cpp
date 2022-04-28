@@ -1,64 +1,59 @@
-#include "vk_buffer.h"
-#include "vk_context.h"
-#include <cassert>
+// Copyright 2022 Citra Emulator Project
+// Licensed under GPLv2 or any later version
+// Refer to the license.txt file included.
+
+#include "common/assert.h"
+#include "common/logging/log.h"
+#include "video_core/renderer_vulkan/vk_buffer.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 #include <algorithm>
 #include <type_traits>
 #include <cstring>
 
-Buffer::Buffer(std::shared_ptr<VkContext> context) :
-    context(context)
+namespace Vulkan {
+
+VKBuffer::~VKBuffer()
 {
+    if (memory != nullptr) {
+        g_vk_instace->GetDevice().unmapMemory(buffer_memory.get());
+    }
 }
 
-Buffer::~Buffer()
+void VKBuffer::Create(uint32_t byte_count, vk::MemoryPropertyFlags properties, vk::BufferUsageFlags usage, vk::Format view_format)
 {
-    auto& device = context->device;
-    if (memory != nullptr)
-        device->unmapMemory(buffer_memory.get());
-}
-
-void Buffer::create(uint32_t byte_count, vk::MemoryPropertyFlags properties, vk::BufferUsageFlags usage)
-{
-    auto& device = context->device;
+    auto& device = g_vk_instace->GetDevice();
     size = byte_count;
 
     vk::BufferCreateInfo bufferInfo({}, byte_count, usage);
-    buffer = device->createBufferUnique(bufferInfo);
+    buffer = device.createBufferUnique(bufferInfo);
 
-    auto mem_requirements = device->getBufferMemoryRequirements(buffer.get());
+    auto mem_requirements = device.getBufferMemoryRequirements(buffer.get());
 
-    auto memory_type_index = find_memory_type(mem_requirements.memoryTypeBits, properties, context);
+    auto memory_type_index = FindMemoryType(mem_requirements.memoryTypeBits, properties);
     vk::MemoryAllocateInfo alloc_info(mem_requirements.size, memory_type_index);
 
-    buffer_memory = device->allocateMemoryUnique(alloc_info);
-    device->bindBufferMemory(buffer.get(), buffer_memory.get(), 0);
+    buffer_memory = device.allocateMemoryUnique(alloc_info);
+    device.bindBufferMemory(buffer.get(), buffer_memory.get(), 0);
 
     // Optionally map the buffer to CPU memory
     if (properties & vk::MemoryPropertyFlagBits::eHostVisible)
-        memory = device->mapMemory(buffer_memory.get(), 0, byte_count);
+        memory = device.mapMemory(buffer_memory.get(), 0, byte_count);
 
     // Create buffer view for texel buffers
     if (usage & vk::BufferUsageFlagBits::eStorageTexelBuffer || usage & vk::BufferUsageFlagBits::eUniformTexelBuffer)
     {
-        vk::BufferViewCreateInfo view_info({}, buffer.get(), vk::Format::eR32Uint, 0, byte_count);
-        buffer_view = device->createBufferViewUnique(view_info);
+        vk::BufferViewCreateInfo view_info({}, buffer.get(), view_format, 0, byte_count);
+        buffer_view = device.createBufferViewUnique(view_info);
     }
 }
 
-void Buffer::bind(vk::CommandBuffer& command_buffer)
+void VKBuffer::CopyBuffer(VKBuffer& src_buffer, VKBuffer& dst_buffer, const vk::BufferCopy& region)
 {
-    vk::DeviceSize offsets[1] = { 0 };
-    command_buffer.bindVertexBuffers(0, 1, &buffer.get(), offsets);
-}
+    auto& device = g_vk_instace->GetDevice();
+    auto& queue = g_vk_instace->graphics_queue;
 
-void Buffer::copy_buffer(Buffer& src_buffer, Buffer& dst_buffer, const vk::BufferCopy& region)
-{
-    auto& context = src_buffer.context;
-    auto& device = context->device;
-    auto& queue = context->graphics_queue;
-
-    vk::CommandBufferAllocateInfo alloc_info(context->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::CommandBuffer command_buffer = device->allocateCommandBuffers(alloc_info)[0];
+    vk::CommandBufferAllocateInfo alloc_info(g_vk_instace->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
+    vk::CommandBuffer command_buffer = device.allocateCommandBuffers(alloc_info)[0];
 
     command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
     command_buffer.copyBuffer(src_buffer.buffer.get(), dst_buffer.buffer.get(), region);
@@ -68,12 +63,12 @@ void Buffer::copy_buffer(Buffer& src_buffer, Buffer& dst_buffer, const vk::Buffe
     queue.submit(submit_info, nullptr);
     queue.waitIdle();
 
-    device->freeCommandBuffers(context->command_pool.get(), command_buffer);
+    device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
 }
 
-uint32_t Buffer::find_memory_type(uint32_t type_filter, vk::MemoryPropertyFlags properties, std::shared_ptr<VkContext> context)
+uint32_t VKBuffer::FindMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties)
 {
-    vk::PhysicalDeviceMemoryProperties mem_properties = context->physical_device.getMemoryProperties();
+    vk::PhysicalDeviceMemoryProperties mem_properties = g_vk_instace->GetPhysicalDevice().getMemoryProperties();
 
     for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++)
     {
@@ -82,32 +77,8 @@ uint32_t Buffer::find_memory_type(uint32_t type_filter, vk::MemoryPropertyFlags 
             return i;
     }
 
-    throw std::runtime_error("[VK] Failed to find suitable memory type!");
+    LOG_CRITICAL(Render_Vulkan, "Failed to find suitable memory type.");
+    UNREACHABLE();
 }
 
-VertexBuffer::VertexBuffer(const std::shared_ptr<VkContext>& context) :
-    host(context), local(context), context(context)
-{
-}
-
-void VertexBuffer::create(uint32_t vertex_count)
-{
-    // Create a host and local buffer
-    auto byte_count = sizeof(Vertex) * vertex_count;
-    local.create(byte_count, vk::MemoryPropertyFlagBits::eDeviceLocal,
-                 vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer);
-    host.create(byte_count, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                vk::BufferUsageFlagBits::eTransferSrc);
-}
-
-void VertexBuffer::copy_vertices(Vertex* vertices, uint32_t count)
-{
-    auto byte_count = count * sizeof(Vertex);
-    std::memcpy(host.memory, vertices, byte_count);
-    Buffer::copy_buffer(host, local, { 0, 0, byte_count });
-}
-
-void VertexBuffer::bind(vk::CommandBuffer& command_buffer)
-{
-    local.bind(command_buffer);
 }
