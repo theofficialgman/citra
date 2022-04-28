@@ -54,9 +54,6 @@ bool VKResourceCache::Initialize()
     vk::PipelineLayoutCreateInfo layout_info({}, descriptor_layouts);
     pipeline_layout = g_vk_instace->GetDevice().createPipelineLayoutUnique(layout_info);
 
-    if (!CreateStaticSamplers())
-        return false;
-
     // Create global texture staging buffer
     texture_upload_buffer.Create(MAX_TEXTURE_UPLOAD_BUFFER_SIZE,
                                  vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
@@ -104,12 +101,14 @@ vk::Sampler VKResourceCache::GetSampler(const SamplerInfo& info)
 vk::RenderPass VKResourceCache::GetRenderPass(vk::Format color_format, vk::Format depth_format,
                                               u32 multisamples, vk::AttachmentLoadOp load_op)
 {
+    // Search the cache if we can reuse an already created renderpass
     auto key = std::tie(color_format, depth_format, multisamples, load_op);
     auto it = render_pass_cache.find(key);
     if (it != render_pass_cache.end()) {
         return it->second;
     }
 
+    // Otherwise create a new one with the parameters provided
     vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics);
     std::array<vk::AttachmentDescription, 2> attachments;
     std::array<vk::AttachmentReference, 2> references;

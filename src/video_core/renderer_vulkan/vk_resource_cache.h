@@ -53,6 +53,6 @@ private:
     std::string pipeline_cache_filename;
 };
 
-extern std::unique_ptr<VKResourceCache> g_object_cache;
+extern std::unique_ptr<VKResourceCache> g_vk_res_cache;
 
 }  // namespace Vulkan

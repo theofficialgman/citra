@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <span>
+#include <functional>
 #include "video_core/renderer_vulkan/vk_buffer.h"
 
 namespace Vulkan {
@@ -19,6 +20,7 @@ struct SamplerInfo {
 
 /// Vulkan texture object
 class VKTexture final : public NonCopyable {
+    friend class VKFramebuffer;
 public:
     /// Information for the creation of the target texture
     struct Info {
@@ -28,6 +30,7 @@ public:
         vk::ImageViewType view_type;
         u32 mipmap_levels = 1;
         u32 array_layers = 1;
+        u32 multisamples = 1;
         SamplerInfo sampler_info = {};
     };
 
@@ -41,41 +44,52 @@ public:
     /// Copies CPU side pixel data to the GPU texture buffer
     void CopyPixels(std::span<u32> pixels);
 
+    /// Get Vulkan objects
+    vk::ImageView& GetView() { return texture_view.get(); }
+    vk::Format GetFormat() const { return texture_info.format; }
+    vk::Rect2D GetRect() const { return vk::Rect2D({}, { texture_info.width, texture_info.height }); }
+    u32 GetSamples() const { return texture_info.multisamples; }
+
 private:
     /// Used to transition the image to an optimal layout during transfers
     void TransitionLayout(vk::ImageLayout old_layout, vk::ImageLayout new_layout);
 
 private:
-    // Texture buffer
-    void* pixels = nullptr;
-    uint32_t width = 0, height = 0, channels = 0;
-    VKBuffer staging;
-
-    // Texture objects
+    Info texture_info;
     vk::UniqueImage texture;
     vk::UniqueImageView texture_view;
     vk::UniqueDeviceMemory texture_memory;
-    vk::UniqueSampler texture_sampler;
-    vk::Format format;
+    u32 channels;
+};
+
+enum Attachments {
+    Color = 0,
+    DepthStencil = 1
 };
 
 /// Vulkan framebuffer object similar to an FBO in OpenGL
 class VKFramebuffer final : public NonCopyable {
 public:
+    struct Info {
+        VKTexture* color;
+        VKTexture* depth_stencil;
+    };
+
     VKFramebuffer() = default;
     ~VKFramebuffer() = default;
 
-    // Create Vulkan framebuffer object
-    void Create(u32 width, u32 height, u32 layers, u32 samples);
+    /// Create Vulkan framebuffer object
+    void Create(const Info& info);
 
-    VkRect2D GetRect() const { return VkRect2D{{0, 0}, {width, height}}; }
+    /// Configure frambuffer for rendering
+    void Prepare();
+
+    vk::Rect2D GetRect() const { return vk::Rect2D({}, { width, height }); }
 
 private:
     u32 width, height;
     vk::UniqueFramebuffer framebuffer;
-    vk::RenderPass load_renderpass;
-    vk::RenderPass discard_renderpass;
-    vk::RenderPass clear_renderpass;
+    std::array<VKTexture*, 2> attachments;
 };
 
 }

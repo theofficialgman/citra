@@ -21,10 +21,15 @@ public:
     /// Create a generic Vulkan buffer object
     void Create(uint32_t size, vk::MemoryPropertyFlags properties, vk::BufferUsageFlags usage, vk::Format view_format = vk::Format::eUndefined);
 
+    /// Global utility functions used by other objects
     static uint32_t FindMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties);
     static void CopyBuffer(VKBuffer& src_buffer, VKBuffer& dst_buffer, const vk::BufferCopy& region);
 
-public:
+    /// Return a pointer to the mapped memory if the buffer is host mapped
+    u8* GetHostPointer() { return reinterpret_cast<u8*>(memory); }
+    vk::Buffer& GetBuffer() { return buffer.get(); }
+
+private:
     void* memory = nullptr;
     vk::UniqueBuffer buffer;
     vk::UniqueDeviceMemory buffer_memory;
