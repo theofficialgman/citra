@@ -60,6 +60,7 @@ add_library(common STATIC
     detached_tasks.h
     bit_field.h
     bit_set.h
+    blocking_loop.h
     cityhash.cpp
     cityhash.h
     color.h
@@ -69,6 +70,7 @@ add_library(common STATIC
     construct.h
     file_util.cpp
     file_util.h
+    flag.h
     hash.h
     linear_disk_cache.h
     logging/backend.cpp
@@ -92,6 +94,7 @@ add_library(common STATIC
     scm_rev.cpp
     scm_rev.h
     scope_exit.h
+    semaphore.h
     serialization/atomic.h
     serialization/boost_discrete_interval.hpp
     serialization/boost_flat_set.h

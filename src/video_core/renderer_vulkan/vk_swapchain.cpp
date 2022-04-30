@@ -62,6 +62,9 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
         swapchain.swap(new_swapchain);
     }
 
+    // Create framebuffer and image views
+    SetupImages();
+
     return true;
 }
 

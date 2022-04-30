@@ -12,23 +12,6 @@
 
 namespace Vulkan {
 
-// Using multiple command buffers prevents stalling
-constexpr u32 COMMAND_BUFFER_COUNT = 3;
-
-struct FrameResources
-{
-    vk::CommandPool command_pool;
-    std::array<vk::CommandBuffer, COMMAND_BUFFER_COUNT> command_buffers = {};
-    vk::DescriptorPool descriptor_pool;
-    vk::Fence fence;
-    vk::Semaphore semaphore;
-    u64 fence_counter = 0;
-    bool init_command_buffer_used = false;
-    bool semaphore_used = false;
-
-    std::vector<std::function<void()>> cleanup_resources;
-};
-
 /// The global Vulkan instance
 class VKInstance
 {
