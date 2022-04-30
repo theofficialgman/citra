@@ -11,8 +11,7 @@
 namespace Vulkan {
 
 struct SwapChainImage {
-    vk::Image image;
-    vk::UniqueImageView image_view;
+    VKTexture image;
     VKFramebuffer framebuffer;
 };
 

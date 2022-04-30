@@ -177,11 +177,8 @@ void VKSwapChain::SetupImages() {
 
     // Create the swapchain buffers containing the image and imageview
     swapchain_images.resize(images.size());
-    for (size_t i = 0; i < swapchain_images.size(); i++)
+    for (int i = 0; i < swapchain_images.size(); i++)
     {
-        swapchain_images[i].image = images[i];
-
-        // Create swapchain image view
         vk::ImageViewCreateInfo color_attachment_view
         (
             {},
@@ -192,11 +189,12 @@ void VKSwapChain::SetupImages() {
             { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
         );
 
-        swapchain_images[i].image_view = device.createImageViewUnique(color_attachment_view);
+        // Wrap swapchain images with VKTexture
+        swapchain_images[i].image.Adopt(images[i], color_attachment_view);
 
         // Create framebuffer for each swapchain image
         VKFramebuffer::Info fb_info = {
-            .color = // TODO
+            .color = &swapchain_images[i].image
         };
 
         swapchain_images[i].framebuffer.Create(fb_info);

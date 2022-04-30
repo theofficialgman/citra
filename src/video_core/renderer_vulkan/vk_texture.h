@@ -39,11 +39,13 @@ public:
 
     VKTexture() = default;
     VKTexture(VKTexture&&) = default;
-    ~VKTexture() = default;
+    ~VKTexture();
 
-    /// Create a new Vulkan texture object along with its sampler
+    /// Create a new Vulkan texture object
     void Create(const Info& info);
-    bool IsValid() { return !!texture; }
+
+    /// Create a non-owning texture object
+    void Adopt(vk::Image image, vk::ImageViewCreateInfo view_info);
 
     /// Copies CPU side pixel data to the GPU texture buffer
     void CopyPixels(std::span<u32> pixels);
@@ -53,6 +55,7 @@ public:
     vk::Format GetFormat() const { return texture_info.format; }
     vk::Rect2D GetRect() const { return vk::Rect2D({}, { texture_info.width, texture_info.height }); }
     u32 GetSamples() const { return texture_info.multisamples; }
+    bool IsValid() { return texture; }
 
     /// Used to transition the image to an optimal layout during transfers
     void TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& command_buffer);
@@ -67,9 +70,10 @@ public:
                 vk::CommandBuffer& command_buffer);
 
 private:
+    bool cleanup_image = true;
     Info texture_info;
     vk::ImageLayout texture_layout = vk::ImageLayout::eUndefined;
-    vk::UniqueImage texture;
+    vk::Image texture;
     vk::UniqueImageView texture_view;
     vk::UniqueDeviceMemory texture_memory;
     u32 channels;

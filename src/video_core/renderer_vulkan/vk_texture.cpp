@@ -10,6 +10,12 @@
 
 namespace Vulkan {
 
+VKTexture::~VKTexture() {
+    if (cleanup_image) {
+        g_vk_instace->GetDevice().destroyImage(texture);
+    }
+}
+
 void VKTexture::Create(const Info& info) {
     auto& device = g_vk_instace->GetDevice();
     texture_info = info;
@@ -49,20 +55,29 @@ void VKTexture::Create(const Info& info) {
         vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled
     );
 
-    texture = device.createImageUnique(image_info);
+    texture = device.createImage(image_info);
 
     // Create texture memory
-    auto requirements = device.getImageMemoryRequirements(texture.get());
+    auto requirements = device.getImageMemoryRequirements(texture);
     auto memory_index = VKBuffer::FindMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo alloc_info(requirements.size, memory_index);
 
     texture_memory = device.allocateMemoryUnique(alloc_info);
-    device.bindImageMemory(texture.get(), texture_memory.get(), 0);
+    device.bindImageMemory(texture, texture_memory.get(), 0);
 
     // Create texture view
-    vk::ImageViewCreateInfo view_info({}, texture.get(), info.view_type, texture_info.format, {},
+    vk::ImageViewCreateInfo view_info({}, texture, info.view_type, texture_info.format, {},
                                       vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
     texture_view = device.createImageViewUnique(view_info);
+}
+
+void VKTexture::Adopt(vk::Image image, vk::ImageViewCreateInfo view_info) {
+    // Prevent image cleanup at object destruction
+    cleanup_image = false;
+    texture = image;
+
+    // Create image view
+    texture_view = g_vk_instace->GetDevice().createImageViewUnique(view_info);
 }
 
 void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& command_buffer) {
@@ -135,7 +150,7 @@ void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& 
         source.access, dst.access,
         source.layout, dst.layout,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        texture.get(),
+        texture,
         vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)
     );
 
@@ -172,7 +187,7 @@ void VKTexture::CopyPixels(std::span<u32> new_pixels) {
     TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
 
     auto& staging = g_vk_res_cache->GetTextureUploadBuffer();
-    command_buffer.copyBufferToImage(staging.GetBuffer(), texture.get(), vk::ImageLayout::eTransferDstOptimal, regions);
+    command_buffer.copyBufferToImage(staging.GetBuffer(), texture, vk::ImageLayout::eTransferDstOptimal, regions);
 
     // Prepare for shader reads
     TransitionLayout(vk::ImageLayout::eShaderReadOnlyOptimal, command_buffer);
@@ -222,7 +237,7 @@ void VKTexture::BlitTo(Common::Rectangle<u32> srect, VKTexture& dest,
     dest.TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
 
     // Perform blit operation
-    command_buffer.blitImage(texture.get(), vk::ImageLayout::eTransferSrcOptimal, dest.texture.get(),
+    command_buffer.blitImage(texture, vk::ImageLayout::eTransferSrcOptimal, dest.texture,
                              vk::ImageLayout::eTransferDstOptimal, regions, vk::Filter::eNearest);
 }
 
