@@ -43,6 +43,12 @@ public:
     vk::Device& GetDevice() { return device.get(); }
     vk::PhysicalDevice& GetPhysicalDevice() { return physical_device; }
 
+    /// Retrieve queue information
+    u32 GetGraphicsQueueFamilyIndex() const { return graphics_queue_family_index; }
+    u32 GetPresentQueueFamilyIndex() const { return present_queue_family_index; }
+    vk::Queue GetGraphicsQueue() { return graphics_queue; }
+    vk::Queue GetPresentQueue() { return present_queue; }
+
     /// Feature support
     bool SupportsAnisotropicFiltering() const;
 

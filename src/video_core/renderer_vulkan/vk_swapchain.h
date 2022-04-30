@@ -12,20 +12,29 @@ namespace Vulkan {
 
 struct SwapChainImage {
     vk::Image image;
-    VKTexture texture;
+    vk::UniqueImageView image_view;
     VKFramebuffer framebuffer;
 };
 
-class VKSwapchain {
+struct SwapChainDetails {
+    vk::SurfaceFormatKHR format;
+    vk::PresentModeKHR present_mode;
+    vk::Extent2D extent;
+    vk::SurfaceTransformFlagBitsKHR transform;
+    u32 image_count;
+};
+
+class VKSwapChain {
 public:
-    VKSwapchain(vk::SurfaceKHR surface);
-    ~VKSwapchain() = default;
+    VKSwapChain(vk::SurfaceKHR surface);
+    ~VKSwapChain() = default;
 
     /// Creates (or recreates) the swapchain with a given size.
-    void Create(u32 width, u32 height, bool vsync_enabled);
+    bool Create(u32 width, u32 height, bool vsync_enabled);
 
-    /// Acquires the next image in the swapchain, waits as needed.
-    void AcquireNextImage();
+    /// Acquire the next image in the swapchain.
+    void AcquireNextImage(vk::Semaphore present_semaphore);
+    void Present(vk::Semaphore render_semaphore);
 
     /// Returns true when the swapchain needs to be recreated.
     bool NeedsRecreation() const { return IsSubOptimal(); }
@@ -35,23 +44,23 @@ public:
     u32 GetCurrentImageIndex() const { return image_index; }
 
     /// Get current swapchain state
-    vk::Extent2D GetSize() const { return extent; }
+    vk::Extent2D GetSize() const { return details.extent; }
     vk::SurfaceKHR GetSurface() const { return surface; }
-    vk::SurfaceFormatKHR GetSurfaceFormat() const { return surface_format; }
-    vk::Format GetTextureFormat() const { return texture_format; }
+    vk::SurfaceFormatKHR GetSurfaceFormat() const { return details.format; }
     vk::SwapchainKHR GetSwapChain() const { return swapchain.get(); }
     vk::Image GetCurrentImage() const { return swapchain_images[image_index].image; }
 
     /// Retrieve current texture and framebuffer
-    VKTexture& GetCurrentTexture() { return swapchain_images[image_index].texture; }
+    vk::Image GetCurrentImage() { return swapchain_images[image_index].image; }
     VKFramebuffer& GetCurrentFramebuffer() { return swapchain_images[image_index].framebuffer; }
 
 private:
+    void PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height);
+    void SetupImages();
+
+private:
+    SwapChainDetails details{};
     vk::SurfaceKHR surface;
-    vk::SurfaceFormatKHR surface_format = {};
-    vk::PresentModeKHR present_mode = vk::PresentModeKHR::eFifo;
-    vk::Format texture_format = vk::Format::eUndefined;
-    vk::Extent2D extent;
     bool vsync_enabled = false;
     bool is_outdated = false, is_suboptimal = false;
 

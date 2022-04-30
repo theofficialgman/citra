@@ -84,8 +84,8 @@ enum Attachments {
 class VKFramebuffer final : public NonCopyable {
 public:
     struct Info {
-        VKTexture* color;
-        VKTexture* depth_stencil;
+        VKTexture* color = nullptr;
+        VKTexture* depth_stencil = nullptr;
     };
 
     VKFramebuffer() = default;
