@@ -10,22 +10,14 @@
 #include <mutex>
 #include <set>
 #include <tuple>
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-local-typedefs"
-#endif
 #include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_set.hpp>
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
 #include <unordered_map>
 #include <vulkan/vulkan.hpp>
 #include <boost/functional/hash.hpp>
 #include "common/assert.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
-#include "common/math_util.h"
 #include "core/custom_tex_cache.h"
 #include "video_core/renderer_vulkan/vk_surface_params.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
@@ -194,7 +186,7 @@ struct CachedSurface : SurfaceParams, std::enable_shared_from_this<CachedSurface
     bool is_custom = false;
     Core::CustomTexInfo custom_tex_info;
 
-    static constexpr unsigned int GetGLBytesPerPixel(PixelFormat format) {
+    static constexpr unsigned int GetBytesPerPixel(PixelFormat format) {
         return format == PixelFormat::Invalid
                    ? 0
                    : (format == PixelFormat::D24 || GetFormatType(format) == SurfaceType::Texture)
@@ -205,17 +197,16 @@ struct CachedSurface : SurfaceParams, std::enable_shared_from_this<CachedSurface
     std::vector<u8> vk_buffer;
 
     // Read/Write data in 3DS memory to/from gl_buffer
-    void LoadGLBuffer(PAddr load_start, PAddr load_end);
-    void FlushGLBuffer(PAddr flush_start, PAddr flush_end);
+    void LoadGPUBuffer(PAddr load_start, PAddr load_end);
+    void FlushGPUBuffer(PAddr flush_start, PAddr flush_end);
 
     // Custom texture loading and dumping
     bool LoadCustomTexture(u64 tex_hash);
     void DumpTexture(VKTexture& target_tex, u64 tex_hash);
 
     // Upload/Download data in vk_buffer in/to this surface's texture
-    void UploadGLTexture(Common::Rectangle<u32> rect, GLuint read_fb_handle, GLuint draw_fb_handle);
-    void DownloadGLTexture(const Common::Rectangle<u32>& rect, GLuint read_fb_handle,
-                           GLuint draw_fb_handle);
+    void UploadGPUTexture(Common::Rectangle<u32> rect);
+    void DownloadGPUTexture(const Common::Rectangle<u32>& rect);
 
     std::shared_ptr<SurfaceWatcher> CreateWatcher() {
         auto watcher = std::make_shared<SurfaceWatcher>(weak_from_this());
@@ -351,8 +342,8 @@ private:
     SurfaceMap dirty_regions;
     SurfaceSet remove_surfaces;
 
-    OGLFramebuffer read_framebuffer;
-    OGLFramebuffer draw_framebuffer;
+    VKFramebuffer read_framebuffer;
+    VKFramebuffer draw_framebuffer;
 
     u16 resolution_scale_factor;
 

@@ -203,9 +203,11 @@ struct PicaFixedGSConfig : Common::HashableStruct<PicaGSConfigCommonRaw> {
  */
 struct VKPipelineCacheKey {
     VKPipelineCacheKey(const Pica::Regs& regs, Pica::Shader::ShaderSetup& setup) :
-    vertex_config(regs.vs, setup), fragment_config(PicaFSConfig::BuildFromRegs(regs)) {}
+    vertex_config(regs.vs, setup), geometry_config(regs),
+    fragment_config(PicaFSConfig::BuildFromRegs(regs)) {}
 
     PicaVSConfig vertex_config;
+    PicaFixedGSConfig geometry_config;
     PicaFSConfig fragment_config;
 };
 

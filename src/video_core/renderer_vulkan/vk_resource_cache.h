@@ -23,18 +23,18 @@ constexpr u32 DESCRIPTOR_SET_LAYOUT_COUNT = 3;
 class VKResourceCache
 {
 public:
-  VKResourceCache() = default;
-  ~VKResourceCache();
+    VKResourceCache() = default;
+    ~VKResourceCache();
 
-  // Perform at startup, create descriptor layouts, compiles all static shaders.
-  bool Initialize();
-  void Shutdown();
+    // Perform at startup, create descriptor layouts, compiles all static shaders.
+    bool Initialize();
+    void Shutdown();
 
-  // Public interface.
-  VKBuffer& GetTextureUploadBuffer() { return texture_upload_buffer; }
-  vk::Sampler GetSampler(const SamplerInfo& info);
-  vk::RenderPass GetRenderPass(vk::Format color_format, vk::Format depth_format, u32 multisamples, vk::AttachmentLoadOp load_op);
-  vk::PipelineCache GetPipelineCache() const { return pipeline_cache.get(); }
+    // Public interface.
+    VKBuffer& GetTextureUploadBuffer() { return texture_upload_buffer; }
+    vk::Sampler GetSampler(const SamplerInfo& info);
+    vk::RenderPass GetRenderPass(vk::Format color_format, vk::Format depth_format, u32 multisamples, vk::AttachmentLoadOp load_op);
+    vk::PipelineCache GetPipelineCache() const { return pipeline_cache.get(); }
 
 private:
     // Dummy image for samplers that are unbound

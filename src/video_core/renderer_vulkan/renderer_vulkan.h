@@ -9,9 +9,8 @@
 #include "common/math_util.h"
 #include "core/hw/gpu.h"
 #include "video_core/renderer_base.h"
-#include "video_core/renderer_opengl/frame_dumper_opengl.h"
-#include "video_core/renderer_opengl/gl_resource_manager.h"
-#include "video_core/renderer_opengl/gl_state.h"
+#include "video_core/renderer_vulkan/vk_resource_cache.h"
+#include "video_core/renderer_vulkan/vk_state.h"
 
 namespace Layout {
 struct FramebufferLayout;
@@ -20,46 +19,28 @@ struct FramebufferLayout;
 namespace Frontend {
 
 struct Frame {
-    u32 width{};                      /// Width of the frame (to detect resize)
-    u32 height{};                     /// Height of the frame
-    bool color_reloaded = false;      /// Texture attachment was recreated (ie: resized)
-    OpenGL::OGLRenderbuffer color{};  /// Buffer shared between the render/present FBO
-    OpenGL::OGLFramebuffer render{};  /// FBO created on the render thread
-    OpenGL::OGLFramebuffer present{}; /// FBO created on the present thread
-    GLsync render_fence{};            /// Fence created on the render thread
-    GLsync present_fence{};           /// Fence created on the presentation thread
+    u32 width = 0, height = 0;
+    bool color_reloaded = false;
+    Vulkan::VKTexture color;
+    Vulkan::VKFramebuffer render, present;
+    vk::UniqueFence render_fence, present_fence;
 };
 } // namespace Frontend
 
 namespace Vulkan {
 
-/// Structure used for storing information about the textures for each 3DS screen
-struct TextureInfo {
-    OGLTexture resource;
-    GLsizei width;
-    GLsizei height;
-    GPU::Regs::PixelFormat format;
-    GLenum gl_format;
-    GLenum gl_type;
-};
-
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {
-    GLuint display_texture;
+    u32 display_texture;
     Common::Rectangle<float> display_texcoords;
-    TextureInfo texture;
+    VKTexture texture;
+    GPU::Regs::PixelFormat format;
 };
 
-struct PresentationTexture {
-    u32 width = 0;
-    u32 height = 0;
-    OGLTexture texture;
-};
-
-class RendererOpenGL : public RendererBase {
+class RendererVulkan : public RendererBase {
 public:
-    explicit RendererOpenGL(Frontend::EmuWindow& window);
-    ~RendererOpenGL() override;
+    explicit RendererVulkan(Frontend::EmuWindow& window);
+    ~RendererVulkan() override;
 
     /// Initialize the renderer
     VideoCore::ResultStatus Init() override;
@@ -73,12 +54,6 @@ public:
     /// Draws the latest frame from texture mailbox to the currently bound draw framebuffer in this
     /// context
     void TryPresent(int timeout_ms) override;
-
-    /// Prepares for video dumping (e.g. create necessary buffers, etc)
-    void PrepareVideoDumping() override;
-
-    /// Cleans up after video dumping is ended
-    void CleanupVideoDumping() override;
 
 private:
     void InitOpenGLObjects();
@@ -106,33 +81,16 @@ private:
     // Fills active OpenGL texture with the given RGB color.
     void LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, const TextureInfo& texture);
 
-    OpenGLState state;
+    VulkanState state;
 
     // OpenGL object IDs
-    OGLVertexArray vertex_array;
-    OGLBuffer vertex_buffer;
+    VKBuffer vertex_buffer;
     OGLProgram shader;
-    OGLFramebuffer screenshot_framebuffer;
+    VKFramebuffer screenshot_framebuffer;
     OGLSampler filter_sampler;
 
     /// Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;
-
-    // Shader uniform location indices
-    GLuint uniform_modelview_matrix;
-    GLuint uniform_color_texture;
-    GLuint uniform_color_texture_r;
-
-    // Shader uniform for Dolphin compatibility
-    GLuint uniform_i_resolution;
-    GLuint uniform_o_resolution;
-    GLuint uniform_layer;
-
-    // Shader attribute input indices
-    GLuint attrib_position;
-    GLuint attrib_tex_coord;
-
-    FrameDumperOpenGL frame_dumper;
 };
 
 } // namespace OpenGL

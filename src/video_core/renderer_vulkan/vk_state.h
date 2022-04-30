@@ -5,145 +5,119 @@
 #pragma once
 
 #include <array>
-#include <vulkan/vulkan.hpp>
+#include "video_core/renderer_vulkan/vk_texture.h"
+#include "video_core/renderer_vulkan/vk_pipeline.h"
 
 namespace Vulkan {
 
-namespace TextureUnits {
-
-struct TextureUnit {
-    GLint id;
-    constexpr GLenum Enum() const {
-        return static_cast<GLenum>(GL_TEXTURE0 + id);
-    }
+enum class DirtyState {
+    All,
+    Framebuffer,
+    Pipeline,
+    Texture,
+    Sampler,
+    TexelBuffer,
+    ImageTexture,
+    Depth,
+    Stencil,
+    LogicOp,
+    Viewport,
+    Scissor,
+    CullMode,
+    VertexBuffer,
+    Uniform
 };
 
-constexpr TextureUnit PicaTexture(int unit) {
-    return TextureUnit{unit};
-}
+enum class UniformID {
+    Pica = 0,
+    Shader = 1
+};
 
-constexpr TextureUnit TextureCube{6};
-constexpr TextureUnit TextureBufferLUT_LF{3};
-constexpr TextureUnit TextureBufferLUT_RG{4};
-constexpr TextureUnit TextureBufferLUT_RGBA{5};
+enum class TextureID {
+    Tex0 = 0,
+    Tex1 = 1,
+    Tex2 = 2,
+    TexCube = 3
+};
 
-} // namespace TextureUnits
+enum class TexelBufferID {
+    LF = 0,
+    RG = 1,
+    RGBA = 2
+};
 
-namespace ImageUnits {
-constexpr uint ShadowBuffer = 0;
-constexpr uint ShadowTexturePX = 1;
-constexpr uint ShadowTextureNX = 2;
-constexpr uint ShadowTexturePY = 3;
-constexpr uint ShadowTextureNY = 4;
-constexpr uint ShadowTexturePZ = 5;
-constexpr uint ShadowTextureNZ = 6;
-} // namespace ImageUnits
-
+/// Tracks global Vulkan state
 class VulkanState {
 public:
-    struct Messenger {
-        bool cull_state;
-        bool depth_state;
-        bool color_mask;
-        bool stencil_state;
-        bool logic_op;
-        bool texture_state;
-    };
+    VulkanState() = default;
+    ~VulkanState() = default;
 
-    struct {
-        bool enabled;
-        vk::CullModeFlags mode;
-        vk::FrontFace front_face;
-    } cull;
+    /// Initialize object to its initial state
+    void Create();
 
-    struct {
-        bool test_enabled;
-        vk::CompareOp test_func;
-        bool write_mask;
-    } depth;
+    /// Configure drawing state
+    void SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset);
+    void SetFramebuffer(VKFramebuffer* framebuffer);
+    void SetPipeline(const VKPipeline* pipeline);
 
-    vk::ColorComponentFlags color_mask;
+    /// Configure shader resources
+    void SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u32 size);
+    void SetTexture(TextureID id, VKTexture* texture);
+    void SetTexelBuffer(TexelBufferID id, VKBuffer* buffer);
+    void SetImageTexture(VKTexture* image);
 
-    struct {
-        bool test_enabled;
-        vk::CompareOp test_func;
-        int test_ref;
-        uint32_t test_mask, write_mask;
-        vk::StencilOp action_stencil_fail;
-        vk::StencilOp action_depth_fail;
-        vk::StencilOp action_depth_pass;
-    } stencil;
-
-    vk::LogicOp logic_op;
-
-    // 3 texture units - one for each that is used in PICA fragment shader emulation
-    struct TextureUnit {
-        uint texture_2d; // GL_TEXTURE_BINDING_2D
-        uint sampler;    // GL_SAMPLER_BINDING
-    };
-    std::array<TextureUnit, 3> texture_units;
-
-    struct {
-        uint texture_cube; // GL_TEXTURE_BINDING_CUBE_MAP
-        uint sampler;      // GL_SAMPLER_BINDING
-    } texture_cube_unit;
-
-    struct {
-        uint texture_buffer; // GL_TEXTURE_BINDING_BUFFER
-    } texture_buffer_lut_lf;
-
-    struct {
-        uint texture_buffer; // GL_TEXTURE_BINDING_BUFFER
-    } texture_buffer_lut_rg;
-
-    struct {
-        uint texture_buffer; // GL_TEXTURE_BINDING_BUFFER
-    } texture_buffer_lut_rgba;
-
-    // GL_IMAGE_BINDING_NAME
-    uint image_shadow_buffer;
-    uint image_shadow_texture_px;
-    uint image_shadow_texture_nx;
-    uint image_shadow_texture_py;
-    uint image_shadow_texture_ny;
-    uint image_shadow_texture_pz;
-    uint image_shadow_texture_nz;
-
-    struct {
-        uint read_framebuffer; // GL_READ_FRAMEBUFFER_BINDING
-        uint draw_framebuffer; // GL_DRAW_FRAMEBUFFER_BINDING
-        uint vertex_array;     // GL_VERTEX_ARRAY_BINDING
-        uint vertex_buffer;    // GL_ARRAY_BUFFER_BINDING
-        uint uniform_buffer;   // GL_UNIFORM_BUFFER_BINDING
-        uint shader_program;   // GL_CURRENT_PROGRAM
-        uint program_pipeline; // GL_PROGRAM_PIPELINE_BINDING
-    } draw;
-
-    struct {
-        bool enabled; // GL_SCISSOR_TEST
-        int x, y;
-        std::size_t width, height;
-    } scissor;
-
-    struct {
-        int x, y;
-        std::size_t width, height;
-    } viewport;
-
-    std::array<bool, 2> clip_distance;
-
-    VulkanState();
-
-    /// Get the currently active OpenGL state
-    static VulkanState GetCurState() {
-        return cur_state;
-    }
-
-    /// Apply all dynamic state to the provided Vulkan command buffer
-    void Apply(vk::CommandBuffer& command_buffer) const;
+    /// Apply all dirty state to the current Vulkan command buffer
+    void Apply();
 
 private:
-    static VulkanState cur_state;
+    // Stage which should be applied
+    DirtyState dirty_flags;
+
+    // Input assembly
+    VKBuffer* vertex_buffer = nullptr;
+    vk::DeviceSize vertex_buffer_offset = 0;
+
+    // Pipeline state
+    const VKPipeline* pipeline = nullptr;
+
+    // Shader bindings
+    struct
+    {
+        std::array<vk::DescriptorBufferInfo, 2> ubo;
+        std::array<vk::DescriptorImageInfo, 4> texture;
+        std::array<vk::DescriptorBufferInfo, 3> lut;
+    } bindings = {};
+
+    std::array<vk::DescriptorSet, 3> descriptor_sets = {};
+
+    // Rasterization
+    vk::Viewport viewport = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+    vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eNone;
+    vk::Rect2D scissor = {{0, 0}, {1, 1}};
+    VKTexture dummy_texture;
+
+    // Framebuffer
+    VKFramebuffer* framebuffer = nullptr;
+    vk::RenderPass current_render_pass = VK_NULL_HANDLE;
+    vk::Rect2D framebuffer_render_area = {};
+    vk::ColorComponentFlags color_mask;
+
+    // Depth
+    bool depth_enabled;
+    vk::CompareOp test_func;
+
+    // Stencil
+    bool stencil_enabled;
+    vk::StencilFaceFlags face_mask;
+    vk::StencilOp fail_op, pass_op;
+    vk::StencilOp depth_fail_op;
+    vk::CompareOp compare_op;
+
+    vk::LogicOp logic_op;
+    std::array<bool, 2> clip_distance;
+
 };
 
-} // namespace OpenGL
+extern std::unique_ptr<VulkanState> g_vk_state;
+
+} // namespace Vulkan

@@ -3,13 +3,11 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <bitset>
 #include <cmath>
 #include <cstring>
 #include <iterator>
-#include <memory>
 #include <optional>
 #include <unordered_set>
 #include <utility>
@@ -40,19 +38,6 @@ namespace Vulkan {
 using SurfaceType = SurfaceParams::SurfaceType;
 using PixelFormat = SurfaceParams::PixelFormat;
 
-const FormatTuple& GetFormatTuple(PixelFormat pixel_format) {
-    const SurfaceType type = SurfaceParams::GetFormatType(pixel_format);
-    if (type == SurfaceType::Color) {
-        ASSERT(static_cast<std::size_t>(pixel_format) < fb_format_tuples.size());
-        return fb_format_tuples[static_cast<unsigned int>(pixel_format)];
-    } else if (type == SurfaceType::Depth || type == SurfaceType::DepthStencil) {
-        std::size_t tuple_idx = static_cast<std::size_t>(pixel_format) - 14;
-        ASSERT(tuple_idx < depth_format_tuples.size());
-        return depth_format_tuples[tuple_idx];
-    }
-    return tex_tuple;
-}
-
 template <typename Map, typename Interval>
 static constexpr auto RangeFromInterval(Map& map, const Interval& interval) {
     return boost::make_iterator_range(map.equal_range(interval));
@@ -61,7 +46,7 @@ static constexpr auto RangeFromInterval(Map& map, const Interval& interval) {
 template <bool morton_to_gl, PixelFormat format>
 static void MortonCopyTile(u32 stride, u8* tile_buffer, u8* gpu_buffer) {
     constexpr u32 bytes_per_pixel = SurfaceParams::GetFormatBpp(format) / 8;
-    constexpr u32 vk_bytes_per_pixel = CachedSurface::GetGLBytesPerPixel(format);
+    constexpr u32 vk_bytes_per_pixel = CachedSurface::GetBytesPerPixel(format);
     for (u32 y = 0; y < 8; ++y) {
         for (u32 x = 0; x < 8; ++x) {
             u8* tile_ptr = tile_buffer + VideoCore::MortonInterleave(x, y) * bytes_per_pixel;
@@ -90,7 +75,7 @@ static void MortonCopy(u32 stride, u32 height, u8* gpu_buffer, PAddr base, PAddr
     constexpr u32 bytes_per_pixel = SurfaceParams::GetFormatBpp(format) / 8;
     constexpr u32 tile_size = bytes_per_pixel * 64;
 
-    constexpr u32 gl_bytes_per_pixel = CachedSurface::GetGLBytesPerPixel(format);
+    constexpr u32 gl_bytes_per_pixel = CachedSurface::GetBytesPerPixel(format);
     static_assert(gl_bytes_per_pixel >= bytes_per_pixel, "");
     gpu_buffer += gl_bytes_per_pixel - bytes_per_pixel;
 
@@ -220,67 +205,8 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
     return texture;
 }
 
-static bool BlitTextures(GLuint src_tex, const Common::Rectangle<u32>& src_rect, GLuint dst_tex,
-                         const Common::Rectangle<u32>& dst_rect, SurfaceType type,
-                         GLuint read_fb_handle, GLuint draw_fb_handle) {
-    OpenGLState prev_state = OpenGLState::GetCurState();
-    SCOPE_EXIT({ prev_state.Apply(); });
-
-    OpenGLState state;
-    state.draw.read_framebuffer = read_fb_handle;
-    state.draw.draw_framebuffer = draw_fb_handle;
-    state.Apply();
-
-    u32 buffers = 0;
-
-    if (type == SurfaceType::Color || type == SurfaceType::Texture) {
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src_tex,
-                               0);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0,
-                               0);
-
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex,
-                               0);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0,
-                               0);
-
-        buffers = GL_COLOR_BUFFER_BIT;
-    } else if (type == SurfaceType::Depth) {
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, src_tex, 0);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, dst_tex, 0);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-
-        buffers = GL_DEPTH_BUFFER_BIT;
-    } else if (type == SurfaceType::DepthStencil) {
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                               src_tex, 0);
-
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                               dst_tex, 0);
-
-        buffers = GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
-    }
-
-    // TODO (wwylele): use GL_NEAREST for shadow map texture
-    // Note: shadow map is treated as RGBA8 format in PICA, as well as in the rasterizer cache, but
-    // doing linear intepolation componentwise would cause incorrect value. However, for a
-    // well-programmed game this code path should be rarely executed for shadow map with
-    // inconsistent scale.
-    glBlitFramebuffer(src_rect.left, src_rect.bottom, src_rect.right, src_rect.top, dst_rect.left,
-                      dst_rect.bottom, dst_rect.right, dst_rect.top, buffers,
-                      buffers == GL_COLOR_BUFFER_BIT ? GL_LINEAR : GL_NEAREST);
-
-    return true;
-}
-
-static bool FillSurface(const Surface& surface, const u8* fill_data,
-                        const Common::Rectangle<u32>& fill_rect, GLuint draw_fb_handle) {
+/*static bool FillSurface(const Surface& surface, const u8* fill_data,
+                        const Common::Rectangle<u32>& fill_rect) {
     OpenGLState prev_state = OpenGLState::GetCurState();
     SCOPE_EXIT({ prev_state.Apply(); });
 
@@ -352,10 +278,10 @@ static bool FillSurface(const Surface& surface, const u8* fill_data,
         glClearBufferfi(GL_DEPTH_STENCIL, 0, value_float, value_int);
     }
     return true;
-}
+}*/
 
 CachedSurface::~CachedSurface() {
-    if (texture.handle) {
+    if (texture.IsValid()) {
         auto tag = is_custom ? HostTextureTag{GetFormatTuple(PixelFormat::RGBA8),
                                               custom_tex_info.width, custom_tex_info.height}
                              : HostTextureTag{GetFormatTuple(pixel_format), GetScaledWidth(),
@@ -432,26 +358,25 @@ void RasterizerCacheVulkan::CopySurface(const Surface& src_surface, const Surfac
         return;
     }
     if (src_surface->CanSubRect(subrect_params)) {
-        BlitTextures(src_surface->texture.handle, src_surface->GetScaledSubRect(subrect_params),
-                     dst_surface->texture.handle, dst_surface->GetScaledSubRect(subrect_params),
-                     src_surface->type, read_framebuffer.handle, draw_framebuffer.handle);
+        auto srect = src_surface->GetScaledSubRect(subrect_params);
+        auto drect = dst_surface->GetScaledSubRect(subrect_params);
+        src_surface->texture.BlitTo(srect, dst_surface->texture, drect, src_surface->type);
+
         return;
     }
     UNREACHABLE();
 }
 
-MICROPROFILE_DEFINE(OpenGL_SurfaceLoad, "OpenGL", "Surface Load", MP_RGB(128, 192, 64));
+MICROPROFILE_DEFINE(Vulkan_SurfaceLoad, "Vulkan", "Surface Load", MP_RGB(128, 192, 64));
 void CachedSurface::LoadGLBuffer(PAddr load_start, PAddr load_end) {
     ASSERT(type != SurfaceType::Fill);
-    const bool need_swap =
-        GLES && (pixel_format == PixelFormat::RGBA8 || pixel_format == PixelFormat::RGB8);
 
     const u8* const texture_src_data = VideoCore::g_memory->GetPhysicalPointer(addr);
     if (texture_src_data == nullptr)
         return;
 
-    if (gl_buffer.empty()) {
-        gl_buffer.resize(width * height * GetGLBytesPerPixel(pixel_format));
+    if (vk_buffer.empty()) {
+        vk_buffer.resize(width * height * GetGLBytesPerPixel(pixel_format));
     }
 
     // TODO: Should probably be done in ::Memory:: and check for other regions too
@@ -461,34 +386,15 @@ void CachedSurface::LoadGLBuffer(PAddr load_start, PAddr load_end) {
     if (load_start < Memory::VRAM_VADDR && load_end > Memory::VRAM_VADDR)
         load_start = Memory::VRAM_VADDR;
 
-    MICROPROFILE_SCOPE(OpenGL_SurfaceLoad);
+    MICROPROFILE_SCOPE(Vulkan_SurfaceLoad);
 
     ASSERT(load_start >= addr && load_end <= end);
     const u32 start_offset = load_start - addr;
 
     if (!is_tiled) {
         ASSERT(type == SurfaceType::Color);
-        if (need_swap) {
-            // TODO(liushuyu): check if the byteswap here is 100% correct
-            // cannot fully test this
-            if (pixel_format == PixelFormat::RGBA8) {
-                for (std::size_t i = start_offset; i < load_end - addr; i += 4) {
-                    gl_buffer[i] = texture_src_data[i + 3];
-                    gl_buffer[i + 1] = texture_src_data[i + 2];
-                    gl_buffer[i + 2] = texture_src_data[i + 1];
-                    gl_buffer[i + 3] = texture_src_data[i];
-                }
-            } else if (pixel_format == PixelFormat::RGB8) {
-                for (std::size_t i = start_offset; i < load_end - addr; i += 3) {
-                    gl_buffer[i] = texture_src_data[i + 2];
-                    gl_buffer[i + 1] = texture_src_data[i + 1];
-                    gl_buffer[i + 2] = texture_src_data[i];
-                }
-            }
-        } else {
-            std::memcpy(&gl_buffer[start_offset], texture_src_data + start_offset,
+        std::memcpy(&vk_buffer[start_offset], texture_src_data + start_offset,
                         load_end - load_start);
-        }
     } else {
         if (type == SurfaceType::Texture) {
             Pica::Texture::TextureInfo tex_info{};
@@ -507,11 +413,11 @@ void CachedSurface::LoadGLBuffer(PAddr load_start, PAddr load_end) {
                     auto vec4 =
                         Pica::Texture::LookupTexture(texture_src_data, x, height - 1 - y, tex_info);
                     const std::size_t offset = (x + (width * y)) * 4;
-                    std::memcpy(&gl_buffer[offset], vec4.AsArray(), 4);
+                    std::memcpy(&vk_buffer[offset], vec4.AsArray(), 4);
                 }
             }
         } else {
-            morton_to_gl_fns[static_cast<std::size_t>(pixel_format)](stride, height, &gl_buffer[0],
+            morton_to_gpu_fns[static_cast<std::size_t>(pixel_format)](stride, height, &vk_buffer[0],
                                                                      addr, load_start, load_end);
         }
     }
@@ -573,7 +479,7 @@ void CachedSurface::FlushGLBuffer(PAddr flush_start, PAddr flush_end) {
                         flush_end - flush_start);
         }
     } else {
-        gl_to_morton_fns[static_cast<std::size_t>(pixel_format)](stride, height, &gl_buffer[0],
+        gpu_to_morton_fns[static_cast<std::size_t>(pixel_format)](stride, height, &gl_buffer[0],
                                                                  addr, flush_start, flush_end);
     }
 }

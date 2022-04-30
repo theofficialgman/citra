@@ -1,99 +1,63 @@
+// Copyright 2022 Citra Emulator Project
+// Licensed under GPLv2 or any later version
+// Refer to the license.txt file included.
+
 #pragma once
-#include <vulkan/vulkan.hpp>
+
 #include <string_view>
-#include <memory>
+#include "core/frontend/emu_window.h"
+#include "video_core/renderer_vulkan/vk_texture.h"
 
-class VkContext;
-struct GLFWwindow;
+namespace Vulkan {
 
-struct SwapchainBuffer
-{
-    ~SwapchainBuffer()
-    {
-        device->destroyImageView(view);
-        device->destroyFramebuffer(framebuffer);
-    }
-
+struct SwapChainImage {
     vk::Image image;
-    vk::ImageView view;
-    vk::Framebuffer framebuffer;
-    vk::Device* device;
+    VKTexture texture;
+    VKFramebuffer framebuffer;
 };
 
-struct SwapchainInfo
-{
-    vk::Format depth_format;
-    vk::SurfaceFormatKHR surface_format;
-    vk::PresentModeKHR present_mode;
-    vk::Extent2D extent;
-    uint32_t image_count;
-};
-
-struct DepthBuffer : public NonCopyable
-{
-    ~DepthBuffer()
-    {
-        // Destroy depth buffer
-        device.destroyImage(image);
-        device.destroyImageView(view);
-        device.freeMemory(memory);
-    }
-
-    vk::Device device;
-    vk::Image image;
-    vk::DeviceMemory memory;
-    vk::ImageView view;
-};
-
-constexpr int MAX_FRAMES_IN_FLIGHT = 3;
-
-class VkWindow
-{
+class VKSwapchain {
 public:
-    VkWindow(int width, int height, std::string_view name);
-    ~VkWindow();
+    VKSwapchain(vk::SurfaceKHR surface);
+    ~VKSwapchain() = default;
 
-    std::shared_ptr<VkContext> create_context(bool validation = true);
-    bool should_close() const;
-    vk::Extent2D get_extent() const;
+    /// Creates (or recreates) the swapchain with a given size.
+    void Create(u32 width, u32 height, bool vsync_enabled);
 
-    void begin_frame();
-    void end_frame();
+    /// Acquires the next image in the swapchain, waits as needed.
+    void AcquireNextImage();
 
-    void destroy();
-    vk::Framebuffer get_framebuffer(int index) const;
+    /// Returns true when the swapchain needs to be recreated.
+    bool NeedsRecreation() const { return IsSubOptimal(); }
+    bool IsOutDated() const { return is_outdated; }
+    bool IsSubOptimal() const { return is_suboptimal; }
+    bool IsVSyncEnabled() const { return vsync_enabled; }
+    u32 GetCurrentImageIndex() const { return image_index; }
+
+    /// Get current swapchain state
+    vk::Extent2D GetSize() const { return extent; }
+    vk::SurfaceKHR GetSurface() const { return surface; }
+    vk::SurfaceFormatKHR GetSurfaceFormat() const { return surface_format; }
+    vk::Format GetTextureFormat() const { return texture_format; }
+    vk::SwapchainKHR GetSwapChain() const { return swapchain.get(); }
+    vk::Image GetCurrentImage() const { return swapchain_images[image_index].image; }
+
+    /// Retrieve current texture and framebuffer
+    VKTexture& GetCurrentTexture() { return swapchain_images[image_index].texture; }
+    VKFramebuffer& GetCurrentFramebuffer() { return swapchain_images[image_index].framebuffer; }
 
 private:
-    void create_sync_objects();
-    void create_swapchain(bool enable_vsync = false);
-    SwapchainInfo get_swapchain_info() const;
-    void create_depth_buffer();
-    void create_present_queue();
+    vk::SurfaceKHR surface;
+    vk::SurfaceFormatKHR surface_format = {};
+    vk::PresentModeKHR present_mode = vk::PresentModeKHR::eFifo;
+    vk::Format texture_format = vk::Format::eUndefined;
+    vk::Extent2D extent;
+    bool vsync_enabled = false;
+    bool is_outdated = false, is_suboptimal = false;
 
-public:
-    // Window attributes
-    uint32_t width = 0, height = 0;
-    bool framebuffer_resized = false;
-    std::string_view name;
-
-    // Context
-    std::shared_ptr<VkContext> context;
-    vk::Queue present_queue;
-
-    // Swapchain objects
-    vk::UniqueSurfaceKHR surface;
     vk::UniqueSwapchainKHR swapchain;
-    std::vector<SwapchainBuffer> buffers;
-    SwapchainInfo swapchain_info;
-    uint32_t current_frame = 0, image_index = 0;
-    uint32_t draw_batch = 0;
-
-    // Depth buffer
-    DepthBuffer depth_buffer;
-
-    // Synchronization
-    vk::SubmitInfo submit_info;
-    std::vector<vk::UniqueSemaphore> image_semaphores;
-    std::vector<vk::UniqueSemaphore> render_semaphores;
-    std::vector<vk::UniqueFence> flight_fences;
+    std::vector<SwapChainImage> swapchain_images;
+    u32 image_index = 0, frame_index = 0;
 };
+
+} // namespace Vulkan

@@ -12,15 +12,22 @@
 
 namespace Vulkan {
 
-// If the size of this is too small, it ends up creating a soft cap on FPS as the renderer will have
-// to wait on available presentation frames. There doesn't seem to be much of a downside to a larger
-// number but 9 swap textures at 60FPS presentation allows for 800% speed so thats probably fine
-#ifdef ANDROID
-// Reduce the size of swap_chain, since the UI only allows upto 200% speed.
-constexpr std::size_t SWAP_CHAIN_SIZE = 6;
-#else
-constexpr std::size_t SWAP_CHAIN_SIZE = 9;
-#endif
+// Using multiple command buffers prevents stalling
+constexpr u32 COMMAND_BUFFER_COUNT = 3;
+
+struct FrameResources
+{
+    vk::CommandPool command_pool;
+    std::array<vk::CommandBuffer, COMMAND_BUFFER_COUNT> command_buffers = {};
+    vk::DescriptorPool descriptor_pool;
+    vk::Fence fence;
+    vk::Semaphore semaphore;
+    u64 fence_counter = 0;
+    bool init_command_buffer_used = false;
+    bool semaphore_used = false;
+
+    std::vector<std::function<void()>> cleanup_resources;
+};
 
 /// The global Vulkan instance
 class VKInstance
@@ -30,41 +37,33 @@ public:
     ~VKInstance();
 
     /// Construct global Vulkan context
-    void Create(vk::UniqueInstance instance, vk::PhysicalDevice gpu, vk::UniqueSurfaceKHR surface,
-                bool enable_debug_reports, bool enable_validation_layer);
+    bool Create(vk::Instance instance, vk::PhysicalDevice gpu,
+                vk::SurfaceKHR surface, bool enable_validation_layer);
 
     vk::Device& GetDevice() { return device.get(); }
     vk::PhysicalDevice& GetPhysicalDevice() { return physical_device; }
-
-    /// Get a valid command buffer for the current frame
-    vk::CommandBuffer& GetCommandBuffer();
 
     /// Feature support
     bool SupportsAnisotropicFiltering() const;
 
 private:
-    void CreateDevices(int device_id = 0);
-    void CreateRenderpass();
-    void CreateCommandBuffers();
+    bool CreateDevice(vk::SurfaceKHR surface, bool validation_enabled);
+    bool FindExtensions();
+    bool FindFeatures();
 
 public:
     // Queue family indexes
-    u32 queue_family = -1;
+    u32 present_queue_family_index{}, graphics_queue_family_index{};
+    vk::Queue present_queue, graphics_queue;
 
     // Core vulkan objects
-    vk::UniqueInstance instance;
+    vk::Instance instance;
     vk::PhysicalDevice physical_device;
     vk::UniqueDevice device;
-    vk::Queue graphics_queue;
 
-    // Pipeline
-    vk::UniqueDescriptorPool descriptor_pool;
-    std::array<std::vector<vk::DescriptorSetLayout>, SWAP_CHAIN_SIZE> descriptor_layouts;
-    std::array<std::vector<vk::DescriptorSet>, SWAP_CHAIN_SIZE> descriptor_sets;
-
-    // Command buffer
-    vk::UniqueCommandPool command_pool;
-    std::vector<vk::UniqueCommandBuffer> command_buffers;
+    // Extensions and features
+    std::vector<const char*> device_extensions;
+    vk::PhysicalDeviceFeatures device_features{};
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;

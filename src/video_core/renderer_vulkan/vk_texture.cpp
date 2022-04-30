@@ -10,8 +10,7 @@
 
 namespace Vulkan {
 
-void VKTexture::Create(const Info& info)
-{
+void VKTexture::Create(const Info& info) {
     auto& device = g_vk_instace->GetDevice();
     texture_info = info;
 
@@ -66,57 +65,94 @@ void VKTexture::Create(const Info& info)
     texture_view = device.createImageViewUnique(view_info);
 }
 
-void VKTexture::TransitionLayout(vk::ImageLayout old_layout, vk::ImageLayout new_layout)
-{
-    auto& device = g_vk_instace->GetDevice();
-    auto& queue = g_vk_instace->graphics_queue;
+void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& command_buffer) {
+    struct LayoutInfo {
+        vk::ImageLayout layout;
+        vk::AccessFlags access;
+        vk::PipelineStageFlags stage;
+    };
 
-    vk::CommandBufferAllocateInfo alloc_info(g_vk_instace->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::CommandBuffer command_buffer = device.allocateCommandBuffers(alloc_info)[0];
+    // Get optimal transition settings for every image layout. Settings taken from Dolphin
+    auto layout_info = [&](vk::ImageLayout layout) -> LayoutInfo {
+        LayoutInfo info = { .layout = layout };
+        switch (texture_layout) {
+        case vk::ImageLayout::eUndefined:
+            // Layout undefined therefore contents undefined, and we don't care what happens to it.
+            info.access = vk::AccessFlagBits::eNone;
+            info.stage = vk::PipelineStageFlagBits::eTopOfPipe;
+            break;
 
+        case vk::ImageLayout::ePreinitialized:
+            // Image has been pre-initialized by the host, so ensure all writes have completed.
+            info.access = vk::AccessFlagBits::eHostWrite;
+            info.stage = vk::PipelineStageFlagBits::eHost;
+            break;
+
+        case vk::ImageLayout::eColorAttachmentOptimal:
+            // Image was being used as a color attachment, so ensure all writes have completed.
+            info.access = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+            info.stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+            break;
+
+        case vk::ImageLayout::eDepthStencilAttachmentOptimal:
+            // Image was being used as a depthstencil attachment, so ensure all writes have completed.
+            info.access = vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            info.stage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
+            break;
+
+        case vk::ImageLayout::eShaderReadOnlyOptimal:
+            // Image was being used as a shader resource, make sure all reads have finished.
+            info.access = vk::AccessFlagBits::eShaderRead;
+            info.stage = vk::PipelineStageFlagBits::eFragmentShader;
+            break;
+
+        case vk::ImageLayout::eTransferSrcOptimal:
+            // Image was being used as a copy source, ensure all reads have finished.
+            info.access = vk::AccessFlagBits::eTransferRead;
+            info.stage = vk::PipelineStageFlagBits::eTransfer;
+            break;
+
+        case vk::ImageLayout::eTransferDstOptimal:
+            // Image was being used as a copy destination, ensure all writes have finished.
+            info.access = vk::AccessFlagBits::eTransferWrite;
+            info.stage = vk::PipelineStageFlagBits::eTransfer;
+            break;
+
+        default:
+          LOG_CRITICAL(Render_Vulkan, "Unhandled vulkan image layout {}\n", texture_layout);
+          break;
+        }
+
+        return info;
+    };
+
+    // Submit pipeline barrier
+    LayoutInfo source = layout_info(texture_layout), dst = layout_info(new_layout);
     command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
-    vk::ImageMemoryBarrier barrier({}, {}, old_layout, new_layout, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, texture.get(),
-                                   vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+    vk::ImageMemoryBarrier barrier
+    (
+        source.access, dst.access,
+        source.layout, dst.layout,
+        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+        texture.get(),
+        vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)
+    );
+
     std::array<vk::ImageMemoryBarrier, 1> barriers = { barrier };
 
-    vk::PipelineStageFlags source_stage, destination_stage;
-    if (old_layout == vk::ImageLayout::eUndefined && new_layout == vk::ImageLayout::eTransferDstOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eNone;
-        barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-
-        source_stage = vk::PipelineStageFlagBits::eTopOfPipe;
-        destination_stage = vk::PipelineStageFlagBits::eTransfer;
-    }
-    else if (old_layout == vk::ImageLayout::eTransferDstOptimal && new_layout == vk::ImageLayout::eShaderReadOnlyOptimal) {
-        barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-
-        source_stage = vk::PipelineStageFlagBits::eTransfer;
-        destination_stage = vk::PipelineStageFlagBits::eFragmentShader;
-    }
-    else {
-        LOG_CRITICAL(Render_Vulkan, "Unsupported layout transition");
-        UNREACHABLE();
-    }
-
-    command_buffer.pipelineBarrier(source_stage, destination_stage, vk::DependencyFlagBits::eByRegion, {}, {}, barriers);
+    command_buffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barriers);
     command_buffer.end();
 
     vk::SubmitInfo submit_info({}, {}, {}, 1, &command_buffer);
-    queue.submit(submit_info, nullptr);
-    queue.waitIdle();
 
-    device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
+    // Update texture layout
+    texture_layout = new_layout;
 }
 
-void VKTexture::CopyPixels(std::span<u32> new_pixels)
-{
+void VKTexture::CopyPixels(std::span<u32> new_pixels) {
     auto& device = g_vk_instace->GetDevice();
     auto& queue = g_vk_instace->graphics_queue;
-
-    // Transition image to transfer format
-    TransitionLayout(vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
     // Copy pixels to staging buffer
     std::memcpy(g_vk_res_cache->GetTextureUploadBuffer().GetHostPointer(),
@@ -132,8 +168,14 @@ void VKTexture::CopyPixels(std::span<u32> new_pixels)
                                { texture_info.width, texture_info.height, 1 });
     std::array<vk::BufferImageCopy, 1> regions = { region };
 
+    // Transition image to transfer format
+    TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
+
     auto& staging = g_vk_res_cache->GetTextureUploadBuffer();
     command_buffer.copyBufferToImage(staging.GetBuffer(), texture.get(), vk::ImageLayout::eTransferDstOptimal, regions);
+
+    // Prepare for shader reads
+    TransitionLayout(vk::ImageLayout::eShaderReadOnlyOptimal, command_buffer);
     command_buffer.end();
 
     vk::SubmitInfo submit_info({}, {}, {}, 1, &command_buffer);
@@ -142,13 +184,57 @@ void VKTexture::CopyPixels(std::span<u32> new_pixels)
     /// NOTE: Remove this when the renderer starts working, otherwise it will be very slow
     queue.waitIdle();
     device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
-
-    // Prepare for shader reads
-    TransitionLayout(vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-void VKFramebuffer::Create(const Info& info)
-{
+void VKTexture::BlitTo(Common::Rectangle<u32> srect, VKTexture& dest,
+                       Common::Rectangle<u32> drect, SurfaceParams::SurfaceType type,
+                       vk::CommandBuffer& command_buffer) {
+    // Ensure textures are of the same dimention
+    assert(texture_info.width == dest.texture_info.width &&
+           texture_info.height == dest.texture_info.height);
+
+    vk::ImageAspectFlags image_aspect;
+    switch (type) {
+    case SurfaceParams::SurfaceType::Color:
+    case SurfaceParams::SurfaceType::Texture:
+        image_aspect = vk::ImageAspectFlagBits::eColor;
+        break;
+    case SurfaceParams::SurfaceType::Depth:
+        image_aspect = vk::ImageAspectFlagBits::eDepth;
+        break;
+    case SurfaceParams::SurfaceType::DepthStencil:
+        image_aspect = vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+        break;
+    default:
+        LOG_CRITICAL(Render_Vulkan, "Unhandled image blit aspect\n");
+        UNREACHABLE();
+    }
+
+    // Define the region to blit
+    vk::ImageSubresourceLayers layers(image_aspect, 0, 0, 1);
+
+    std::array<vk::Offset3D, 2> src_offsets = { vk::Offset3D(srect.left, srect.bottom, 1), vk::Offset3D(srect.right, srect.top, 1) };
+    std::array<vk::Offset3D, 2> dst_offsets = { vk::Offset3D(drect.left, drect.bottom, 1), vk::Offset3D(drect.right, drect.top, 1) };
+    std::array<vk::ImageBlit, 1> regions = {{{layers, src_offsets, layers, dst_offsets}}};
+
+    // Transition image layouts
+    TransitionLayout(vk::ImageLayout::eTransferSrcOptimal, command_buffer);
+    dest.TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
+
+    // Perform blit operation
+    command_buffer.blitImage(texture.get(), vk::ImageLayout::eTransferSrcOptimal, dest.texture.get(),
+                             vk::ImageLayout::eTransferDstOptimal, regions, vk::Filter::eNearest);
+}
+
+void VKTexture::Fill(Common::Rectangle<u32> region, glm::vec4 color) {
+
+}
+
+void VKTexture::Fill(Common::Rectangle<u32> region, glm::vec2 depth_stencil) {
+
+}
+
+void VKFramebuffer::Create(const Info& info) {
     // Make sure that either attachment is valid
     assert(info.color || info.depth_stencil);
     attachments = { info.color, info.depth_stencil };
@@ -180,17 +266,14 @@ void VKFramebuffer::Create(const Info& info)
     framebuffer = g_vk_instace->GetDevice().createFramebufferUnique(framebuffer_info);
 }
 
-void VKFramebuffer::Prepare()
-{
+void VKFramebuffer::Prepare(vk::CommandBuffer& command_buffer) {
     // Transition attachments to their optimal formats for rendering
     if (attachments[Attachments::Color]) {
-        attachments[Attachments::Color]->TransitionLayout(vk::ImageLayout::eUndefined,
-                                                          vk::ImageLayout::eColorAttachmentOptimal);
+        attachments[Attachments::Color]->TransitionLayout(vk::ImageLayout::eColorAttachmentOptimal, command_buffer);
     }
 
     if (attachments[Attachments::DepthStencil]) {
-        attachments[Attachments::DepthStencil]->TransitionLayout(vk::ImageLayout::eUndefined,
-                                                                 vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        attachments[Attachments::DepthStencil]->TransitionLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal, command_buffer);
     }
 }
 

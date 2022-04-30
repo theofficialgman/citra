@@ -27,10 +27,10 @@ bool VKResourceCache::Initialize()
     }};
 
     std::array<vk::DescriptorSetLayoutBinding, 4> texture_set = {{
-        { 0, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eFragment }, // tex0
-        { 1, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eFragment }, // tex1
-        { 2, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eFragment }, // tex2
-        { 3, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eFragment }, // tex_cube
+        { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex0
+        { 1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex1
+        { 2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex2
+        { 3, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex_cube
     }};
 
     std::array<vk::DescriptorSetLayoutBinding, 3> lut_set = {{

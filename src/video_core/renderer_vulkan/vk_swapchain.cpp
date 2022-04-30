@@ -1,435 +1,348 @@
-#include "vk_swapchain.h"
-#include "vk_context.h"
-#include "vk_buffer.h"
-#include <fmt/core.h>
+// Copyright 2022 Citra Emulator Project
+// Licensed under GPLv2 or any later version
+// Refer to the license.txt file included.
 
-constexpr uint64_t MAX_UINT64 = ~0ULL;
+#include <algorithm>
+#include <array>
+#include <limits>
+#include <span>
+#include <vector>
+#include "common/logging/log.h"
+#include "video_core/renderer_vulkan/vk_swapchain.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 
-VkWindow::VkWindow(int width, int height, std::string_view name) :
-    width(width), height(height), name(name)
-{
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GL_FALSE);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+namespace Vulkan {
 
-    window = glfwCreateWindow(width, height, name.data(), nullptr, nullptr);
-    glfwSetWindowUserPointer(window, this);
-    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* window, int width, int height)
-    {
-        auto my_window = reinterpret_cast<VkWindow*>(glfwGetWindowUserPointer(window));
-        my_window->framebuffer_resized = true;
-        my_window->width = width;
-        my_window->height = height;
-    });
-}
+struct SwapchainDetails {
+    vk::SurfaceFormatKHR format;
+    vk::PresentModeKHR present_mode;
+    vk::Extent2D extent;
+    vk::SurfaceTransformFlagBitsKHR transform;
+    u32 image_count;
+};
 
-VkWindow::~VkWindow()
-{
-    auto& device = context->device;
-    device->waitIdle();
+SwapchainDetails PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height) {
+    SwapchainDetails details;
+    auto& gpu = g_vk_instace->GetPhysicalDevice();
 
-    buffers.clear();
-    glfwDestroyWindow(window);
-    glfwTerminate();
-}
+    // Choose surface format
+    auto formats = gpu.getSurfaceFormatsKHR(surface);
+    details.format = formats[0];
 
-bool VkWindow::should_close() const
-{
-    return glfwWindowShouldClose(window);
-}
-
-vk::Extent2D VkWindow::get_extent() const
-{
-    return { width, height };
-}
-
-void VkWindow::begin_frame()
-{
-    // Poll for mouse events
-    glfwPollEvents();
-
-    auto& device = context->device;
-    if (auto result = device->waitForFences(flight_fences[current_frame].get(), true, MAX_UINT64); result != vk::Result::eSuccess)
-        throw std::runtime_error("[VK] Failed waiting for flight fences");
-
-    device->resetFences(flight_fences[current_frame].get());
-    try
-    {
-        vk::ResultValue result = device->acquireNextImageKHR(swapchain.get(), MAX_UINT64, image_semaphores[current_frame].get(), nullptr);
-        image_index = result.value;
+    if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined) {
+        details.format = { vk::Format::eB8G8R8A8Unorm };
     }
-    catch (vk::OutOfDateKHRError err)
-    {
-        //recreateSwapChain();
-        return;
-    }
-    catch (vk::SystemError err)
-    {
-        throw std::runtime_error("failed to acquire swap chain image!");
-    }
-
-    // Start command buffer recording
-    auto& command_buffer = context->get_command_buffer();
-    command_buffer.begin({ vk::CommandBufferUsageFlagBits::eSimultaneousUse });
-
-    // Clear the screen
-    vk::ClearValue clear_values[2];
-    clear_values[0].color = { std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } };
-    clear_values[1].depthStencil = vk::ClearDepthStencilValue(0.0f, 0.0f);
-
-    vk::Rect2D render_area({0, 0}, swapchain_info.extent);
-    vk::RenderPassBeginInfo renderpass_info(context->renderpass.get(), buffers[current_frame].framebuffer, render_area, 2, clear_values);
-
-    command_buffer.beginRenderPass(renderpass_info, vk::SubpassContents::eInline);
-    command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, context->graphics_pipeline.get());
-    command_buffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, context->pipeline_layout.get(), 0,
-                                      context->descriptor_sets[current_frame], {});
-    command_buffer.setDepthCompareOp(vk::CompareOp::eGreaterOrEqual);
-}
-
-void VkWindow::end_frame()
-{
-    // Finish recording
-    auto& command_buffer = context->get_command_buffer();
-    command_buffer.endRenderPass();
-    command_buffer.end();
-
-    std::array<vk::PipelineStageFlags, 1> wait_stages = { vk::PipelineStageFlagBits::eColorAttachmentOutput };
-    std::array<vk::CommandBuffer, 1> command_buffers = { context->get_command_buffer() };
-
-    submit_info = vk::SubmitInfo(image_semaphores[current_frame].get(), wait_stages, command_buffers, render_semaphores[current_frame].get());
-    context->graphics_queue.submit(submit_info, flight_fences[current_frame].get());
-
-    vk::PresentInfoKHR present_info(render_semaphores[current_frame].get(), swapchain.get(), image_index);
-    vk::Result result;
-    try
-    {
-        result = present_queue.presentKHR(present_info);
-    }
-    catch (vk::OutOfDateKHRError err)
-    {
-        result = vk::Result::eErrorOutOfDateKHR;
-    }
-    catch (vk::SystemError err)
-    {
-        throw std::runtime_error("failed to present swap chain image!");
-    }
-
-    if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eSuboptimalKHR || framebuffer_resized)
-    {
-        framebuffer_resized = false;
-        // recreate_swapchain();
-        return;
-    }
-
-    current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
-}
-
-std::shared_ptr<VkContext> VkWindow::create_context(bool validation)
-{
-    vk::ApplicationInfo app_info("PS2 Emulator", 1, nullptr, 0, VK_API_VERSION_1_3);
-
-    uint32_t extension_count = 0U;
-    const char** extension_list = glfwGetRequiredInstanceExtensions(&extension_count);
-
-    // Get required extensions
-    std::vector<const char*> extensions(extension_list, extension_list + extension_count);
-    extensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-
-    const char* layers[1] = { "VK_LAYER_KHRONOS_validation" };
-    vk::InstanceCreateInfo instance_info({}, &app_info, {}, {}, extensions.size(), extensions.data());
-    if (validation)
-    {
-        instance_info.enabledLayerCount = 1;
-        instance_info.ppEnabledLayerNames = layers;
-    }
-
-    auto instance = vk::createInstanceUnique(instance_info);
-
-    // Create a surface for our window
-    VkSurfaceKHR surface_tmp;
-    if (glfwCreateWindowSurface(instance.get(), window, nullptr, &surface_tmp) != VK_SUCCESS)
-        throw std::runtime_error("[WINDOW] Could not create window surface\n");
-
-    surface = vk::UniqueSurfaceKHR(surface_tmp);
-
-    // Create context
-    context = std::make_shared<VkContext>(std::move(instance), this);
-    swapchain_info = get_swapchain_info();
-    context->create(swapchain_info);
-
-    // Create swapchain
-    create_present_queue();
-    create_depth_buffer();
-    create_swapchain();
-    create_sync_objects();
-
-    return context;
-}
-
-void VkWindow::create_present_queue()
-{
-    auto& physical_device = context->physical_device;
-    auto family_props = physical_device.getQueueFamilyProperties();
-
-    // Determine a queueFamilyIndex that suports present
-    // first check if the graphicsQueueFamiliyIndex is good enough
-    size_t present_queue_family = -1;
-    if (physical_device.getSurfaceSupportKHR(context->queue_family, surface.get()))
-    {
-        present_queue_family = context->queue_family;
-    }
-    else
-    {
-        // The graphicsQueueFamilyIndex doesn't support present -> look for an other family index that supports both
-        // graphics and present
-        vk::QueueFlags search = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute;
-        for (size_t i = 0; i < family_props.size(); i++ )
-        {
-            if (((family_props[i].queueFlags & search) == search) && physical_device.getSurfaceSupportKHR(i, surface.get()))
-            {
-                context->queue_family = present_queue_family = i;
+    else {
+        for (const auto& format : formats) {
+            if (format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear &&
+                format.format == vk::Format::eB8G8R8A8Unorm) {
+                details.format = format;
                 break;
             }
         }
-
-        if (present_queue_family == -1)
-        {
-            // There's nothing like a single family index that supports both graphics and present -> look for an other
-            // family index that supports present
-            for (size_t i = 0; i < family_props.size(); i++ )
-            {
-                if (physical_device.getSurfaceSupportKHR(i, surface.get()))
-                {
-                    present_queue_family = i;
-                    break;
-                }
-            }
-        }
     }
 
-    if (present_queue_family == -1)
-        throw std::runtime_error("[VK] No present queue could be found");
+    // Checks if a particular mode is supported, if it is, returns that mode.
+    auto modes = gpu.getSurfacePresentModesKHR(surface);
+    auto ModePresent = [&modes](vk::PresentModeKHR check_mode) {
+        auto it = std::find_if(modes.begin(), modes.end(), [check_mode](const auto& mode) {
+                return check_mode == mode;
+        });
 
-    // Get the queue
-    present_queue = context->device->getQueue(present_queue_family, 0);
+        return it != modes.end();
+    };
+
+    // FIFO is guaranteed by the standard to be available
+    details.present_mode = vk::PresentModeKHR::eFifo;
+
+    // Prefer Mailbox if present for lowest latency
+    if (ModePresent(vk::PresentModeKHR::eMailbox)) {
+        details.present_mode = vk::PresentModeKHR::eMailbox;
+    }
+
+    // Query surface capabilities
+    auto capabilities = gpu.getSurfaceCapabilitiesKHR(surface);
+    details.extent = capabilities.currentExtent;
+
+    if (capabilities.currentExtent.width == std::numeric_limits<u32>::max()) {
+        details.extent.width = std::clamp(width, capabilities.minImageExtent.width,
+                                          capabilities.maxImageExtent.width);
+        details.extent.height = std::clamp(height, capabilities.minImageExtent.height,
+                                           capabilities.maxImageExtent.height);
+    }
+
+    // Select number of images in swap chain, we prefer one buffer in the background to work on
+    details.image_count = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0) {
+        details.image_count = std::min(details.image_count, capabilities.maxImageCount);
+    }
+
+    // Prefer identity transform if possible
+    details.transform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
+    if (!(capabilities.supportedTransforms & details.transform)) {
+        details.transform = capabilities.currentTransform;
+    }
+
+    return details;
 }
 
-void VkWindow::create_swapchain(bool enable_vsync)
-{
-    auto& physical_device = context->physical_device;
+VKSwapchain::VKSwapchain(vk::SurfaceKHR surface_) : surface(surface_) {
+
+}
+
+void VKSwapchain::Create(u32 width, u32 height, bool vsync_enabled) {
+    is_outdated = false;
+    is_suboptimal = false;
+
+    const auto gpu = g_vk_instace->GetPhysicalDevice();
+    auto details = PopulateSwapchainDetails(surface, width, height);
+
+    // Store the old/current swap chain when recreating for resize
     vk::SwapchainKHR old_swapchain = swapchain.get();
 
-    // Figure out best swapchain create attributes
-    auto capabilities = physical_device.getSurfaceCapabilitiesKHR(surface.get());
-
-    // Find the transformation of the surface, prefer a non-rotated transform
-    auto pretransform = capabilities.supportedTransforms & vk::SurfaceTransformFlagBitsKHR::eIdentity ?
-                        vk::SurfaceTransformFlagBitsKHR::eIdentity :
-                        capabilities.currentTransform;
-
-    // Create the swapchain
-    vk::SwapchainCreateInfoKHR swapchain_create_info
+    // Now we can actually create the swap chain
+    vk::SwapchainCreateInfoKHR swap_chain_info
     (
         {},
-        surface.get(),
-        swapchain_info.image_count,
-        swapchain_info.surface_format.format,
-        swapchain_info.surface_format.colorSpace,
-        swapchain_info.extent,
-        1,
+        surface,
+        details.image_count,
+        details.format.format, details.format.colorSpace,
+        details.extent, 1,
         vk::ImageUsageFlagBits::eColorAttachment,
         vk::SharingMode::eExclusive,
-        0,
-        nullptr,
-        pretransform,
+        0, nullptr,
+        details.transform,
         vk::CompositeAlphaFlagBitsKHR::eOpaque,
-        swapchain_info.present_mode,
+        details.present_mode,
         VK_TRUE,
         old_swapchain
     );
 
-    auto& device = context->device;
-    swapchain = device->createSwapchainKHRUnique(swapchain_create_info);
-
-    // If an existing sawp chain is re-created, destroy the old swap chain
-    // This also cleans up all the presentable images
-    if (old_swapchain)
+    std::array<uint32_t, 2> indices = {{
+        g_vulkan_context->GetGraphicsQueueFamilyIndex(),
+        g_vulkan_context->GetPresentQueueFamilyIndex(),
+    }};
+    if (g_vulkan_context->GetGraphicsQueueFamilyIndex() !=
+        g_vulkan_context->GetPresentQueueFamilyIndex())
     {
-        buffers.clear();
-        device->destroySwapchainKHR(old_swapchain);
+      swap_chain_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+      swap_chain_info.queueFamilyIndexCount = 2;
+      swap_chain_info.pQueueFamilyIndices = indices.data();
     }
 
-    // Get the swap chain images
-    auto images = device->getSwapchainImagesKHR(swapchain.get());
-
-    // Create the swapchain buffers containing the image and imageview
-    buffers.resize(images.size());
-    for (size_t i = 0; i < buffers.size(); i++)
+  #ifdef SUPPORTS_VULKAN_EXCLUSIVE_FULLSCREEN
+    if (m_fullscreen_supported)
     {
-        vk::ImageViewCreateInfo color_attachment_view
-        (
-            {},
-            images[i],
-            vk::ImageViewType::e2D,
-            swapchain_info.surface_format.format,
-            {},
-            { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
-        );
+      VkSurfaceFullScreenExclusiveInfoEXT fullscreen_support = {};
+      swap_chain_info.pNext = &fullscreen_support;
+      fullscreen_support.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
+      fullscreen_support.fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;
 
-        auto image_view = device->createImageView(color_attachment_view);
-        vk::ImageView attachments[] = { image_view, depth_buffer.view };
+      auto platform_info = g_vulkan_context->GetPlatformExclusiveFullscreenInfo(m_wsi);
+      fullscreen_support.pNext = &platform_info;
 
-        vk::FramebufferCreateInfo framebuffer_info
-        (
-            {},
-            context->renderpass.get(),
-            2,
-            attachments,
-            swapchain_info.extent.width,
-            swapchain_info.extent.height,
-            1
-        );
+      res = vkCreateSwapchainKHR(g_vulkan_context->GetDevice(), &swap_chain_info, nullptr,
+                                 &m_swap_chain);
+      if (res != VK_SUCCESS)
+      {
+        // Try without exclusive fullscreen.
+        WARN_LOG_FMT(VIDEO, "Failed to create exclusive fullscreen swapchain, trying without.");
+        swap_chain_info.pNext = nullptr;
+        g_Config.backend_info.bSupportsExclusiveFullscreen = false;
+        g_ActiveConfig.backend_info.bSupportsExclusiveFullscreen = false;
+        m_fullscreen_supported = false;
+      }
+    }
+  #endif
 
-        buffers[i].image = images[i];
-        buffers[i].view = device->createImageView(color_attachment_view);
-        buffers[i].framebuffer = device->createFramebuffer(framebuffer_info);
-        buffers[i].device = &context->device.get();
+    if (m_swap_chain == VK_NULL_HANDLE)
+    {
+      res = vkCreateSwapchainKHR(g_vulkan_context->GetDevice(), &swap_chain_info, nullptr,
+                                 &m_swap_chain);
+    }
+    if (res != VK_SUCCESS)
+    {
+      LOG_VULKAN_ERROR(res, "vkCreateSwapchainKHR failed: ");
+      return false;
+    }
+
+    // Now destroy the old swap chain, since it's been recreated.
+    // We can do this immediately since all work should have been completed before calling resize.
+    if (old_swap_chain != VK_NULL_HANDLE)
+      vkDestroySwapchainKHR(g_vulkan_context->GetDevice(), old_swap_chain, nullptr);
+
+    m_width = size.width;
+    m_height = size.height;
+    m_layers = image_layers;
+    return true;
+}
+
+void VKSwapchain::AcquireNextImage() {
+    const auto result = g_vk_instace->GetDevice().acquireNextImageKHR(*swapchain,
+                        std::numeric_limits<u64>::max(), *present_semaphores[frame_index],
+                        VK_NULL_HANDLE, &image_index);
+
+    switch (result) {
+    case vk::Result::eSuccess:
+        break;
+    case vk::Result::eSuboptimalKHR:
+        is_suboptimal = true;
+        break;
+    case vk::Result::eErrorOutOfDateKHR:
+        is_outdated = true;
+        break;
+    default:
+        LOG_ERROR(Render_Vulkan, "acquireNextImageKHR returned unknown result");
+        break;
     }
 }
 
-vk::Framebuffer VkWindow::get_framebuffer(int index) const
-{
-    return buffers[index].framebuffer;
-}
+void VKSwapchain::Present(vk::Semaphore render_semaphore) {
+    const auto present_queue{device.GetPresentQueue()};
 
-void VkWindow::create_depth_buffer()
-{
-    auto& device = context->device;
 
-    // Create an optimal image used as the depth stencil attachment
-    vk::ImageCreateInfo image
-    (
-        {},
-        vk::ImageType::e2D,
-        swapchain_info.depth_format,
-        vk::Extent3D(swapchain_info.extent, 1),
-        1, 1,
-        vk::SampleCountFlagBits::e1,
-        vk::ImageTiling::eOptimal,
-        vk::ImageUsageFlagBits::eDepthStencilAttachment
-    );
+    vk::PresentInfoKHR present_info(
 
-    depth_buffer.image = device->createImage(image);
-
-    // Allocate memory for the image (device local) and bind it to our image
-    auto requirements = device->getImageMemoryRequirements(depth_buffer.image);
-    auto memory_type_index = Buffer::find_memory_type(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal, context);
-    vk::MemoryAllocateInfo memory_alloc(requirements.size, memory_type_index);
-
-    depth_buffer.memory = device->allocateMemory(memory_alloc);
-    device->bindImageMemory(depth_buffer.image, depth_buffer.memory, 0);
-
-    // Create a view for the depth stencil image
-    vk::ImageViewCreateInfo depth_view
-    (
-        {},
-        depth_buffer.image,
-        vk::ImageViewType::e2D,
-        swapchain_info.depth_format,
-        {},
-        vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1)
-    );
-    depth_buffer.view = device->createImageView(depth_view);
-}
-
-SwapchainInfo VkWindow::get_swapchain_info() const
-{
-    SwapchainInfo info;
-    auto& physical_device = context->physical_device;
-
-    // Choose surface format
-    auto formats = physical_device.getSurfaceFormatsKHR(surface.get());
-    info.surface_format = formats[0];
-
-    if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined)
-    {
-        info.surface_format = { vk::Format::eB8G8R8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear };
+    const VkPresentInfoKHR present_info{
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .pNext = nullptr,
+        .waitSemaphoreCount = render_semaphore ? 1U : 0U,
+        .pWaitSemaphores = &render_semaphore,
+        .swapchainCount = 1,
+        .pSwapchains = swapchain.address(),
+        .pImageIndices = &image_index,
+        .pResults = nullptr,
+    };
+    switch (const VkResult result = present_queue.Present(present_info)) {
+    case VK_SUCCESS:
+        break;
+    case VK_SUBOPTIMAL_KHR:
+        LOG_DEBUG(Render_Vulkan, "Suboptimal swapchain");
+        break;
+    case VK_ERROR_OUT_OF_DATE_KHR:
+        is_outdated = true;
+        break;
+    default:
+        LOG_CRITICAL(Render_Vulkan, "Failed to present with error {}", vk::ToString(result));
+        break;
     }
-    else
-    {
-        for (const auto& format : formats)
-        {
-            if (format.format == vk::Format::eB8G8R8A8Unorm &&
-                format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+    ++frame_index;
+    if (frame_index >= image_count) {
+        frame_index = 0;
+    }
+}
+
+void VKSwapchain::CreateSwapchain(const VkSurfaceCapabilitiesKHR& capabilities, u32 width,
+                                  u32 height, bool srgb) {
+    const auto physical_device{device.GetPhysical()};
+    const auto formats{physical_device.GetSurfaceFormatsKHR(surface)};
+    const auto present_modes{physical_device.GetSurfacePresentModesKHR(surface)};
+
+    const VkSurfaceFormatKHR surface_format{ChooseSwapSurfaceFormat(formats)};
+    present_mode = ChooseSwapPresentMode(present_modes);
+
+    u32 requested_image_count{capabilities.minImageCount + 1};
+    if (capabilities.maxImageCount > 0 && requested_image_count > capabilities.maxImageCount) {
+        requested_image_count = capabilities.maxImageCount;
+    }
+    VkSwapchainCreateInfoKHR swapchain_ci{
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .pNext = nullptr,
+        .flags = 0,
+        .surface = surface,
+        .minImageCount = requested_image_count,
+        .imageFormat = surface_format.format,
+        .imageColorSpace = surface_format.colorSpace,
+        .imageExtent = {},
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .queueFamilyIndexCount = 0,
+        .pQueueFamilyIndices = nullptr,
+        .preTransform = capabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = present_mode,
+        .clipped = VK_FALSE,
+        .oldSwapchain = nullptr,
+    };
+    const u32 graphics_family{device.GetGraphicsFamily()};
+    const u32 present_family{device.GetPresentFamily()};
+    const std::array<u32, 2> queue_indices{graphics_family, present_family};
+    if (graphics_family != present_family) {
+        swapchain_ci.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        swapchain_ci.queueFamilyIndexCount = static_cast<u32>(queue_indices.size());
+        swapchain_ci.pQueueFamilyIndices = queue_indices.data();
+    }
+    static constexpr std::array view_formats{VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_B8G8R8A8_SRGB};
+    VkImageFormatListCreateInfo format_list{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO_KHR,
+        .pNext = nullptr,
+        .viewFormatCount = static_cast<u32>(view_formats.size()),
+        .pViewFormats = view_formats.data(),
+    };
+    if (device.IsKhrSwapchainMutableFormatEnabled()) {
+        format_list.pNext = std::exchange(swapchain_ci.pNext, &format_list);
+        swapchain_ci.flags |= VK_SWAPCHAIN_CREATE_MUTABLE_FORMAT_BIT_KHR;
+    }
+    // Request the size again to reduce the possibility of a TOCTOU race condition.
+    const auto updated_capabilities = physical_device.GetSurfaceCapabilitiesKHR(surface);
+    swapchain_ci.imageExtent = ChooseSwapExtent(updated_capabilities, width, height);
+    // Don't add code within this and the swapchain creation.
+    swapchain = device.GetLogical().CreateSwapchainKHR(swapchain_ci);
+
+    extent = swapchain_ci.imageExtent;
+    current_srgb = srgb;
+    current_fps_unlocked = Settings::values.disable_fps_limit.GetValue();
+
+    images = swapchain.GetImages();
+    image_count = static_cast<u32>(images.size());
+    image_view_format = srgb ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_B8G8R8A8_UNORM;
+}
+
+void VKSwapchain::CreateImageViews() {
+    VkImageViewCreateInfo ci{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = 0,
+        .image = {},
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = image_view_format,
+        .components =
             {
-                info.surface_format = format;
-                break;
-            }
-        }
-    }
+                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+        .subresourceRange =
+            {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+    };
 
-    // Choose best present mode
-    auto present_modes = physical_device.getSurfacePresentModesKHR(surface.get());
-    info.present_mode = vk::PresentModeKHR::eFifo;
-
-    // Query surface capabilities
-    auto capabilities = physical_device.getSurfaceCapabilitiesKHR(surface.get());
-    info.extent = capabilities.currentExtent;
-
-    if (capabilities.currentExtent.width == std::numeric_limits<uint32_t>::max())
-    {
-        int width, height;
-        glfwGetFramebufferSize(window, &width, &height);
-
-        vk::Extent2D extent = { static_cast<uint32_t>(width), static_cast<uint32_t>(height) };
-        extent.width = std::max(capabilities.minImageExtent.width, std::min(capabilities.maxImageExtent.width, extent.width));
-        extent.height = std::max(capabilities.minImageExtent.height, std::min(capabilities.maxImageExtent.height, extent.height));
-
-        info.extent = extent;
-    }
-
-    // Find a suitable depth (stencil) format that is supported by the device
-    auto depth_formats = { vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint, vk::Format::eD16UnormS8Uint,
-                           vk::Format::eD32Sfloat, vk::Format::eD16Unorm };
-    info.depth_format = vk::Format::eUndefined;
-
-    for (auto& format : depth_formats)
-    {
-        auto format_props = physical_device.getFormatProperties(format);
-        auto search = vk::FormatFeatureFlagBits::eDepthStencilAttachment;
-        if ((format_props.optimalTilingFeatures & search) == search)
-        {
-            info.depth_format = format;
-            break;
-        }
-    }
-
-    if (info.depth_format == vk::Format::eUndefined)
-        throw std::runtime_error("[VK] Couldn't find optinal depth format");
-
-    // Determine the number of images
-    info.image_count = capabilities.minImageCount + 1 > capabilities.maxImageCount &&
-                       capabilities.maxImageCount > 0 ?
-                       capabilities.maxImageCount :
-                       capabilities.minImageCount + 1;
-
-    return info;
-}
-
-void VkWindow::create_sync_objects()
-{
-    auto& device = context->device;
-
-    image_semaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    render_semaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    flight_fences.resize(MAX_FRAMES_IN_FLIGHT);
-
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        image_semaphores[i] = device->createSemaphoreUnique({});
-        render_semaphores[i] = device->createSemaphoreUnique({});
-        flight_fences[i] = device->createFenceUnique({ vk::FenceCreateFlagBits::eSignaled });
+    image_views.resize(image_count);
+    for (std::size_t i = 0; i < image_count; i++) {
+        ci.image = images[i];
+        image_views[i] = device.GetLogical().CreateImageView(ci);
     }
 }
+
+void VKSwapchain::Destroy() {
+    frame_index = 0;
+    present_semaphores.clear();
+    framebuffers.clear();
+    image_views.clear();
+    swapchain.reset();
+}
+
+bool VKSwapchain::NeedsPresentModeUpdate() const {
+    // Mailbox present mode is the ideal for all scenarios. If it is not available,
+    // A different present mode is needed to support unlocked FPS above the monitor's refresh rate.
+    return present_mode != VK_PRESENT_MODE_MAILBOX_KHR && HasFpsUnlockChanged();
+}
+
+} // namespace Vulkan

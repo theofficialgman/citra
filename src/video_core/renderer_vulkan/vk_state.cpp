@@ -1,452 +1,565 @@
-// Copyright 2015 Citra Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <glad/glad.h>
-#include "common/common_funcs.h"
-#include "common/logging/log.h"
-#include "video_core/renderer_opengl/gl_state.h"
-#include "video_core/renderer_opengl/gl_vars.h"
+#include "video_core/renderer_vulkan/vk_state.h"
 
-namespace OpenGL {
+namespace Vulkan {
 
-OpenGLState OpenGLState::cur_state;
+std::unique_ptr<VulkanState> g_vk_state;
 
-OpenGLState::OpenGLState() {
-    // These all match default OpenGL values
-    cull.enabled = false;
-    cull.mode = GL_BACK;
-    cull.front_face = GL_CCW;
-
-    depth.test_enabled = false;
-    depth.test_func = GL_LESS;
-    depth.write_mask = GL_TRUE;
-
-    color_mask.red_enabled = GL_TRUE;
-    color_mask.green_enabled = GL_TRUE;
-    color_mask.blue_enabled = GL_TRUE;
-    color_mask.alpha_enabled = GL_TRUE;
-
-    stencil.test_enabled = false;
-    stencil.test_func = GL_ALWAYS;
-    stencil.test_ref = 0;
-    stencil.test_mask = 0xFF;
-    stencil.write_mask = 0xFF;
-    stencil.action_depth_fail = GL_KEEP;
-    stencil.action_depth_pass = GL_KEEP;
-    stencil.action_stencil_fail = GL_KEEP;
-
-    blend.enabled = true;
-    blend.rgb_equation = GL_FUNC_ADD;
-    blend.a_equation = GL_FUNC_ADD;
-    blend.src_rgb_func = GL_ONE;
-    blend.dst_rgb_func = GL_ZERO;
-    blend.src_a_func = GL_ONE;
-    blend.dst_a_func = GL_ZERO;
-    blend.color.red = 0.0f;
-    blend.color.green = 0.0f;
-    blend.color.blue = 0.0f;
-    blend.color.alpha = 0.0f;
-
-    logic_op = GL_COPY;
-
-    for (auto& texture_unit : texture_units) {
-        texture_unit.texture_2d = 0;
-        texture_unit.sampler = 0;
-    }
-
-    texture_cube_unit.texture_cube = 0;
-    texture_cube_unit.sampler = 0;
-
-    texture_buffer_lut_lf.texture_buffer = 0;
-    texture_buffer_lut_rg.texture_buffer = 0;
-    texture_buffer_lut_rgba.texture_buffer = 0;
-
-    image_shadow_buffer = 0;
-    image_shadow_texture_px = 0;
-    image_shadow_texture_nx = 0;
-    image_shadow_texture_py = 0;
-    image_shadow_texture_ny = 0;
-    image_shadow_texture_pz = 0;
-    image_shadow_texture_nz = 0;
-
-    draw.read_framebuffer = 0;
-    draw.draw_framebuffer = 0;
-    draw.vertex_array = 0;
-    draw.vertex_buffer = 0;
-    draw.uniform_buffer = 0;
-    draw.shader_program = 0;
-    draw.program_pipeline = 0;
-
-    scissor.enabled = false;
-    scissor.x = 0;
-    scissor.y = 0;
-    scissor.width = 0;
-    scissor.height = 0;
-
-    viewport.x = 0;
-    viewport.y = 0;
-    viewport.width = 0;
-    viewport.height = 0;
-
-    clip_distance = {};
-
-    renderbuffer = 0;
+// Define bitwise operators for DirtyState enum
+DirtyState operator |=(DirtyState lhs, DirtyState rhs) {
+    return static_cast<DirtyState> (
+        static_cast<unsigned>(lhs) |
+        static_cast<unsigned>(rhs)
+    );
 }
 
-void OpenGLState::Apply() const {
-    // Culling
-    if (cull.enabled != cur_state.cull.enabled) {
-        if (cull.enabled) {
-            glEnable(GL_CULL_FACE);
-        } else {
-            glDisable(GL_CULL_FACE);
-        }
-    }
+void VulkanState::Create() {
+    // Create a dummy texture which can be used in place of a real binding.
+    VKTexture::Info info = {
+        .width = 1,
+        .height = 1,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .type = vk::ImageType::e2D,
+        .view_type = vk::ImageViewType::e2D
+    };
 
-    if (cull.mode != cur_state.cull.mode) {
-        glCullFace(cull.mode);
-    }
+    dummy_texture.Create(info);
+    //dummy_texture.TransitionLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    if (cull.front_face != cur_state.cull.front_face) {
-        glFrontFace(cull.front_face);
-    }
-
-    // Depth test
-    if (depth.test_enabled != cur_state.depth.test_enabled) {
-        if (depth.test_enabled) {
-            glEnable(GL_DEPTH_TEST);
-        } else {
-            glDisable(GL_DEPTH_TEST);
-        }
-    }
-
-    if (depth.test_func != cur_state.depth.test_func) {
-        glDepthFunc(depth.test_func);
-    }
-
-    // Depth mask
-    if (depth.write_mask != cur_state.depth.write_mask) {
-        glDepthMask(depth.write_mask);
-    }
-
-    // Color mask
-    if (color_mask.red_enabled != cur_state.color_mask.red_enabled ||
-        color_mask.green_enabled != cur_state.color_mask.green_enabled ||
-        color_mask.blue_enabled != cur_state.color_mask.blue_enabled ||
-        color_mask.alpha_enabled != cur_state.color_mask.alpha_enabled) {
-        glColorMask(color_mask.red_enabled, color_mask.green_enabled, color_mask.blue_enabled,
-                    color_mask.alpha_enabled);
-    }
-
-    // Stencil test
-    if (stencil.test_enabled != cur_state.stencil.test_enabled) {
-        if (stencil.test_enabled) {
-            glEnable(GL_STENCIL_TEST);
-        } else {
-            glDisable(GL_STENCIL_TEST);
-        }
-    }
-
-    if (stencil.test_func != cur_state.stencil.test_func ||
-        stencil.test_ref != cur_state.stencil.test_ref ||
-        stencil.test_mask != cur_state.stencil.test_mask) {
-        glStencilFunc(stencil.test_func, stencil.test_ref, stencil.test_mask);
-    }
-
-    if (stencil.action_depth_fail != cur_state.stencil.action_depth_fail ||
-        stencil.action_depth_pass != cur_state.stencil.action_depth_pass ||
-        stencil.action_stencil_fail != cur_state.stencil.action_stencil_fail) {
-        glStencilOp(stencil.action_stencil_fail, stencil.action_depth_fail,
-                    stencil.action_depth_pass);
-    }
-
-    // Stencil mask
-    if (stencil.write_mask != cur_state.stencil.write_mask) {
-        glStencilMask(stencil.write_mask);
-    }
-
-    // Blending
-    if (blend.enabled != cur_state.blend.enabled) {
-        if (blend.enabled) {
-            glEnable(GL_BLEND);
-        } else {
-            glDisable(GL_BLEND);
-        }
-
-        // GLES does not support glLogicOp
-        if (!GLES) {
-            if (blend.enabled) {
-                glDisable(GL_COLOR_LOGIC_OP);
-            } else {
-                glEnable(GL_COLOR_LOGIC_OP);
-            }
-        }
-    }
-
-    if (blend.color.red != cur_state.blend.color.red ||
-        blend.color.green != cur_state.blend.color.green ||
-        blend.color.blue != cur_state.blend.color.blue ||
-        blend.color.alpha != cur_state.blend.color.alpha) {
-        glBlendColor(blend.color.red, blend.color.green, blend.color.blue, blend.color.alpha);
-    }
-
-    if (blend.src_rgb_func != cur_state.blend.src_rgb_func ||
-        blend.dst_rgb_func != cur_state.blend.dst_rgb_func ||
-        blend.src_a_func != cur_state.blend.src_a_func ||
-        blend.dst_a_func != cur_state.blend.dst_a_func) {
-        glBlendFuncSeparate(blend.src_rgb_func, blend.dst_rgb_func, blend.src_a_func,
-                            blend.dst_a_func);
-    }
-
-    if (blend.rgb_equation != cur_state.blend.rgb_equation ||
-        blend.a_equation != cur_state.blend.a_equation) {
-        glBlendEquationSeparate(blend.rgb_equation, blend.a_equation);
-    }
-
-    // GLES does not support glLogicOp
-    if (!GLES) {
-        if (logic_op != cur_state.logic_op) {
-            glLogicOp(logic_op);
-        }
-    }
-
-    // Textures
-    for (u32 i = 0; i < texture_units.size(); ++i) {
-        if (texture_units[i].texture_2d != cur_state.texture_units[i].texture_2d) {
-            glActiveTexture(TextureUnits::PicaTexture(i).Enum());
-            glBindTexture(GL_TEXTURE_2D, texture_units[i].texture_2d);
-        }
-        if (texture_units[i].sampler != cur_state.texture_units[i].sampler) {
-            glBindSampler(i, texture_units[i].sampler);
-        }
-    }
-
-    if (texture_cube_unit.texture_cube != cur_state.texture_cube_unit.texture_cube) {
-        glActiveTexture(TextureUnits::TextureCube.Enum());
-        glBindTexture(GL_TEXTURE_CUBE_MAP, texture_cube_unit.texture_cube);
-    }
-    if (texture_cube_unit.sampler != cur_state.texture_cube_unit.sampler) {
-        glBindSampler(TextureUnits::TextureCube.id, texture_cube_unit.sampler);
-    }
-
-    // Texture buffer LUTs
-    if (texture_buffer_lut_lf.texture_buffer != cur_state.texture_buffer_lut_lf.texture_buffer) {
-        glActiveTexture(TextureUnits::TextureBufferLUT_LF.Enum());
-        glBindTexture(GL_TEXTURE_BUFFER, texture_buffer_lut_lf.texture_buffer);
-    }
-
-    // Texture buffer LUTs
-    if (texture_buffer_lut_rg.texture_buffer != cur_state.texture_buffer_lut_rg.texture_buffer) {
-        glActiveTexture(TextureUnits::TextureBufferLUT_RG.Enum());
-        glBindTexture(GL_TEXTURE_BUFFER, texture_buffer_lut_rg.texture_buffer);
-    }
-
-    // Texture buffer LUTs
-    if (texture_buffer_lut_rgba.texture_buffer !=
-        cur_state.texture_buffer_lut_rgba.texture_buffer) {
-        glActiveTexture(TextureUnits::TextureBufferLUT_RGBA.Enum());
-        glBindTexture(GL_TEXTURE_BUFFER, texture_buffer_lut_rgba.texture_buffer);
-    }
-
-    // Shadow Images
-    if (image_shadow_buffer != cur_state.image_shadow_buffer) {
-        glBindImageTexture(ImageUnits::ShadowBuffer, image_shadow_buffer, 0, GL_FALSE, 0,
-                           GL_READ_WRITE, GL_R32UI);
-    }
-
-    if (image_shadow_texture_px != cur_state.image_shadow_texture_px) {
-        glBindImageTexture(ImageUnits::ShadowTexturePX, image_shadow_texture_px, 0, GL_FALSE, 0,
-                           GL_READ_ONLY, GL_R32UI);
-    }
-
-    if (image_shadow_texture_nx != cur_state.image_shadow_texture_nx) {
-        glBindImageTexture(ImageUnits::ShadowTextureNX, image_shadow_texture_nx, 0, GL_FALSE, 0,
-                           GL_READ_ONLY, GL_R32UI);
-    }
-
-    if (image_shadow_texture_py != cur_state.image_shadow_texture_py) {
-        glBindImageTexture(ImageUnits::ShadowTexturePY, image_shadow_texture_py, 0, GL_FALSE, 0,
-                           GL_READ_ONLY, GL_R32UI);
-    }
-
-    if (image_shadow_texture_ny != cur_state.image_shadow_texture_ny) {
-        glBindImageTexture(ImageUnits::ShadowTextureNY, image_shadow_texture_ny, 0, GL_FALSE, 0,
-                           GL_READ_ONLY, GL_R32UI);
-    }
-
-    if (image_shadow_texture_pz != cur_state.image_shadow_texture_pz) {
-        glBindImageTexture(ImageUnits::ShadowTexturePZ, image_shadow_texture_pz, 0, GL_FALSE, 0,
-                           GL_READ_ONLY, GL_R32UI);
-    }
-
-    if (image_shadow_texture_nz != cur_state.image_shadow_texture_nz) {
-        glBindImageTexture(ImageUnits::ShadowTextureNZ, image_shadow_texture_nz, 0, GL_FALSE, 0,
-                           GL_READ_ONLY, GL_R32UI);
-    }
-
-    // Framebuffer
-    if (draw.read_framebuffer != cur_state.draw.read_framebuffer) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, draw.read_framebuffer);
-    }
-    if (draw.draw_framebuffer != cur_state.draw.draw_framebuffer) {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw.draw_framebuffer);
-    }
-
-    // Vertex array
-    if (draw.vertex_array != cur_state.draw.vertex_array) {
-        glBindVertexArray(draw.vertex_array);
-    }
-
-    // Vertex buffer
-    if (draw.vertex_buffer != cur_state.draw.vertex_buffer) {
-        glBindBuffer(GL_ARRAY_BUFFER, draw.vertex_buffer);
-    }
-
-    // Uniform buffer
-    if (draw.uniform_buffer != cur_state.draw.uniform_buffer) {
-        glBindBuffer(GL_UNIFORM_BUFFER, draw.uniform_buffer);
-    }
-
-    // Shader program
-    if (draw.shader_program != cur_state.draw.shader_program) {
-        glUseProgram(draw.shader_program);
-    }
-
-    // Program pipeline
-    if (draw.program_pipeline != cur_state.draw.program_pipeline) {
-        glBindProgramPipeline(draw.program_pipeline);
-    }
-
-    // Scissor test
-    if (scissor.enabled != cur_state.scissor.enabled) {
-        if (scissor.enabled) {
-            glEnable(GL_SCISSOR_TEST);
-        } else {
-            glDisable(GL_SCISSOR_TEST);
-        }
-    }
-
-    if (scissor.x != cur_state.scissor.x || scissor.y != cur_state.scissor.y ||
-        scissor.width != cur_state.scissor.width || scissor.height != cur_state.scissor.height) {
-        glScissor(scissor.x, scissor.y, scissor.width, scissor.height);
-    }
-
-    if (viewport.x != cur_state.viewport.x || viewport.y != cur_state.viewport.y ||
-        viewport.width != cur_state.viewport.width ||
-        viewport.height != cur_state.viewport.height) {
-        glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
-    }
-
-    // Clip distance
-    if (!GLES || GLAD_GL_EXT_clip_cull_distance) {
-        for (size_t i = 0; i < clip_distance.size(); ++i) {
-            if (clip_distance[i] != cur_state.clip_distance[i]) {
-                if (clip_distance[i]) {
-                    glEnable(GL_CLIP_DISTANCE0 + static_cast<GLenum>(i));
-                } else {
-                    glDisable(GL_CLIP_DISTANCE0 + static_cast<GLenum>(i));
-                }
-            }
-        }
-    }
-
-    if (renderbuffer != cur_state.renderbuffer) {
-        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-    }
-
-    cur_state = *this;
+    dirty_flags |= DirtyState::All;
 }
 
-OpenGLState& OpenGLState::ResetTexture(GLuint handle) {
-    for (auto& unit : texture_units) {
-        if (unit.texture_2d == handle) {
-            unit.texture_2d = 0;
-        }
+void VulkanState::SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset)
+{
+    if (vertex_buffer == buffer) {
+        return;
     }
-    if (texture_cube_unit.texture_cube == handle)
-        texture_cube_unit.texture_cube = 0;
-    if (texture_buffer_lut_lf.texture_buffer == handle)
-        texture_buffer_lut_lf.texture_buffer = 0;
-    if (texture_buffer_lut_rg.texture_buffer == handle)
-        texture_buffer_lut_rg.texture_buffer = 0;
-    if (texture_buffer_lut_rgba.texture_buffer == handle)
-        texture_buffer_lut_rgba.texture_buffer = 0;
-    if (image_shadow_buffer == handle)
-        image_shadow_buffer = 0;
-    if (image_shadow_texture_px == handle)
-        image_shadow_texture_px = 0;
-    if (image_shadow_texture_nx == handle)
-        image_shadow_texture_nx = 0;
-    if (image_shadow_texture_py == handle)
-        image_shadow_texture_py = 0;
-    if (image_shadow_texture_ny == handle)
-        image_shadow_texture_ny = 0;
-    if (image_shadow_texture_pz == handle)
-        image_shadow_texture_pz = 0;
-    if (image_shadow_texture_nz == handle)
-        image_shadow_texture_nz = 0;
-    return *this;
+
+    vertex_buffer = buffer;
+    vertex_buffer_offset = offset;
+    dirty_flags |= DirtyState::VertexBuffer;
 }
 
-OpenGLState& OpenGLState::ResetSampler(GLuint handle) {
-    for (auto& unit : texture_units) {
-        if (unit.sampler == handle) {
-            unit.sampler = 0;
-        }
-    }
-    if (texture_cube_unit.sampler == handle) {
-        texture_cube_unit.sampler = 0;
-    }
-    return *this;
+void VulkanState::SetFramebuffer(VKFramebuffer* buffer)
+{
+    // Should not be changed within a render pass.
+    //ASSERT(!InRenderPass());
+    //framebuffer = buffer;
 }
 
-OpenGLState& OpenGLState::ResetProgram(GLuint handle) {
-    if (draw.shader_program == handle) {
-        draw.shader_program = 0;
-    }
-    return *this;
+void VulkanState::SetPipeline(const VKPipeline* new_pipeline)
+{
+    if (new_pipeline == pipeline)
+        return;
+
+    pipeline = new_pipeline;
+    dirty_flags |= DirtyState::Pipeline;
 }
 
-OpenGLState& OpenGLState::ResetPipeline(GLuint handle) {
-    if (draw.program_pipeline == handle) {
-        draw.program_pipeline = 0;
+void VulkanState::SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u32 size)
+{
+    auto& binding = bindings.ubo[static_cast<u32>(id)];
+    if (binding.buffer != buffer->GetBuffer() || binding.range != size)
+    {
+        binding.buffer = buffer->GetBuffer();
+        binding.range = size;
+        dirty_flags |= DirtyState::Uniform;
     }
-    return *this;
 }
 
-OpenGLState& OpenGLState::ResetBuffer(GLuint handle) {
-    if (draw.vertex_buffer == handle) {
-        draw.vertex_buffer = 0;
+void VulkanState::SetTexture(TextureID id, VKTexture* texture)
+{
+    u32 index = static_cast<u32>(id);
+    if (bindings.texture[index].imageView == texture->GetView()) {
+        return;
     }
-    if (draw.uniform_buffer == handle) {
-        draw.uniform_buffer = 0;
-    }
-    return *this;
+
+    bindings.texture[index].imageView = texture->GetView();
+    bindings.texture[index].imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+    dirty_flags |= DirtyState::Texture;
 }
 
-OpenGLState& OpenGLState::ResetVertexArray(GLuint handle) {
-    if (draw.vertex_array == handle) {
-        draw.vertex_array = 0;
+void VulkanState::SetTexelBuffer(TexelBufferID id, VKBuffer* buffer)
+{
+    u32 index = static_cast<u32>(id);
+    if (bindings.lut[index].buffer == buffer->GetBuffer()) {
+        return;
     }
-    return *this;
+
+    bindings.lut[index].buffer = buffer->GetBuffer();
+    dirty_flags |= DirtyState::TexelBuffer;
 }
 
-OpenGLState& OpenGLState::ResetFramebuffer(GLuint handle) {
-    if (draw.read_framebuffer == handle) {
-        draw.read_framebuffer = 0;
-    }
-    if (draw.draw_framebuffer == handle) {
-        draw.draw_framebuffer = 0;
-    }
-    return *this;
+void VulkanState::SetImageTexture(VKTexture* image)
+{
+    // TODO
 }
 
-OpenGLState& OpenGLState::ResetRenderbuffer(GLuint handle) {
-    if (renderbuffer == handle) {
-        renderbuffer = 0;
-    }
-    return *this;
+void VulkanState::BeginRenderPass()
+{
+  if (InRenderPass())
+    return;
+
+  m_current_render_pass = m_framebuffer->GetLoadRenderPass();
+  m_framebuffer_render_area = m_framebuffer->GetRect();
+
+  VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                      nullptr,
+                                      m_current_render_pass,
+                                      m_framebuffer->GetFB(),
+                                      m_framebuffer_render_area,
+                                      0,
+                                      nullptr};
+
+  vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
+                       VK_SUBPASS_CONTENTS_INLINE);
 }
 
-} // namespace OpenGL
+void StateTracker::BeginDiscardRenderPass()
+{
+  if (InRenderPass())
+    return;
+
+  m_current_render_pass = m_framebuffer->GetDiscardRenderPass();
+  m_framebuffer_render_area = m_framebuffer->GetRect();
+
+  VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                      nullptr,
+                                      m_current_render_pass,
+                                      m_framebuffer->GetFB(),
+                                      m_framebuffer_render_area,
+                                      0,
+                                      nullptr};
+
+  vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
+                       VK_SUBPASS_CONTENTS_INLINE);
+}
+
+void StateTracker::EndRenderPass()
+{
+  if (!InRenderPass())
+    return;
+
+  vkCmdEndRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer());
+  m_current_render_pass = VK_NULL_HANDLE;
+}
+
+void StateTracker::BeginClearRenderPass(const VkRect2D& area, const VkClearValue* clear_values,
+                                        u32 num_clear_values)
+{
+  ASSERT(!InRenderPass());
+
+  m_current_render_pass = m_framebuffer->GetClearRenderPass();
+  m_framebuffer_render_area = area;
+
+  VkRenderPassBeginInfo begin_info = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                                      nullptr,
+                                      m_current_render_pass,
+                                      m_framebuffer->GetFB(),
+                                      m_framebuffer_render_area,
+                                      num_clear_values,
+                                      clear_values};
+
+  vkCmdBeginRenderPass(g_command_buffer_mgr->GetCurrentCommandBuffer(), &begin_info,
+                       VK_SUBPASS_CONTENTS_INLINE);
+}
+
+void StateTracker::SetViewport(const VkViewport& viewport)
+{
+  if (memcmp(&m_viewport, &viewport, sizeof(viewport)) == 0)
+    return;
+
+  m_viewport = viewport;
+  m_dirty_flags |= DIRTY_FLAG_VIEWPORT;
+}
+
+void StateTracker::SetScissor(const VkRect2D& scissor)
+{
+  if (memcmp(&m_scissor, &scissor, sizeof(scissor)) == 0)
+    return;
+
+  m_scissor = scissor;
+  m_dirty_flags |= DIRTY_FLAG_SCISSOR;
+}
+
+bool StateTracker::Bind()
+{
+  // Must have a pipeline.
+  if (!m_pipeline)
+    return false;
+
+  // Check the render area if we were in a clear pass.
+  if (m_current_render_pass == m_framebuffer->GetClearRenderPass() && !IsViewportWithinRenderArea())
+    EndRenderPass();
+
+  // Get a new descriptor set if any parts have changed
+  if (!UpdateDescriptorSet())
+  {
+    // We can fail to allocate descriptors if we exhaust the pool for this command buffer.
+    WARN_LOG_FMT(VIDEO, "Failed to get a descriptor set, executing buffer");
+    Renderer::GetInstance()->ExecuteCommandBuffer(false, false);
+    if (!UpdateDescriptorSet())
+    {
+      // Something strange going on.
+      ERROR_LOG_FMT(VIDEO, "Failed to get descriptor set, skipping draw");
+      return false;
+    }
+  }
+
+  // Start render pass if not already started
+  if (!InRenderPass())
+    BeginRenderPass();
+
+  // Re-bind parts of the pipeline
+  const VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  if (m_dirty_flags & DIRTY_FLAG_VERTEX_BUFFER)
+    vkCmdBindVertexBuffers(command_buffer, 0, 1, &m_vertex_buffer, &m_vertex_buffer_offset);
+
+  if (m_dirty_flags & DIRTY_FLAG_INDEX_BUFFER)
+    vkCmdBindIndexBuffer(command_buffer, m_index_buffer, m_index_buffer_offset, m_index_type);
+
+  if (m_dirty_flags & DIRTY_FLAG_PIPELINE)
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->GetVkPipeline());
+
+  if (m_dirty_flags & DIRTY_FLAG_VIEWPORT)
+    vkCmdSetViewport(command_buffer, 0, 1, &m_viewport);
+
+  if (m_dirty_flags & DIRTY_FLAG_SCISSOR)
+    vkCmdSetScissor(command_buffer, 0, 1, &m_scissor);
+
+  m_dirty_flags &= ~(DIRTY_FLAG_VERTEX_BUFFER | DIRTY_FLAG_INDEX_BUFFER | DIRTY_FLAG_PIPELINE |
+                     DIRTY_FLAG_VIEWPORT | DIRTY_FLAG_SCISSOR);
+  return true;
+}
+
+bool StateTracker::BindCompute()
+{
+  if (!m_compute_shader)
+    return false;
+
+  // Can't kick compute in a render pass.
+  if (InRenderPass())
+    EndRenderPass();
+
+  const VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+  if (m_dirty_flags & DIRTY_FLAG_COMPUTE_SHADER)
+  {
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      m_compute_shader->GetComputePipeline());
+  }
+
+  if (!UpdateComputeDescriptorSet())
+  {
+    WARN_LOG_FMT(VIDEO, "Failed to get a compute descriptor set, executing buffer");
+    Renderer::GetInstance()->ExecuteCommandBuffer(false, false);
+    if (!UpdateComputeDescriptorSet())
+    {
+      // Something strange going on.
+      ERROR_LOG_FMT(VIDEO, "Failed to get descriptor set, skipping dispatch");
+      return false;
+    }
+  }
+
+  m_dirty_flags &= ~DIRTY_FLAG_COMPUTE_SHADER;
+  return true;
+}
+
+bool StateTracker::IsWithinRenderArea(s32 x, s32 y, u32 width, u32 height) const
+{
+  // Check that the viewport does not lie outside the render area.
+  // If it does, we need to switch to a normal load/store render pass.
+  s32 left = m_framebuffer_render_area.offset.x;
+  s32 top = m_framebuffer_render_area.offset.y;
+  s32 right = left + static_cast<s32>(m_framebuffer_render_area.extent.width);
+  s32 bottom = top + static_cast<s32>(m_framebuffer_render_area.extent.height);
+  s32 test_left = x;
+  s32 test_top = y;
+  s32 test_right = test_left + static_cast<s32>(width);
+  s32 test_bottom = test_top + static_cast<s32>(height);
+  return test_left >= left && test_right <= right && test_top >= top && test_bottom <= bottom;
+}
+
+bool StateTracker::IsViewportWithinRenderArea() const
+{
+  return IsWithinRenderArea(static_cast<s32>(m_viewport.x), static_cast<s32>(m_viewport.y),
+                            static_cast<u32>(m_viewport.width),
+                            static_cast<u32>(m_viewport.height));
+}
+
+void StateTracker::EndClearRenderPass()
+{
+  if (m_current_render_pass != m_framebuffer->GetClearRenderPass())
+    return;
+
+  // End clear render pass. Bind() will call BeginRenderPass() which
+  // will switch to the load/store render pass.
+  EndRenderPass();
+}
+
+bool StateTracker::UpdateDescriptorSet()
+{
+  if (m_pipeline->GetUsage() == AbstractPipelineUsage::GX)
+    return UpdateGXDescriptorSet();
+  else
+    return UpdateUtilityDescriptorSet();
+}
+
+bool StateTracker::UpdateGXDescriptorSet()
+{
+  const size_t MAX_DESCRIPTOR_WRITES = NUM_UBO_DESCRIPTOR_SET_BINDINGS +  // UBO
+                                       1 +                                // Samplers
+                                       1;                                 // SSBO
+  std::array<VkWriteDescriptorSet, MAX_DESCRIPTOR_WRITES> writes;
+  u32 num_writes = 0;
+
+  if (m_dirty_flags & DIRTY_FLAG_GX_UBOS || m_gx_descriptor_sets[0] == VK_NULL_HANDLE)
+  {
+    m_gx_descriptor_sets[0] = g_command_buffer_mgr->AllocateDescriptorSet(
+        g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_STANDARD_UNIFORM_BUFFERS));
+    if (m_gx_descriptor_sets[0] == VK_NULL_HANDLE)
+      return false;
+
+    for (size_t i = 0; i < NUM_UBO_DESCRIPTOR_SET_BINDINGS; i++)
+    {
+      if (i == UBO_DESCRIPTOR_SET_BINDING_GS &&
+          !g_ActiveConfig.backend_info.bSupportsGeometryShaders)
+      {
+        continue;
+      }
+
+      writes[num_writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                              nullptr,
+                              m_gx_descriptor_sets[0],
+                              static_cast<uint32_t>(i),
+                              0,
+                              1,
+                              VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                              nullptr,
+                              &m_bindings.gx_ubo_bindings[i],
+                              nullptr};
+    }
+
+    m_dirty_flags = (m_dirty_flags & ~DIRTY_FLAG_GX_UBOS) | DIRTY_FLAG_DESCRIPTOR_SETS;
+  }
+
+  if (m_dirty_flags & DIRTY_FLAG_GX_SAMPLERS || m_gx_descriptor_sets[1] == VK_NULL_HANDLE)
+  {
+    m_gx_descriptor_sets[1] = g_command_buffer_mgr->AllocateDescriptorSet(
+        g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_STANDARD_SAMPLERS));
+    if (m_gx_descriptor_sets[1] == VK_NULL_HANDLE)
+      return false;
+
+    writes[num_writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                            nullptr,
+                            m_gx_descriptor_sets[1],
+                            0,
+                            0,
+                            static_cast<u32>(NUM_PIXEL_SHADER_SAMPLERS),
+                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                            m_bindings.samplers.data(),
+                            nullptr,
+                            nullptr};
+    m_dirty_flags = (m_dirty_flags & ~DIRTY_FLAG_GX_SAMPLERS) | DIRTY_FLAG_DESCRIPTOR_SETS;
+  }
+
+  if (g_ActiveConfig.backend_info.bSupportsBBox &&
+      (m_dirty_flags & DIRTY_FLAG_GX_SSBO || m_gx_descriptor_sets[2] == VK_NULL_HANDLE))
+  {
+    m_gx_descriptor_sets[2] =
+        g_command_buffer_mgr->AllocateDescriptorSet(g_object_cache->GetDescriptorSetLayout(
+            DESCRIPTOR_SET_LAYOUT_STANDARD_SHADER_STORAGE_BUFFERS));
+    if (m_gx_descriptor_sets[2] == VK_NULL_HANDLE)
+      return false;
+
+    writes[num_writes++] = {
+        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_gx_descriptor_sets[2], 0,      0, 1,
+        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,      nullptr, &m_bindings.ssbo,        nullptr};
+    m_dirty_flags = (m_dirty_flags & ~DIRTY_FLAG_GX_SSBO) | DIRTY_FLAG_DESCRIPTOR_SETS;
+  }
+
+  if (num_writes > 0)
+    vkUpdateDescriptorSets(g_vulkan_context->GetDevice(), num_writes, writes.data(), 0, nullptr);
+
+  if (m_dirty_flags & DIRTY_FLAG_DESCRIPTOR_SETS)
+  {
+    vkCmdBindDescriptorSets(g_command_buffer_mgr->GetCurrentCommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->GetVkPipelineLayout(), 0,
+                            g_ActiveConfig.backend_info.bSupportsBBox ?
+                                NUM_GX_DESCRIPTOR_SETS :
+                                (NUM_GX_DESCRIPTOR_SETS - 1),
+                            m_gx_descriptor_sets.data(),
+                            g_ActiveConfig.backend_info.bSupportsGeometryShaders ?
+                                NUM_UBO_DESCRIPTOR_SET_BINDINGS :
+                                (NUM_UBO_DESCRIPTOR_SET_BINDINGS - 1),
+                            m_bindings.gx_ubo_offsets.data());
+    m_dirty_flags &= ~(DIRTY_FLAG_DESCRIPTOR_SETS | DIRTY_FLAG_GX_UBO_OFFSETS);
+  }
+  else if (m_dirty_flags & DIRTY_FLAG_GX_UBO_OFFSETS)
+  {
+    vkCmdBindDescriptorSets(g_command_buffer_mgr->GetCurrentCommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->GetVkPipelineLayout(), 0,
+                            1, m_gx_descriptor_sets.data(),
+                            g_ActiveConfig.backend_info.bSupportsGeometryShaders ?
+                                NUM_UBO_DESCRIPTOR_SET_BINDINGS :
+                                (NUM_UBO_DESCRIPTOR_SET_BINDINGS - 1),
+                            m_bindings.gx_ubo_offsets.data());
+    m_dirty_flags &= ~DIRTY_FLAG_GX_UBO_OFFSETS;
+  }
+
+  return true;
+}
+
+bool StateTracker::UpdateUtilityDescriptorSet()
+{
+  // Max number of updates - UBO, Samplers, TexelBuffer
+  std::array<VkWriteDescriptorSet, 3> dswrites;
+  u32 writes = 0;
+
+  // Allocate descriptor sets.
+  if (m_dirty_flags & DIRTY_FLAG_UTILITY_UBO || m_utility_descriptor_sets[0] == VK_NULL_HANDLE)
+  {
+    m_utility_descriptor_sets[0] = g_command_buffer_mgr->AllocateDescriptorSet(
+        g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_UTILITY_UNIFORM_BUFFER));
+    if (!m_utility_descriptor_sets[0])
+      return false;
+
+    dswrites[writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          nullptr,
+                          m_utility_descriptor_sets[0],
+                          0,
+                          0,
+                          1,
+                          VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                          nullptr,
+                          &m_bindings.utility_ubo_binding,
+                          nullptr};
+
+    m_dirty_flags = (m_dirty_flags & ~DIRTY_FLAG_UTILITY_UBO) | DIRTY_FLAG_DESCRIPTOR_SETS;
+  }
+
+  if (m_dirty_flags & DIRTY_FLAG_UTILITY_BINDINGS || m_utility_descriptor_sets[1] == VK_NULL_HANDLE)
+  {
+    m_utility_descriptor_sets[1] = g_command_buffer_mgr->AllocateDescriptorSet(
+        g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_UTILITY_SAMPLERS));
+    if (!m_utility_descriptor_sets[1])
+      return false;
+
+    dswrites[writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          nullptr,
+                          m_utility_descriptor_sets[1],
+                          0,
+                          0,
+                          NUM_PIXEL_SHADER_SAMPLERS,
+                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                          m_bindings.samplers.data(),
+                          nullptr,
+                          nullptr};
+    dswrites[writes++] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                          nullptr,
+                          m_utility_descriptor_sets[1],
+                          8,
+                          0,
+                          1,
+                          VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+                          nullptr,
+                          nullptr,
+                          m_bindings.texel_buffers.data()};
+
+    m_dirty_flags = (m_dirty_flags & ~DIRTY_FLAG_UTILITY_BINDINGS) | DIRTY_FLAG_DESCRIPTOR_SETS;
+  }
+
+  if (writes > 0)
+    vkUpdateDescriptorSets(g_vulkan_context->GetDevice(), writes, dswrites.data(), 0, nullptr);
+
+  if (m_dirty_flags & DIRTY_FLAG_DESCRIPTOR_SETS)
+  {
+    vkCmdBindDescriptorSets(g_command_buffer_mgr->GetCurrentCommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->GetVkPipelineLayout(), 0,
+                            NUM_UTILITY_DESCRIPTOR_SETS, m_utility_descriptor_sets.data(), 1,
+                            &m_bindings.utility_ubo_offset);
+    m_dirty_flags &= ~(DIRTY_FLAG_DESCRIPTOR_SETS | DIRTY_FLAG_UTILITY_UBO_OFFSET);
+  }
+  else if (m_dirty_flags & DIRTY_FLAG_UTILITY_UBO_OFFSET)
+  {
+    vkCmdBindDescriptorSets(g_command_buffer_mgr->GetCurrentCommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline->GetVkPipelineLayout(), 0,
+                            1, m_utility_descriptor_sets.data(), 1, &m_bindings.utility_ubo_offset);
+    m_dirty_flags &= ~(DIRTY_FLAG_DESCRIPTOR_SETS | DIRTY_FLAG_UTILITY_UBO_OFFSET);
+  }
+
+  return true;
+}
+
+bool StateTracker::UpdateComputeDescriptorSet()
+{
+  // Max number of updates - UBO, Samplers, TexelBuffer, Image
+  std::array<VkWriteDescriptorSet, 4> dswrites;
+
+  // Allocate descriptor sets.
+  if (m_dirty_flags & DIRTY_FLAG_COMPUTE_BINDINGS)
+  {
+    m_compute_descriptor_set = g_command_buffer_mgr->AllocateDescriptorSet(
+        g_object_cache->GetDescriptorSetLayout(DESCRIPTOR_SET_LAYOUT_COMPUTE));
+    dswrites[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                   nullptr,
+                   m_compute_descriptor_set,
+                   0,
+                   0,
+                   1,
+                   VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                   nullptr,
+                   &m_bindings.utility_ubo_binding,
+                   nullptr};
+    dswrites[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                   nullptr,
+                   m_compute_descriptor_set,
+                   1,
+                   0,
+                   NUM_COMPUTE_SHADER_SAMPLERS,
+                   VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                   m_bindings.samplers.data(),
+                   nullptr,
+                   nullptr};
+    dswrites[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                   nullptr,
+                   m_compute_descriptor_set,
+                   3,
+                   0,
+                   NUM_COMPUTE_TEXEL_BUFFERS,
+                   VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER,
+                   nullptr,
+                   nullptr,
+                   m_bindings.texel_buffers.data()};
+    dswrites[3] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                   nullptr,
+                   m_compute_descriptor_set,
+                   5,
+                   0,
+                   1,
+                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                   &m_bindings.image_texture,
+                   nullptr,
+                   nullptr};
+
+    vkUpdateDescriptorSets(g_vulkan_context->GetDevice(), static_cast<uint32_t>(dswrites.size()),
+                           dswrites.data(), 0, nullptr);
+    m_dirty_flags =
+        (m_dirty_flags & ~DIRTY_FLAG_COMPUTE_BINDINGS) | DIRTY_FLAG_COMPUTE_DESCRIPTOR_SET;
+  }
+
+  if (m_dirty_flags & DIRTY_FLAG_COMPUTE_DESCRIPTOR_SET)
+  {
+    vkCmdBindDescriptorSets(g_command_buffer_mgr->GetCurrentCommandBuffer(),
+                            VK_PIPELINE_BIND_POINT_COMPUTE,
+                            g_object_cache->GetPipelineLayout(PIPELINE_LAYOUT_COMPUTE), 0, 1,
+                            &m_compute_descriptor_set, 1, &m_bindings.utility_ubo_offset);
+    m_dirty_flags &= ~DIRTY_FLAG_COMPUTE_DESCRIPTOR_SET;
+  }
+
+  return true;
+}
+
+}  // namespace Vulkan

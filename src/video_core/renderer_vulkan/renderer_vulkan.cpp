@@ -1,4 +1,4 @@
-// Copyright 2014 Citra Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -35,7 +35,7 @@
 #include "video_core/renderer_opengl/renderer_opengl.h"
 #include "video_core/video_core.h"
 
-namespace OpenGL {
+namespace Vulkan {
 
 // If the size of this is too small, it ends up creating a soft cap on FPS as the renderer will have
 // to wait on available presentation frames. There doesn't seem to be much of a downside to a larger
@@ -364,7 +364,7 @@ static std::array<GLfloat, 3 * 2> MakeOrthographicMatrix(const float width, cons
     return matrix;
 }
 
-RendererOpenGL::RendererOpenGL(Frontend::EmuWindow& window)
+RendererVulkan::RendererVulkan(Frontend::EmuWindow& window)
     : RendererBase{window}, frame_dumper(Core::System::GetInstance().VideoDumper(), window) {
 
     window.mailbox = std::make_unique<OGLTextureMailbox>();

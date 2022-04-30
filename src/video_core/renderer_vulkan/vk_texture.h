@@ -7,7 +7,10 @@
 #include <memory>
 #include <span>
 #include <functional>
+#include <glm/glm.hpp>
+#include "common/math_util.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
+#include "video_core/renderer_vulkan/vk_surface_params.h"
 
 namespace Vulkan {
 
@@ -40,6 +43,7 @@ public:
 
     /// Create a new Vulkan texture object along with its sampler
     void Create(const Info& info);
+    bool IsValid() { return !!texture; }
 
     /// Copies CPU side pixel data to the GPU texture buffer
     void CopyPixels(std::span<u32> pixels);
@@ -50,12 +54,21 @@ public:
     vk::Rect2D GetRect() const { return vk::Rect2D({}, { texture_info.width, texture_info.height }); }
     u32 GetSamples() const { return texture_info.multisamples; }
 
-private:
     /// Used to transition the image to an optimal layout during transfers
-    void TransitionLayout(vk::ImageLayout old_layout, vk::ImageLayout new_layout);
+    void TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& command_buffer);
+
+    /// Fill the texture with the values provided
+    void Fill(Common::Rectangle<u32> region, glm::vec4 color);
+    void Fill(Common::Rectangle<u32> region, glm::vec2 depth_stencil);
+
+    /// Copy current texture to another with optionally performing format convesions
+    void BlitTo(Common::Rectangle<u32> source_rect, VKTexture& dest,
+                Common::Rectangle<u32> dst_rect, SurfaceParams::SurfaceType type,
+                vk::CommandBuffer& command_buffer);
 
 private:
     Info texture_info;
+    vk::ImageLayout texture_layout = vk::ImageLayout::eUndefined;
     vk::UniqueImage texture;
     vk::UniqueImageView texture_view;
     vk::UniqueDeviceMemory texture_memory;
@@ -82,7 +95,7 @@ public:
     void Create(const Info& info);
 
     /// Configure frambuffer for rendering
-    void Prepare();
+    void Prepare(vk::CommandBuffer& command_buffer);
 
     vk::Rect2D GetRect() const { return vk::Rect2D({}, { width, height }); }
 
@@ -92,4 +105,4 @@ private:
     std::array<VKTexture*, 2> attachments;
 };
 
-}
+} // namespace Vulkan

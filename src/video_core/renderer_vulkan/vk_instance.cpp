@@ -1,304 +1,178 @@
-#include "vk_context.h"
-#include "vk_buffer.h"
-#include "vk_swapchain.h"
-#include "vk_texture.h"
+// Copyright 2022 Citra Emulator Project
+// Licensed under GPLv2 or any later version
+// Refer to the license.txt file included.
+
 #include <fstream>
 #include <array>
+#include "common/logging/log.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 
-PipelineLayoutInfo::PipelineLayoutInfo(const std::shared_ptr<VkContext>& context) :
-    context(context)
-{
+namespace Vulkan {
+
+VKInstance::~VKInstance() {
+
 }
 
-PipelineLayoutInfo::~PipelineLayoutInfo()
-{
-    for (int i = 0; i < shader_stages.size(); i++)
-        context->device->destroyShaderModule(shader_stages[i].module);
+bool VKInstance::Create(vk::Instance instance, vk::PhysicalDevice physical_device,
+                        vk::SurfaceKHR surface, bool enable_validation_layer) {
+    this->instance = instance;
+    this->physical_device = physical_device;
+
+    // Determine required extensions and features
+    if (!FindExtensions() || !FindFeatures())
+        return false;
+
+    // Create logical device
+    return CreateDevice(surface, enable_validation_layer);
 }
 
-void PipelineLayoutInfo::add_shader_module(std::string_view filepath, vk::ShaderStageFlagBits stage)
-{
-    std::ifstream shaderfile(filepath.data(), std::ios::ate | std::ios::binary);
-
-    if (!shaderfile.is_open())
-        throw std::runtime_error("[UTIL] Failed to open shader file!");
-
-    size_t size = shaderfile.tellg();
-    std::vector<char> buffer(size);
-
-    shaderfile.seekg(0);
-    shaderfile.read(buffer.data(), size);
-    shaderfile.close();
-
-    auto module = context->device->createShaderModule({ {}, buffer.size(), reinterpret_cast<const uint32_t*>(buffer.data()) });
-    shader_stages.emplace_back(vk::PipelineShaderStageCreateFlags(), stage, module, "main");
-}
-
-void PipelineLayoutInfo::add_resource(Resource* resource, vk::DescriptorType type, vk::ShaderStageFlags stages, int binding, int group)
-{
-    resource_types[group].first[binding] = resource;
-    resource_types[group].second.emplace_back(binding, type, 1, stages);
-    needed[type]++;
-}
-
-VkContext::VkContext(vk::UniqueInstance&& instance_, VkWindow* window) :
-    instance(std::move(instance_)), window(window)
-{
-    create_devices();
-}
-
-VkContext::~VkContext()
-{
-    device->waitIdle();
-
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-        for (int j = 0; j < descriptor_sets.size(); j++)
-            device->destroyDescriptorSetLayout(descriptor_layouts[i][j]);
-}
-
-void VkContext::create(SwapchainInfo& info)
-{
-    swapchain_info = info;
-
-    // Initialize context
-    create_renderpass();
-    create_command_buffers();
-}
-
-vk::CommandBuffer& VkContext::get_command_buffer()
-{
-    return command_buffers[window->image_index].get();
-}
-
-void VkContext::create_devices(int device_id)
-{
-    // Pick a physical device
-    auto physical_devices = instance->enumeratePhysicalDevices();
-    physical_device = physical_devices.front();
-
-    // Get available queue family properties
-    auto family_props = physical_device.getQueueFamilyProperties();
-
-    // Discover a queue with both graphics and compute capabilities
-    vk::QueueFlags search = vk::QueueFlagBits::eGraphics | vk::QueueFlagBits::eCompute;
-    for (size_t i = 0; i < family_props.size(); i++)
-    {
-        auto& family = family_props[i];
-        if ((family.queueFlags & search) == search)
-            queue_family = i;
+bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
+    // Can't create an instance without a valid surface
+    if (!surface) {
+        LOG_CRITICAL(Render_Vulkan, "Invalid surface provided during instance creation!");
+        return false;
     }
 
-    if (queue_family == -1)
-        throw std::runtime_error("[VK] Could not find appropriate queue families!\n");
+    auto family_properties = physical_device.getQueueFamilyProperties();
+    if (family_properties.empty()) {
+        LOG_CRITICAL(Render_Vulkan, "Vulkan physical device reported no queues.");
+        return false;
+    }
 
-    const float default_queue_priority = 0.0f;
-    std::array<const char*, 1> device_extensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+    // Search queue families for graphics and present queues
+    graphics_queue_family_index = -1;
+    present_queue_family_index = -1;
+    for (int i = 0; i < family_properties.size(); i++) {
+        // Check if queue supports graphics
+        if (family_properties[i].queueFlags & vk::QueueFlagBits::eGraphics) {
+            graphics_queue_family_index = i;
 
-    auto queue_info = vk::DeviceQueueCreateInfo({}, queue_family, 1, &default_queue_priority);
+            // If this queue also supports presentation we are finished
+            if (physical_device.getSurfaceSupportKHR(i, surface)) {
+                present_queue_family_index = i;
+                break;
+            }
+        }
 
-    std::array<vk::PhysicalDeviceFeatures, 1> features = {};
-    features[0].samplerAnisotropy = true;
+        // Check if queue supports presentation
+        if (physical_device.getSurfaceSupportKHR(i, surface)) {
+            present_queue_family_index = i;
+        }
+    }
 
-    vk::DeviceCreateInfo device_info({}, 1, &queue_info, 0, nullptr, device_extensions.size(), device_extensions.data(), features.data());
+    if (graphics_queue_family_index == -1 ||
+        present_queue_family_index == -1) {
+        LOG_CRITICAL(Render_Vulkan, "Unable to find graphics and/or present queues.");
+        return false;
+    }
+
+    static constexpr float queue_priorities[] = { 1.0f };
+
+    vk::DeviceCreateInfo device_info;
+    device_info.setPEnabledExtensionNames(device_extensions);
+
+    // Create queue create info structs
+    if (graphics_queue_family_index != present_queue_family_index) {
+        std::array<vk::DeviceQueueCreateInfo, 2> queue_infos = {
+            vk::DeviceQueueCreateInfo({}, graphics_queue_family_index, 1, queue_priorities),
+            vk::DeviceQueueCreateInfo({}, present_queue_family_index, 1, queue_priorities)
+        };
+
+        device_info.setQueueCreateInfos(queue_infos);
+    }
+    else {
+        std::array<vk::DeviceQueueCreateInfo, 1> queue_infos = {
+            vk::DeviceQueueCreateInfo({}, graphics_queue_family_index, 1, queue_priorities),
+        };
+
+        device_info.setQueueCreateInfos(queue_infos);
+    }
+
+    // Set device features
+    device_info.setPEnabledFeatures(&device_features);
+
+    // Enable debug layer on debug builds
+    if (validation_enabled) {
+        std::array<const char*, 1> layer_names = { "VK_LAYER_KHRONOS_validation" };
+        device_info.setPEnabledLayerNames(layer_names);
+    }
+
+    // Create logical device
     device = physical_device.createDeviceUnique(device_info);
 
-    graphics_queue = device->getQueue(queue_family, 0);
+    // Grab the graphics and present queues.
+    graphics_queue = device->getQueue(graphics_queue_family_index, 0);
+    present_queue = device->getQueue(present_queue_family_index, 0);
+
+    return true;
 }
 
-void VkContext::create_renderpass()
+bool VKInstance::FindFeatures()
 {
-    // Color attachment
-    vk::AttachmentReference color_attachment_ref(0, vk::ImageLayout::eColorAttachmentOptimal);
-    vk::AttachmentReference depth_attachment_ref(1, vk::ImageLayout::eDepthStencilAttachmentOptimal);
-    vk::AttachmentDescription attachments[2] =
-    {
-        {
-            {},
-            window->swapchain_info.surface_format.format,
-            vk::SampleCountFlagBits::e1,
-            vk::AttachmentLoadOp::eClear,
-            vk::AttachmentStoreOp::eStore,
-            vk::AttachmentLoadOp::eDontCare,
-            vk::AttachmentStoreOp::eDontCare,
-            vk::ImageLayout::eUndefined,
-            vk::ImageLayout::ePresentSrcKHR
-        },
-        {
-            {},
-            window->swapchain_info.depth_format,
-            vk::SampleCountFlagBits::e1,
-            vk::AttachmentLoadOp::eClear,
-            vk::AttachmentStoreOp::eDontCare,
-            vk::AttachmentLoadOp::eDontCare,
-            vk::AttachmentStoreOp::eDontCare,
-            vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eDepthStencilAttachmentOptimal
+    auto available_features = physical_device.getFeatures();
+
+    // Not having geometry shaders or wide lines will cause issues with rendering.
+    if (!available_features.geometryShader && !available_features.wideLines) {
+        LOG_WARNING(Render_Vulkan, "Geometry shaders not availabe! Rendering will be limited");
+    }
+
+    // Enable some common features other emulators like Dolphin use
+    device_features.dualSrcBlend = available_features.dualSrcBlend;
+    device_features.geometryShader = available_features.geometryShader;
+    device_features.samplerAnisotropy = available_features.samplerAnisotropy;
+    device_features.logicOp = available_features.logicOp;
+    device_features.fragmentStoresAndAtomics = available_features.fragmentStoresAndAtomics;
+    device_features.sampleRateShading = available_features.sampleRateShading;
+    device_features.largePoints = available_features.largePoints;
+    device_features.shaderStorageImageMultisample = available_features.shaderStorageImageMultisample;
+    device_features.occlusionQueryPrecise = available_features.occlusionQueryPrecise;
+    device_features.shaderClipDistance = available_features.shaderClipDistance;
+    device_features.depthClamp = available_features.depthClamp;
+    device_features.textureCompressionBC = available_features.textureCompressionBC;
+
+    return true;
+}
+
+bool VKInstance::FindExtensions()
+{
+    auto extensions = physical_device.enumerateDeviceExtensionProperties();
+    if (extensions.empty()) {
+        LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
+        return false;
+    }
+
+    // List available device extensions
+    for (const auto& prop : extensions) {
+        LOG_INFO(Render_Vulkan, "Vulkan extension: {}", prop.extensionName);
+    }
+
+    // Helper lambda for adding extensions
+    auto AddExtension = [&](const char* name, bool required) {
+        auto result = std::find_if(extensions.begin(), extensions.end(), [&](const auto& prop) {
+            return !std::strcmp(name, prop.extensionName);
+        });
+
+        if (result != extensions.end()) {
+            LOG_INFO(Render_Vulkan, "Enabling extension: {}", name);
+            device_extensions.push_back(name);
+            return true;
         }
+
+        if (required) {
+            LOG_ERROR(Render_Vulkan, "Unable to find required extension {}.", name);
+        }
+
+        return false;
     };
 
-    vk::SubpassDependency dependency
-    (
-        VK_SUBPASS_EXTERNAL,
-        0,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        vk::AccessFlagBits::eNone,
-        vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-        vk::DependencyFlagBits::eByRegion
-    );
-
-    vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {}, {}, 1, &color_attachment_ref, {}, &depth_attachment_ref);
-    vk::RenderPassCreateInfo renderpass_info({}, 2, attachments, 1, &subpass, 1, &dependency);
-    renderpass = device->createRenderPassUnique(renderpass_info);
-}
-
-void VkContext::create_decriptor_sets(PipelineLayoutInfo &info)
-{
-    std::vector<vk::DescriptorPoolSize> pool_sizes;
-    pool_sizes.reserve(info.needed.size());
-    for (const auto& [type, count] : info.needed)
-    {
-        pool_sizes.emplace_back(type, count * MAX_FRAMES_IN_FLIGHT);
+    // The swapchain extension is required
+    if (!AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true)) {
+        return false;
     }
 
-    for (const auto& [group, resource_info] : info.resource_types)
-    {
-        auto& bindings = resource_info.second;
-        vk::DescriptorSetLayoutCreateInfo layout_info({}, bindings.size(), bindings.data());
+    // Add more extensions in the future...
 
-        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-            descriptor_layouts[i].push_back(device->createDescriptorSetLayout(layout_info));
-    }
-
-    vk::DescriptorPoolCreateInfo pool_info({}, MAX_FRAMES_IN_FLIGHT * descriptor_layouts[0].size(), pool_sizes.size(), pool_sizes.data());
-    descriptor_pool = device->createDescriptorPoolUnique(pool_info);
-
-    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        vk::DescriptorSetAllocateInfo alloc_info(descriptor_pool.get(), descriptor_layouts[i]);
-        descriptor_sets[i] = device->allocateDescriptorSets(alloc_info);
-
-        for (const auto& [group, resource_info] : info.resource_types)
-        {
-            auto& bindings = resource_info.second;
-            std::array<vk::DescriptorImageInfo, MAX_BINDING_COUNT> image_infos;
-            std::array<vk::DescriptorBufferInfo, MAX_BINDING_COUNT> buffer_infos;
-
-            std::vector<vk::WriteDescriptorSet> descriptor_writes;
-            descriptor_writes.reserve(bindings.size());
-
-            auto& set = descriptor_sets[i][group];
-            for (int j = 0; j < bindings.size(); j++)
-            {
-                switch (bindings[j].descriptorType)
-                {
-                case vk::DescriptorType::eCombinedImageSampler:
-                {
-                    VkTexture* texture = reinterpret_cast<VkTexture*>(resource_info.first[j]);
-                    image_infos[j] = vk::DescriptorImageInfo(texture->texture_sampler.get(), texture->texture_view.get(),
-                                                             vk::ImageLayout::eShaderReadOnlyOptimal);
-                    descriptor_writes.emplace_back(set, j, 0, 1, vk::DescriptorType::eCombinedImageSampler, &image_infos[j]);
-                    break;
-                }
-                case vk::DescriptorType::eUniformTexelBuffer:
-                case vk::DescriptorType::eStorageTexelBuffer:
-                {
-                    Buffer* buffer = reinterpret_cast<Buffer*>(resource_info.first[j]);
-                    descriptor_writes.emplace_back(set, j, 0, 1, bindings[j].descriptorType, nullptr, nullptr, &buffer->buffer_view.get());
-                    break;
-                }
-                default:
-                    throw std::runtime_error("[VK] Unknown resource");
-                }
-            }
-
-            device->updateDescriptorSets(descriptor_writes, {});
-            descriptor_writes.clear();
-        }
-    }
+    return true;
 }
 
-void VkContext::create_graphics_pipeline(PipelineLayoutInfo& info)
-{
-    create_decriptor_sets(info);
-
-    vk::PipelineVertexInputStateCreateInfo vertex_input_info
-    (
-        {},
-        1,
-        &Vertex::binding_desc,
-        Vertex::attribute_desc.size(),
-        Vertex::attribute_desc.data()
-    );
-
-    vk::PipelineInputAssemblyStateCreateInfo input_assembly({}, vk::PrimitiveTopology::eTriangleList, VK_FALSE);
-    vk::Viewport viewport(0, 0, window->swapchain_info.extent.width, window->swapchain_info.extent.height, 0, 1);
-    vk::Rect2D scissor({ 0, 0 }, window->swapchain_info.extent);
-
-    vk::PipelineViewportStateCreateInfo viewport_state({}, 1, &viewport, 1, &scissor);
-    vk::PipelineRasterizationStateCreateInfo rasterizer
-    (
-        {},
-        VK_FALSE,
-        VK_FALSE,
-        vk::PolygonMode::eFill,
-        vk::CullModeFlagBits::eNone,
-        vk::FrontFace::eClockwise,
-        VK_FALSE
-    );
-
-    vk::PipelineMultisampleStateCreateInfo multisampling({}, vk::SampleCountFlagBits::e1, VK_FALSE);
-    vk::PipelineColorBlendAttachmentState colorblend_attachment(VK_FALSE);
-    colorblend_attachment.colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
-
-    vk::PipelineColorBlendStateCreateInfo color_blending({}, VK_FALSE, vk::LogicOp::eCopy, 1, &colorblend_attachment, {0});
-
-    vk::PipelineLayoutCreateInfo pipeline_layout_info({}, descriptor_layouts[0], {});
-    pipeline_layout = device->createPipelineLayoutUnique(pipeline_layout_info);
-
-    vk::DynamicState dynamic_states[2] = { vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth };
-    vk::PipelineDynamicStateCreateInfo dynamic_info({}, 2, dynamic_states);
-
-    // Depth and stencil state containing depth and stencil compare and test operations
-    // We only use depth tests and want depth tests and writes to be enabled and compare with less or equal
-    vk::PipelineDepthStencilStateCreateInfo depth_info({}, VK_TRUE, VK_TRUE, vk::CompareOp::eGreaterOrEqual, VK_FALSE, VK_TRUE);
-    depth_info.back.failOp = vk::StencilOp::eKeep;
-    depth_info.back.passOp = vk::StencilOp::eKeep;
-    depth_info.back.compareOp = vk::CompareOp::eAlways;
-    depth_info.front = depth_info.back;
-
-    vk::GraphicsPipelineCreateInfo pipeline_info
-    (
-        {},
-        info.shader_stages.size(),
-        info.shader_stages.data(),
-        &vertex_input_info,
-        &input_assembly,
-        nullptr,
-        &viewport_state,&rasterizer,
-        &multisampling,
-        &depth_info,
-        &color_blending,
-        &dynamic_info,
-        pipeline_layout.get(),
-        renderpass.get()
-    );
-
-    auto pipeline = device->createGraphicsPipelineUnique(nullptr, pipeline_info);
-    if (pipeline.result == vk::Result::eSuccess)
-        graphics_pipeline = std::move(pipeline.value);
-    else
-        throw std::runtime_error("[VK] Couldn't create graphics pipeline");
-}
-
-void VkContext::create_command_buffers()
-{
-    vk::CommandPoolCreateInfo pool_info(vk::CommandPoolCreateFlagBits::eResetCommandBuffer, queue_family);
-    command_pool = device->createCommandPoolUnique(pool_info);
-
-    command_buffers.resize(window->swapchain_info.image_count);
-
-    vk::CommandBufferAllocateInfo alloc_info(command_pool.get(), vk::CommandBufferLevel::ePrimary, command_buffers.size());
-    command_buffers = device->allocateCommandBuffersUnique(alloc_info);
-}
+} // namespace Vulkan

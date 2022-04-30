@@ -267,4 +267,4 @@ public:
     SurfaceType type = SurfaceType::Invalid;
 };
 
-} // namespace OpenGL
+} // namespace Vulkan

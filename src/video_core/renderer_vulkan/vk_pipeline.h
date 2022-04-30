@@ -6,7 +6,6 @@
 
 #include <utility>
 #include <variant>
-#include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 
 namespace Vulkan {
