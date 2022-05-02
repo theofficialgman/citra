@@ -32,8 +32,7 @@ void VulkanState::Create() {
     dirty_flags |= DirtyState::All;
 }
 
-void VulkanState::SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset)
-{
+void VulkanState::SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset) {
     if (vertex_buffer == buffer) {
         return;
     }
@@ -43,15 +42,13 @@ void VulkanState::SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset)
     dirty_flags |= DirtyState::VertexBuffer;
 }
 
-void VulkanState::SetFramebuffer(VKFramebuffer* buffer)
-{
+void VulkanState::SetFramebuffer(VKFramebuffer* buffer) {
     // Should not be changed within a render pass.
     //ASSERT(!InRenderPass());
     //framebuffer = buffer;
 }
 
-void VulkanState::SetPipeline(const VKPipeline* new_pipeline)
-{
+void VulkanState::SetPipeline(const VKPipeline* new_pipeline) {
     if (new_pipeline == pipeline)
         return;
 
@@ -59,8 +56,7 @@ void VulkanState::SetPipeline(const VKPipeline* new_pipeline)
     dirty_flags |= DirtyState::Pipeline;
 }
 
-void VulkanState::SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u32 size)
-{
+void VulkanState::SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u32 size) {
     auto& binding = bindings.ubo[static_cast<u32>(id)];
     if (binding.buffer != buffer->GetBuffer() || binding.range != size)
     {
@@ -70,8 +66,7 @@ void VulkanState::SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u
     }
 }
 
-void VulkanState::SetTexture(TextureID id, VKTexture* texture)
-{
+void VulkanState::SetTexture(TextureID id, VKTexture* texture) {
     u32 index = static_cast<u32>(id);
     if (bindings.texture[index].imageView == texture->GetView()) {
         return;
@@ -82,8 +77,7 @@ void VulkanState::SetTexture(TextureID id, VKTexture* texture)
     dirty_flags |= DirtyState::Texture;
 }
 
-void VulkanState::SetTexelBuffer(TexelBufferID id, VKBuffer* buffer)
-{
+void VulkanState::SetTexelBuffer(TexelBufferID id, VKBuffer* buffer) {
     u32 index = static_cast<u32>(id);
     if (bindings.lut[index].buffer == buffer->GetBuffer()) {
         return;
@@ -93,9 +87,19 @@ void VulkanState::SetTexelBuffer(TexelBufferID id, VKBuffer* buffer)
     dirty_flags |= DirtyState::TexelBuffer;
 }
 
-void VulkanState::SetImageTexture(VKTexture* image)
-{
+void VulkanState::SetImageTexture(VKTexture* image) {
     // TODO
+}
+
+void VulkanState::UnbindTexture(VKTexture* image) {
+    // Search the texture bindings for the view
+    // and replace it with the dummy texture if found
+    for (auto& it : bindings.texture) {
+        if (it.imageView == image->GetView()) {
+            it.imageView = dummy_texture.GetView();
+            it.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        }
+    }
 }
 
 void VulkanState::BeginRenderPass()

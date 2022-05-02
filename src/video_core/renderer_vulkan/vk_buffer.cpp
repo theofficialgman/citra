@@ -5,9 +5,8 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
+#include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include <algorithm>
-#include <type_traits>
 #include <cstring>
 
 namespace Vulkan {
@@ -49,21 +48,8 @@ void VKBuffer::Create(uint32_t byte_count, vk::MemoryPropertyFlags properties, v
 
 void VKBuffer::CopyBuffer(VKBuffer& src_buffer, VKBuffer& dst_buffer, const vk::BufferCopy& region)
 {
-    auto& device = g_vk_instace->GetDevice();
-    auto& queue = g_vk_instace->graphics_queue;
-
-    vk::CommandBufferAllocateInfo alloc_info(g_vk_instace->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::CommandBuffer command_buffer = device.allocateCommandBuffers(alloc_info)[0];
-
-    command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
     command_buffer.copyBuffer(src_buffer.buffer.get(), dst_buffer.buffer.get(), region);
-    command_buffer.end();
-
-    vk::SubmitInfo submit_info({}, {}, {}, 1, &command_buffer);
-    queue.submit(submit_info, nullptr);
-    queue.waitIdle();
-
-    device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
 }
 
 uint32_t VKBuffer::FindMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties)

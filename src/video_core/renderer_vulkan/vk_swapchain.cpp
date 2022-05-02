@@ -57,22 +57,29 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
 
     // If an old swapchain exists, destroy it and move the new one to its place.
     // Synchronization is the responsibility of the caller, not us
-    if (!!swapchain) {
-        swapchain_images.clear();
+    if (swapchain.get()) {
         swapchain.swap(new_swapchain);
     }
 
+    // Create sync objects if not already created
+    if (!image_available.get()) {
+        image_available = g_vk_instace->GetDevice().createSemaphoreUnique({});
+    }
+
     // Create framebuffer and image views
+    swapchain_images.clear();
     SetupImages();
 
     return true;
 }
 
-void VKSwapChain::AcquireNextImage(vk::Semaphore present_semaphore) {
-    const auto result = g_vk_instace->GetDevice().acquireNextImageKHR(*swapchain,
-                        std::numeric_limits<u64>::max(), present_semaphore,
-                        VK_NULL_HANDLE, &image_index);
+// Wait for maximum of 1 second
+constexpr u64 ACQUIRE_TIMEOUT = 1000000000;
 
+vk::Semaphore VKSwapChain::AcquireNextImage() {
+    auto result = g_vk_instace->GetDevice().acquireNextImageKHR(*swapchain, ACQUIRE_TIMEOUT,
+                                                                image_available.get(), VK_NULL_HANDLE,
+                                                                &image_index);
     switch (result) {
     case vk::Result::eSuccess:
         break;
@@ -86,6 +93,8 @@ void VKSwapChain::AcquireNextImage(vk::Semaphore present_semaphore) {
         LOG_ERROR(Render_Vulkan, "acquireNextImageKHR returned unknown result");
         break;
     }
+
+    return image_available.get();
 }
 
 void VKSwapChain::Present(vk::Semaphore render_semaphore) {

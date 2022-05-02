@@ -90,6 +90,7 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
 
     // Set device features
     device_info.setPEnabledFeatures(&device_features);
+    device_info.setPNext(&new_features);
 
     // Enable debug layer on debug builds
     if (validation_enabled) {
@@ -129,6 +130,9 @@ bool VKInstance::FindFeatures()
     device_features.shaderClipDistance = available_features.shaderClipDistance;
     device_features.depthClamp = available_features.depthClamp;
     device_features.textureCompressionBC = available_features.textureCompressionBC;
+
+    // Enable timeline semaphore support
+    new_features.timelineSemaphore = true;
 
     return true;
 }

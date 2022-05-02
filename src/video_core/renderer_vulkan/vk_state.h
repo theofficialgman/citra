@@ -65,6 +65,7 @@ public:
     void SetTexture(TextureID id, VKTexture* texture);
     void SetTexelBuffer(TexelBufferID id, VKBuffer* buffer);
     void SetImageTexture(VKTexture* image);
+    void UnbindTexture(VKTexture* image);
 
     /// Apply all dirty state to the current Vulkan command buffer
     void Apply();
@@ -80,7 +81,11 @@ private:
     // Pipeline state
     const VKPipeline* pipeline = nullptr;
 
-    // Shader bindings
+    // Shader bindings. These describe which resources
+    // we have bound to the pipeline and at which
+    // bind points. When the state is applied the
+    // descriptor sets are updated with the new
+    // resources
     struct
     {
         std::array<vk::DescriptorBufferInfo, 2> ubo;

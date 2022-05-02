@@ -5,14 +5,32 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
-#include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_resource_cache.h"
+#include "video_core/renderer_vulkan/vk_state.h"
 
 namespace Vulkan {
 
 VKTexture::~VKTexture() {
-    if (cleanup_image) {
-        g_vk_instace->GetDevice().destroyImage(texture);
+    // Make sure to unbind the texture before destroying it
+    g_vk_state->UnbindTexture(this);
+
+    if (cleanup_image && texture) {
+        g_vk_task_scheduler->ScheduleDestroy(texture);
+    }
+
+    // Schedule deletion of the texture after it's no longer used
+    // by the GPU
+    if (texture_view) {
+        g_vk_task_scheduler->ScheduleDestroy(texture_view);
+    }
+
+    if (texture_memory) {
+        g_vk_task_scheduler->ScheduleDestroy(texture_memory);
+    }
+
+    if (texture_view) {
+        g_vk_task_scheduler->ScheduleDestroy(texture_view);
     }
 }
 
@@ -62,13 +80,13 @@ void VKTexture::Create(const Info& info) {
     auto memory_index = VKBuffer::FindMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo alloc_info(requirements.size, memory_index);
 
-    texture_memory = device.allocateMemoryUnique(alloc_info);
-    device.bindImageMemory(texture, texture_memory.get(), 0);
+    texture_memory = device.allocateMemory(alloc_info);
+    device.bindImageMemory(texture, texture_memory, 0);
 
     // Create texture view
     vk::ImageViewCreateInfo view_info({}, texture, info.view_type, texture_info.format, {},
                                       vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-    texture_view = device.createImageViewUnique(view_info);
+    texture_view = device.createImageView(view_info);
 }
 
 void VKTexture::Adopt(vk::Image image, vk::ImageViewCreateInfo view_info) {
@@ -77,7 +95,7 @@ void VKTexture::Adopt(vk::Image image, vk::ImageViewCreateInfo view_info) {
     texture = image;
 
     // Create image view
-    texture_view = g_vk_instace->GetDevice().createImageViewUnique(view_info);
+    texture_view = g_vk_instace->GetDevice().createImageView(view_info);
 }
 
 void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& command_buffer) {
@@ -143,8 +161,6 @@ void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& 
 
     // Submit pipeline barrier
     LayoutInfo source = layout_info(texture_layout), dst = layout_info(new_layout);
-    command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
     vk::ImageMemoryBarrier barrier
     (
         source.access, dst.access,
@@ -157,7 +173,6 @@ void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& 
     std::array<vk::ImageMemoryBarrier, 1> barriers = { barrier };
 
     command_buffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barriers);
-    command_buffer.end();
 
     vk::SubmitInfo submit_info({}, {}, {}, 1, &command_buffer);
 
@@ -166,18 +181,11 @@ void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& 
 }
 
 void VKTexture::CopyPixels(std::span<u32> new_pixels) {
-    auto& device = g_vk_instace->GetDevice();
-    auto& queue = g_vk_instace->graphics_queue;
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
 
     // Copy pixels to staging buffer
     std::memcpy(g_vk_res_cache->GetTextureUploadBuffer().GetHostPointer(),
                 new_pixels.data(), new_pixels.size() * channels);
-
-    // Copy the staging buffer to the image
-    vk::CommandBufferAllocateInfo alloc_info(g_vk_instace->command_pool.get(), vk::CommandBufferLevel::ePrimary, 1);
-    vk::CommandBuffer command_buffer = device.allocateCommandBuffers(alloc_info)[0];
-
-    command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
     vk::BufferImageCopy region(0, 0, 0, vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), 0,
                                { texture_info.width, texture_info.height, 1 });
@@ -191,14 +199,6 @@ void VKTexture::CopyPixels(std::span<u32> new_pixels) {
 
     // Prepare for shader reads
     TransitionLayout(vk::ImageLayout::eShaderReadOnlyOptimal, command_buffer);
-    command_buffer.end();
-
-    vk::SubmitInfo submit_info({}, {}, {}, 1, &command_buffer);
-    queue.submit(submit_info, nullptr);
-
-    /// NOTE: Remove this when the renderer starts working, otherwise it will be very slow
-    queue.waitIdle();
-    device.freeCommandBuffers(g_vk_instace->command_pool.get(), command_buffer);
 }
 
 void VKTexture::BlitTo(Common::Rectangle<u32> srect, VKTexture& dest,
@@ -249,6 +249,12 @@ void VKTexture::Fill(Common::Rectangle<u32> region, glm::vec2 depth_stencil) {
 
 }
 
+VKFramebuffer::~VKFramebuffer() {
+    if (framebuffer) {
+        g_vk_task_scheduler->ScheduleDestroy(framebuffer);
+    }
+}
+
 void VKFramebuffer::Create(const Info& info) {
     // Make sure that either attachment is valid
     assert(info.color || info.depth_stencil);
@@ -278,7 +284,7 @@ void VKFramebuffer::Create(const Info& info) {
         framebuffer_info.setAttachments(view);
     }
 
-    framebuffer = g_vk_instace->GetDevice().createFramebufferUnique(framebuffer_info);
+    framebuffer = g_vk_instace->GetDevice().createFramebuffer(framebuffer_info);
 }
 
 void VKFramebuffer::Prepare(vk::CommandBuffer& command_buffer) {

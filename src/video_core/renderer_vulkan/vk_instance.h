@@ -53,6 +53,7 @@ public:
     // Extensions and features
     std::vector<const char*> device_extensions;
     vk::PhysicalDeviceFeatures device_features{};
+    vk::PhysicalDeviceVulkan12Features new_features{};
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;

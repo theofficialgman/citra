@@ -44,14 +44,16 @@ public:
     /// Create a new Vulkan texture object
     void Create(const Info& info);
 
-    /// Create a non-owning texture object
+    /// Create a non-owning texture object, usefull for image object
+    /// from the swapchain that are managed by another object
     void Adopt(vk::Image image, vk::ImageViewCreateInfo view_info);
 
     /// Copies CPU side pixel data to the GPU texture buffer
     void CopyPixels(std::span<u32> pixels);
 
     /// Get Vulkan objects
-    vk::ImageView& GetView() { return texture_view.get(); }
+    vk::Image GetImage() const { return texture; }
+    vk::ImageView GetView() const { return texture_view; }
     vk::Format GetFormat() const { return texture_info.format; }
     vk::Rect2D GetRect() const { return vk::Rect2D({}, { texture_info.width, texture_info.height }); }
     u32 GetSamples() const { return texture_info.multisamples; }
@@ -74,8 +76,8 @@ private:
     Info texture_info;
     vk::ImageLayout texture_layout = vk::ImageLayout::eUndefined;
     vk::Image texture;
-    vk::UniqueImageView texture_view;
-    vk::UniqueDeviceMemory texture_memory;
+    vk::ImageView texture_view;
+    vk::DeviceMemory texture_memory;
     u32 channels;
 };
 
@@ -93,7 +95,7 @@ public:
     };
 
     VKFramebuffer() = default;
-    ~VKFramebuffer() = default;
+    ~VKFramebuffer();
 
     /// Create Vulkan framebuffer object
     void Create(const Info& info);
@@ -105,7 +107,7 @@ public:
 
 private:
     u32 width, height;
-    vk::UniqueFramebuffer framebuffer;
+    vk::Framebuffer framebuffer;
     std::array<VKTexture*, 2> attachments;
 };
 

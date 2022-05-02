@@ -32,11 +32,11 @@ public:
     bool Create(u32 width, u32 height, bool vsync_enabled);
 
     /// Acquire the next image in the swapchain.
-    void AcquireNextImage(vk::Semaphore present_semaphore);
+    vk::Semaphore AcquireNextImage();
     void Present(vk::Semaphore render_semaphore);
 
     /// Returns true when the swapchain needs to be recreated.
-    bool NeedsRecreation() const { return IsSubOptimal(); }
+    bool NeedsRecreation() const { return IsSubOptimal() || IsOutDated(); }
     bool IsOutDated() const { return is_outdated; }
     bool IsSubOptimal() const { return is_suboptimal; }
     bool IsVSyncEnabled() const { return vsync_enabled; }
@@ -47,10 +47,9 @@ public:
     vk::SurfaceKHR GetSurface() const { return surface; }
     vk::SurfaceFormatKHR GetSurfaceFormat() const { return details.format; }
     vk::SwapchainKHR GetSwapChain() const { return swapchain.get(); }
-    vk::Image GetCurrentImage() const { return swapchain_images[image_index].image; }
 
     /// Retrieve current texture and framebuffer
-    vk::Image GetCurrentImage() { return swapchain_images[image_index].image; }
+    VKTexture& GetCurrentImage() { return swapchain_images[image_index].image; }
     VKFramebuffer& GetCurrentFramebuffer() { return swapchain_images[image_index].framebuffer; }
 
 private:
@@ -60,6 +59,7 @@ private:
 private:
     SwapChainDetails details{};
     vk::SurfaceKHR surface;
+    vk::UniqueSemaphore image_available;
     bool vsync_enabled = false;
     bool is_outdated = false, is_suboptimal = false;
 

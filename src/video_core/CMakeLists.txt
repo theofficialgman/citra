@@ -73,8 +73,6 @@ add_library(video_core STATIC
     renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/vk_buffer.cpp
     renderer_vulkan/vk_buffer.h
-    renderer_vulkan/vk_command_manager.cpp
-    renderer_vulkan/vk_command_manager.h
     renderer_vulkan/vk_instance.cpp
     renderer_vulkan/vk_instance.h
     renderer_vulkan/vk_resource_cache.cpp
@@ -92,6 +90,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_surface_params.h
     renderer_vulkan/vk_swapchain.cpp
     renderer_vulkan/vk_swapchain.h
+    renderer_vulkan/vk_task_scheduler.cpp
+    renderer_vulkan/vk_task_scheduler.h
     renderer_vulkan/vk_texture.cpp
     renderer_vulkan/vk_texture.h
     shader/debug_data.h
