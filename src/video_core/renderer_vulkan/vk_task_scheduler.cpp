@@ -98,8 +98,9 @@ void VKTaskScheduler::Submit(bool present, bool wait_completion) {
     // When the task completes the timeline will increment to the task id
     vk::TimelineSemaphoreSubmitInfo timeline_info({}, task.task_id);
 
+    std::array<vk::Semaphore, 2> signal_semaphores = { timeline.get(), present_semaphore.get() };
     vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    vk::SubmitInfo submit_info({}, wait_stage, task.command_buffer, present_semaphore.get(), &timeline_info);
+    vk::SubmitInfo submit_info({}, wait_stage, task.command_buffer, signal_semaphores, &timeline_info);
 
     // Wait for new swapchain image
     if (present) {
@@ -108,7 +109,6 @@ void VKTaskScheduler::Submit(bool present, bool wait_completion) {
     }
 
     // Submit the command buffer
-    submit_info.setSignalSemaphores(timeline.get());
     g_vk_instace->GetGraphicsQueue().submit(submit_info);
 
     // Present the image when rendering has finished
@@ -125,14 +125,12 @@ void VKTaskScheduler::Submit(bool present, bool wait_completion) {
     BeginTask();
 }
 
-void VKTaskScheduler::ScheduleDestroy(auto object) {
-    auto& resources = tasks[current_task];
-    auto deleter = [object]() { g_vk_instace->GetDevice().destroy(object); };
-    resources.cleanups.push_back(deleter);
+void VKTaskScheduler::Schedule(std::function<void()> func) {
+    auto& task = tasks[current_task];
+    task.cleanups.push_back(func);
 }
 
-void VKTaskScheduler::BeginTask()
-{
+void VKTaskScheduler::BeginTask() {
     // Move to the next command buffer.
     u32 next_task_index = (current_task + 1) % CONCURRENT_TASK_COUNT;
     auto& task = tasks[next_task_index];
@@ -151,6 +149,7 @@ void VKTaskScheduler::BeginTask()
 
     // Reset upload command buffer state
     current_task = next_task_index;
+    task.task_id = current_task_id++;
 }
 
 std::unique_ptr<VKTaskScheduler> g_vk_task_scheduler;

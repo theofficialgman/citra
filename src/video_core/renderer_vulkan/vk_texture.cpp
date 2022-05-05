@@ -15,26 +15,25 @@ VKTexture::~VKTexture() {
     // Make sure to unbind the texture before destroying it
     g_vk_state->UnbindTexture(this);
 
-    if (cleanup_image && texture) {
-        g_vk_task_scheduler->ScheduleDestroy(texture);
-    }
+    auto deleter = [this]() {
+        auto& device = g_vk_instace->GetDevice();
+
+        if (texture) {
+            if (cleanup_image) {
+                device.destroyImage(texture);
+            }
+
+            device.destroyImageView(texture_view);
+            device.freeMemory(texture_memory);
+        }
+    };
 
     // Schedule deletion of the texture after it's no longer used
     // by the GPU
-    if (texture_view) {
-        g_vk_task_scheduler->ScheduleDestroy(texture_view);
-    }
-
-    if (texture_memory) {
-        g_vk_task_scheduler->ScheduleDestroy(texture_memory);
-    }
-
-    if (texture_view) {
-        g_vk_task_scheduler->ScheduleDestroy(texture_view);
-    }
+    g_vk_task_scheduler->Schedule(deleter);
 }
 
-void VKTexture::Create(const Info& info) {
+void VKTexture::Create(const Info& info, bool make_staging) {
     auto& device = g_vk_instace->GetDevice();
     texture_info = info;
 
@@ -87,6 +86,12 @@ void VKTexture::Create(const Info& info) {
     vk::ImageViewCreateInfo view_info({}, texture, info.view_type, texture_info.format, {},
                                       vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
     texture_view = device.createImageView(view_info);
+
+    // Create staging buffer
+    if (make_staging) {
+        staging.Create(image_size, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                       vk::BufferUsageFlagBits::eTransferSrc);
+    }
 }
 
 void VKTexture::Adopt(vk::Image image, vk::ImageViewCreateInfo view_info) {
@@ -181,10 +186,14 @@ void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& 
 }
 
 void VKTexture::CopyPixels(std::span<u32> new_pixels) {
+    if (!staging.GetHostPointer()) {
+        LOG_ERROR(Render_Vulkan, "Cannot copy pixels without staging buffer!");
+    }
+
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
 
     // Copy pixels to staging buffer
-    std::memcpy(g_vk_res_cache->GetTextureUploadBuffer().GetHostPointer(),
+    std::memcpy(staging.GetHostPointer(),
                 new_pixels.data(), new_pixels.size() * channels);
 
     vk::BufferImageCopy region(0, 0, 0, vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), 0,
@@ -194,7 +203,6 @@ void VKTexture::CopyPixels(std::span<u32> new_pixels) {
     // Transition image to transfer format
     TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
 
-    auto& staging = g_vk_res_cache->GetTextureUploadBuffer();
     command_buffer.copyBufferToImage(staging.GetBuffer(), texture, vk::ImageLayout::eTransferDstOptimal, regions);
 
     // Prepare for shader reads
@@ -250,9 +258,14 @@ void VKTexture::Fill(Common::Rectangle<u32> region, glm::vec2 depth_stencil) {
 }
 
 VKFramebuffer::~VKFramebuffer() {
-    if (framebuffer) {
-        g_vk_task_scheduler->ScheduleDestroy(framebuffer);
-    }
+    auto deleter = [this]() {
+        if (framebuffer) {
+            auto& device = g_vk_instace->GetDevice();
+            device.destroyFramebuffer(framebuffer);
+        }
+    };
+
+    g_vk_task_scheduler->Schedule(deleter);
 }
 
 void VKFramebuffer::Create(const Info& info) {

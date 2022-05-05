@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <deque>
 #include <vulkan/vulkan.hpp>
 #include "common/common_types.h"
 
@@ -19,21 +20,23 @@ public:
     ~VKBuffer();
 
     /// Create a generic Vulkan buffer object
-    void Create(uint32_t size, vk::MemoryPropertyFlags properties, vk::BufferUsageFlags usage, vk::Format view_format = vk::Format::eUndefined);
+    void Create(u32 size, vk::MemoryPropertyFlags properties, vk::BufferUsageFlags usage,
+                vk::Format view_format = vk::Format::eUndefined);
 
     /// Global utility functions used by other objects
-    static uint32_t FindMemoryType(uint32_t type_filter, vk::MemoryPropertyFlags properties);
+    static u32 FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties);
     static void CopyBuffer(VKBuffer& src_buffer, VKBuffer& dst_buffer, const vk::BufferCopy& region);
 
     /// Return a pointer to the mapped memory if the buffer is host mapped
     u8* GetHostPointer() { return reinterpret_cast<u8*>(memory); }
-    vk::Buffer& GetBuffer() { return buffer.get(); }
+    vk::Buffer& GetBuffer() { return buffer; }
+    u32 GetSize() const { return size; }
 
 private:
     void* memory = nullptr;
-    vk::UniqueBuffer buffer;
-    vk::UniqueDeviceMemory buffer_memory;
-    vk::UniqueBufferView buffer_view;
+    vk::Buffer buffer;
+    vk::DeviceMemory buffer_memory;
+    vk::BufferView buffer_view;
     uint32_t size = 0;
 };
 

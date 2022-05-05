@@ -42,7 +42,7 @@ public:
     ~VKTexture();
 
     /// Create a new Vulkan texture object
-    void Create(const Info& info);
+    void Create(const Info& info, bool staging = false);
 
     /// Create a non-owning texture object, usefull for image object
     /// from the swapchain that are managed by another object
@@ -79,6 +79,9 @@ private:
     vk::ImageView texture_view;
     vk::DeviceMemory texture_memory;
     u32 channels;
+
+    // TODO: Make a global staging buffer
+    VKBuffer staging;
 };
 
 enum Attachments {

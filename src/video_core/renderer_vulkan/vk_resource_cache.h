@@ -31,16 +31,11 @@ public:
     void Shutdown();
 
     // Public interface.
-    VKBuffer& GetTextureUploadBuffer() { return texture_upload_buffer; }
     vk::Sampler GetSampler(const SamplerInfo& info);
     vk::RenderPass GetRenderPass(vk::Format color_format, vk::Format depth_format, u32 multisamples, vk::AttachmentLoadOp load_op);
     vk::PipelineCache GetPipelineCache() const { return pipeline_cache.get(); }
 
 private:
-    // Dummy image for samplers that are unbound
-    VKTexture dummy_texture;
-    VKBuffer texture_upload_buffer;
-
     // Descriptor sets
     std::array<vk::DescriptorSetLayout, DESCRIPTOR_SET_LAYOUT_COUNT> descriptor_layouts;
     vk::UniquePipelineLayout pipeline_layout;

@@ -42,7 +42,7 @@ public:
     vk::CommandBuffer GetCommandBuffer();
 
     /// Returns the task id that the CPU is recording
-    u64 GetCPUTick() const { return tasks[current_task].task_id; }
+    u64 GetCPUTick() const { return current_task_id; }
 
     /// Returns the last known task id to have completed execution in the GPU
     u64 GetGPUTick() const { return g_vk_instace->GetDevice().getSemaphoreCounterValue(timeline.get()); }
@@ -52,7 +52,7 @@ public:
     void SyncToGPU(u64 task_index);
 
     /// Schedule a vulkan object for destruction when the GPU no longer uses it
-    void ScheduleDestroy(auto object);
+    void Schedule(std::function<void()> func);
 
     /// Submit the current work batch and move to the next frame
     void Submit(bool present = true, bool wait_completion = false);
@@ -69,7 +69,7 @@ private:
 
     vk::UniqueSemaphore timeline;
     vk::UniqueCommandPool command_pool;
-    u64 last_completed_task_id = 0;
+    u64 current_task_id = 1;
 
     // Each task contains unique resources
     std::array<Task, CONCURRENT_TASK_COUNT> tasks;
