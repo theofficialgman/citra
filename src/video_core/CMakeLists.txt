@@ -81,8 +81,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_rasterizer_cache.h
     renderer_vulkan/vk_rasterizer.cpp
     renderer_vulkan/vk_rasterizer.h
-    renderer_vulkan/vk_pipeline.cpp
-    renderer_vulkan/vk_pipeline.h
     renderer_vulkan/vk_shader_state.h
     renderer_vulkan/vk_state.cpp
     renderer_vulkan/vk_state.h
