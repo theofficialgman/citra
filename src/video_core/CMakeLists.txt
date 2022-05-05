@@ -166,12 +166,6 @@ if(ARCHITECTURE_x86_64)
     )
 endif()
 
-if (ENABLE_VULKAN)
-    # Find the VulkanSDK
-    find_package(Vulkan REQUIRED)
-    find_library(SHADERC_LIB shaderc shaderc_shared)
-endif()
-
 create_target_directory_groups(video_core)
 
 target_link_libraries(video_core PUBLIC common core)
@@ -183,5 +177,5 @@ endif()
 
 if (ENABLE_VULKAN)
     target_include_directories(video_core PRIVATE ${Vulkan_INCLUDE_DIRS})
-    target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_LIB})
+    target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_LIB} vma)
 endif()
