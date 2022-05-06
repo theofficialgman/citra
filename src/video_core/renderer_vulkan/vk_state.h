@@ -6,12 +6,11 @@
 
 #include <array>
 #include "video_core/renderer_vulkan/vk_texture.h"
-#include "video_core/renderer_vulkan/vk_pipeline.h"
 
 namespace Vulkan {
 
 enum class DirtyState {
-    All,
+    None,
     Framebuffer,
     Pipeline,
     Texture,
@@ -25,7 +24,9 @@ enum class DirtyState {
     Scissor,
     CullMode,
     VertexBuffer,
-    Uniform
+    IndexBuffer,
+    Uniform,
+    All
 };
 
 enum class UniformID {
@@ -57,29 +58,33 @@ public:
 
     /// Configure drawing state
     void SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset);
-    void SetFramebuffer(VKFramebuffer* framebuffer);
-    void SetPipeline(const VKPipeline* pipeline);
+    void SetViewport(vk::Viewport viewport);
+    void SetScissor(vk::Rect2D scissor);
+
+    /// Rendering
+    void SetAttachments(VKTexture* color, VKTexture* depth_stencil);
+    void SetRenderArea(vk::Rect2D render_area);
+    void BeginRendering();
+    void EndRendering();
 
     /// Configure shader resources
     void SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u32 size);
     void SetTexture(TextureID id, VKTexture* texture);
     void SetTexelBuffer(TexelBufferID id, VKBuffer* buffer);
-    void SetImageTexture(VKTexture* image);
     void UnbindTexture(VKTexture* image);
 
     /// Apply all dirty state to the current Vulkan command buffer
+    void UpdateDescriptorSet();
     void Apply();
 
 private:
     // Stage which should be applied
     DirtyState dirty_flags;
+    bool rendering = false;
 
     // Input assembly
-    VKBuffer* vertex_buffer = nullptr;
-    vk::DeviceSize vertex_buffer_offset = 0;
-
-    // Pipeline state
-    const VKPipeline* pipeline = nullptr;
+    VKBuffer* vertex_buffer = nullptr, * index_buffer = nullptr;
+    vk::DeviceSize vertex_offset = 0, index_offset = 0;
 
     // Shader bindings. These describe which resources
     // we have bound to the pipeline and at which
@@ -89,22 +94,24 @@ private:
     struct
     {
         std::array<vk::DescriptorBufferInfo, 2> ubo;
+        std::array<bool, 2> ubo_update;
         std::array<vk::DescriptorImageInfo, 4> texture;
+        std::array<bool, 4> texture_update;
         std::array<vk::DescriptorBufferInfo, 3> lut;
+        std::array<bool, 3> lut_update;
     } bindings = {};
-
-    std::array<vk::DescriptorSet, 3> descriptor_sets = {};
+    std::vector<vk::UniqueDescriptorSet> descriptor_sets = {};
+    vk::UniqueDescriptorPool desc_pool;
 
     // Rasterization
-    vk::Viewport viewport = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+    vk::Viewport viewport = { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
     vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eNone;
-    vk::Rect2D scissor = {{0, 0}, {1, 1}};
+    vk::Rect2D scissor = { {0, 0}, {1, 1} };
     VKTexture dummy_texture;
 
-    // Framebuffer
-    VKFramebuffer* framebuffer = nullptr;
-    vk::RenderPass current_render_pass = VK_NULL_HANDLE;
-    vk::Rect2D framebuffer_render_area = {};
+    // Render attachments
+    VKTexture* color_attachment = nullptr, * depth_attachment = nullptr;
+    vk::Rect2D render_area = {};
     vk::ColorComponentFlags color_mask;
 
     // Depth

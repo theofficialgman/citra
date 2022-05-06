@@ -15,13 +15,16 @@
 
 namespace Vulkan {
 
-using RenderPassCacheKey = std::tuple<vk::Format, vk::Format, u32, vk::AttachmentLoadOp>;
+struct RenderPassCacheKey {
+    vk::Format color, depth;
+    vk::SampleCountFlagBits samples;
+};
 
-constexpr u32 MAX_TEXTURE_UPLOAD_BUFFER_SIZE = 32 * 1024 * 1024;
 constexpr u32 DESCRIPTOR_SET_LAYOUT_COUNT = 3;
 
-class VKResourceCache
-{
+/// Wrapper class that manages resource caching and storage.
+/// It stores pipelines and renderpasses
+class VKResourceCache {
 public:
     VKResourceCache() = default;
     ~VKResourceCache();
@@ -31,9 +34,12 @@ public:
     void Shutdown();
 
     // Public interface.
-    vk::Sampler GetSampler(const SamplerInfo& info);
-    vk::RenderPass GetRenderPass(vk::Format color_format, vk::Format depth_format, u32 multisamples, vk::AttachmentLoadOp load_op);
     vk::PipelineCache GetPipelineCache() const { return pipeline_cache.get(); }
+    vk::RenderPass GetRenderPass(vk::Format color_format, vk::Format depth_format,
+                                 vk::SampleCountFlagBits multisamples,
+                                 vk::AttachmentLoadOp load_op);
+
+    auto& GetDescriptorLayouts() const { return descriptor_layouts; }
 
 private:
     // Descriptor sets
@@ -41,8 +47,7 @@ private:
     vk::UniquePipelineLayout pipeline_layout;
 
     // Render pass cache
-    std::unordered_map<RenderPassCacheKey, vk::RenderPass> render_pass_cache;
-    std::unordered_map<SamplerInfo, vk::Sampler> sampler_cache;
+    std::unordered_map<RenderPassCacheKey, vk::UniqueRenderPass> renderpass_cache;
 
     vk::UniquePipelineCache pipeline_cache;
     std::string pipeline_cache_filename;

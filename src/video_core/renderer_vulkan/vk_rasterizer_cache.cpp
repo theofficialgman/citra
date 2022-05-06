@@ -205,7 +205,7 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
     return texture;
 }
 
-/*static bool FillSurface(const Surface& surface, const u8* fill_data,
+static bool FillSurface(const Surface& surface, const u8* fill_data,
                         const Common::Rectangle<u32>& fill_rect) {
     OpenGLState prev_state = OpenGLState::GetCurState();
     SCOPE_EXIT({ prev_state.Apply(); });
@@ -223,16 +223,11 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
     surface->InvalidateAllWatcher();
 
     if (surface->type == SurfaceType::Color || surface->type == SurfaceType::Texture) {
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               surface->texture.handle, 0);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0,
-                               0);
-
         Pica::Texture::TextureInfo tex_info{};
         tex_info.format = static_cast<Pica::TexturingRegs::TextureFormat>(surface->pixel_format);
         Common::Vec4<u8> color = Pica::Texture::LookupTexture(fill_data, 0, 0, tex_info);
 
-        std::array<GLfloat, 4> color_values = {color.x / 255.f, color.y / 255.f, color.z / 255.f,
+        std::array<float, 4> color_values = {color.x / 255.f, color.y / 255.f, color.z / 255.f,
                                                color.w / 255.f};
 
         state.color_mask.red_enabled = GL_TRUE;
@@ -278,7 +273,7 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
         glClearBufferfi(GL_DEPTH_STENCIL, 0, value_float, value_int);
     }
     return true;
-}*/
+}
 
 CachedSurface::~CachedSurface() {
     if (texture.IsValid()) {

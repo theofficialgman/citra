@@ -51,11 +51,8 @@ void VKTexture::Create(const Info& info, bool make_staging) {
         LOG_CRITICAL(Render_Vulkan, "Unknown texture format {}", texture_info.format);
     }
 
-    // Make sure the texture size doesn't exceed the global staging buffer size
-    u32 image_size = texture_info.width * texture_info.height * channels;
-    assert(image_size <= MAX_TEXTURE_UPLOAD_BUFFER_SIZE);
-
     // Create the texture
+    u32 image_size = texture_info.width * texture_info.height * channels;
     vk::ImageCreateFlags flags;
     if (info.view_type == vk::ImageViewType::eCube) {
         flags = vk::ImageCreateFlagBits::eCubeCompatible;
@@ -103,7 +100,7 @@ void VKTexture::Adopt(vk::Image image, vk::ImageViewCreateInfo view_info) {
     texture_view = g_vk_instace->GetDevice().createImageView(view_info);
 }
 
-void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer& command_buffer) {
+void VKTexture::TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer command_buffer) {
     struct LayoutInfo {
         vk::ImageLayout layout;
         vk::AccessFlags access;
@@ -209,12 +206,13 @@ void VKTexture::CopyPixels(std::span<u32> new_pixels) {
     TransitionLayout(vk::ImageLayout::eShaderReadOnlyOptimal, command_buffer);
 }
 
-void VKTexture::BlitTo(Common::Rectangle<u32> srect, VKTexture& dest,
-                       Common::Rectangle<u32> drect, SurfaceParams::SurfaceType type,
-                       vk::CommandBuffer& command_buffer) {
+void VKTexture::BlitTo(Common::Rectangle<u32> srect, VKTexture* dest,
+                       Common::Rectangle<u32> drect, SurfaceParams::SurfaceType type) {
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+
     // Ensure textures are of the same dimention
-    assert(texture_info.width == dest.texture_info.width &&
-           texture_info.height == dest.texture_info.height);
+    assert(texture_info.width == dest->texture_info.width &&
+           texture_info.height == dest->texture_info.height);
 
     vk::ImageAspectFlags image_aspect;
     switch (type) {
@@ -242,73 +240,34 @@ void VKTexture::BlitTo(Common::Rectangle<u32> srect, VKTexture& dest,
 
     // Transition image layouts
     TransitionLayout(vk::ImageLayout::eTransferSrcOptimal, command_buffer);
-    dest.TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
+    dest->TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
 
     // Perform blit operation
-    command_buffer.blitImage(texture, vk::ImageLayout::eTransferSrcOptimal, dest.texture,
+    command_buffer.blitImage(texture, vk::ImageLayout::eTransferSrcOptimal, dest->GetHandle(),
                              vk::ImageLayout::eTransferDstOptimal, regions, vk::Filter::eNearest);
 }
 
-void VKTexture::Fill(Common::Rectangle<u32> region, glm::vec4 color) {
+void VKTexture::Fill(Common::Rectangle<u32> region, vk::ImageAspectFlags aspect,
+                     vk::ClearValue value) {
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+    TransitionLayout(vk::ImageLayout::eTransferDstOptimal, command_buffer);
 
-}
+    // End any ongoing rendering operations
+    g_vk_state->EndRendering();
 
-void VKTexture::Fill(Common::Rectangle<u32> region, glm::vec2 depth_stencil) {
+    // Set fill area
+    g_vk_state->SetAttachments(this, nullptr);
 
-}
+    // Begin clear render
+    g_vk_state->BeginRendering();
 
-VKFramebuffer::~VKFramebuffer() {
-    auto deleter = [this]() {
-        if (framebuffer) {
-            auto& device = g_vk_instace->GetDevice();
-            device.destroyFramebuffer(framebuffer);
-        }
-    };
+    vk::Offset2D offset(region.left, region.bottom);
+    vk::Rect2D rect(offset, { region.GetWidth(), region.GetHeight() });
+    vk::ClearAttachment clear_info(aspect, 0, value);
+    vk::ClearRect clear_rect(rect, 0, 1);
+    command_buffer.clearAttachments(clear_info, clear_rect);
 
-    g_vk_task_scheduler->Schedule(deleter);
-}
-
-void VKFramebuffer::Create(const Info& info) {
-    // Make sure that either attachment is valid
-    assert(info.color || info.depth_stencil);
-    attachments = { info.color, info.depth_stencil };
-
-    auto rect = info.color ? info.color->GetRect() : info.depth_stencil->GetRect();
-    auto color_format = info.color ? info.color->GetFormat() : vk::Format::eUndefined;
-    auto depth_format = info.depth_stencil ? info.depth_stencil->GetFormat() : vk::Format::eUndefined;
-
-    vk::FramebufferCreateInfo framebuffer_info
-    (
-        {},
-        g_vk_res_cache->GetRenderPass(color_format, depth_format, 1, vk::AttachmentLoadOp::eLoad),
-        {},
-        rect.extent.width,
-        rect.extent.height,
-        1
-    );
-
-    if (info.color && info.depth_stencil) {
-        std::array<vk::ImageView, 2> views = { info.color->GetView(), info.depth_stencil->GetView() };
-        framebuffer_info.setAttachments(views);
-    }
-    else {
-        auto valid = info.color ? info.color : info.depth_stencil;
-        std::array<vk::ImageView, 1> view = { valid->GetView() };
-        framebuffer_info.setAttachments(view);
-    }
-
-    framebuffer = g_vk_instace->GetDevice().createFramebuffer(framebuffer_info);
-}
-
-void VKFramebuffer::Prepare(vk::CommandBuffer& command_buffer) {
-    // Transition attachments to their optimal formats for rendering
-    if (attachments[Attachments::Color]) {
-        attachments[Attachments::Color]->TransitionLayout(vk::ImageLayout::eColorAttachmentOptimal, command_buffer);
-    }
-
-    if (attachments[Attachments::DepthStencil]) {
-        attachments[Attachments::DepthStencil]->TransitionLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal, command_buffer);
-    }
+    TransitionLayout(vk::ImageLayout::eShaderReadOnlyOptimal, command_buffer);
 }
 
 }
