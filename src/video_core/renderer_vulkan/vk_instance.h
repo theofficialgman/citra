@@ -34,6 +34,7 @@ public:
 
     /// Feature support
     bool SupportsAnisotropicFiltering() const;
+    u32 UniformMinAlignment() const { return device_limits.minUniformBufferOffsetAlignment; }
 
 private:
     bool CreateDevice(vk::SurfaceKHR surface, bool validation_enabled);
@@ -54,6 +55,7 @@ public:
     std::vector<const char*> device_extensions;
     vk::PhysicalDeviceFeatures device_features{};
     vk::PhysicalDeviceVulkan12Features new_features{};
+    vk::PhysicalDeviceLimits device_limits;
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;

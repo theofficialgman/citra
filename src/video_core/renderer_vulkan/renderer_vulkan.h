@@ -21,8 +21,7 @@ namespace Frontend {
 struct Frame {
     u32 width = 0, height = 0;
     bool color_reloaded = false;
-    Vulkan::VKTexture color;
-    Vulkan::VKFramebuffer render, present;
+    Vulkan::VKTexture* color;
     vk::UniqueFence render_fence, present_fence;
 };
 } // namespace Frontend
@@ -31,9 +30,9 @@ namespace Vulkan {
 
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {
-    u32 display_texture;
+    Vulkan::VKTexture* display_texture;
     Common::Rectangle<float> display_texcoords;
-    VKTexture texture;
+    Vulkan::VKTexture* texture;
     GPU::Regs::PixelFormat format;
 };
 
@@ -86,7 +85,6 @@ private:
     // OpenGL object IDs
     VKBuffer vertex_buffer;
     OGLProgram shader;
-    VKFramebuffer screenshot_framebuffer;
     OGLSampler filter_sampler;
 
     /// Display information for top and bottom screens respectively

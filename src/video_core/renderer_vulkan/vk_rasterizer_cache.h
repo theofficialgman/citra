@@ -200,10 +200,6 @@ struct CachedSurface : SurfaceParams, std::enable_shared_from_this<CachedSurface
     void LoadGPUBuffer(PAddr load_start, PAddr load_end);
     void FlushGPUBuffer(PAddr flush_start, PAddr flush_end);
 
-    // Custom texture loading and dumping
-    bool LoadCustomTexture(u64 tex_hash);
-    void DumpTexture(VKTexture& target_tex, u64 tex_hash);
-
     // Upload/Download data in vk_buffer in/to this surface's texture
     void UploadGPUTexture(Common::Rectangle<u32> rect);
     void DownloadGPUTexture(const Common::Rectangle<u32>& rect);
@@ -341,9 +337,6 @@ private:
     PageMap cached_pages;
     SurfaceMap dirty_regions;
     SurfaceSet remove_surfaces;
-
-    VKFramebuffer read_framebuffer;
-    VKFramebuffer draw_framebuffer;
 
     u16 resolution_scale_factor;
 

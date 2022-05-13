@@ -23,6 +23,8 @@
 #include "video_core/regs_rasterizer.h"
 #include "video_core/regs_texturing.h"
 #include "video_core/shader/shader.h"
+#include "video_core/renderer_vulkan/vk_state.h"
+#include "video_core/renderer_vulkan/vk_rasterizer_cache.h"
 
 namespace Frontend {
 class EmuWindow;
@@ -31,10 +33,89 @@ class EmuWindow;
 namespace Vulkan {
 class ShaderProgramManager;
 
+enum class UniformBindings : u32 { Common, VS, GS };
+
+struct LightSrc {
+    alignas(16) glm::vec3 specular_0;
+    alignas(16) glm::vec3 specular_1;
+    alignas(16) glm::vec3 diffuse;
+    alignas(16) glm::vec3 ambient;
+    alignas(16) glm::vec3 position;
+    alignas(16) glm::vec3 spot_direction; // negated
+    float dist_atten_bias;
+    float dist_atten_scale;
+};
+
+/// Uniform structure for the Uniform Buffer Object, all vectors must be 16-byte aligned
+// NOTE: Always keep a vec4 at the end. The GL spec is not clear wether the alignment at
+//       the end of a uniform block is included in UNIFORM_BLOCK_DATA_SIZE or not.
+//       Not following that rule will cause problems on some AMD drivers.
+struct UniformData {
+    int framebuffer_scale;
+    int alphatest_ref;
+    float depth_scale;
+    float depth_offset;
+    float shadow_bias_constant;
+    float shadow_bias_linear;
+    int scissor_x1;
+    int scissor_y1;
+    int scissor_x2;
+    int scissor_y2;
+    int fog_lut_offset;
+    int proctex_noise_lut_offset;
+    int proctex_color_map_offset;
+    int proctex_alpha_map_offset;
+    int proctex_lut_offset;
+    int proctex_diff_lut_offset;
+    float proctex_bias;
+    int shadow_texture_bias;
+    alignas(16) glm::ivec4 lighting_lut_offset[Pica::LightingRegs::NumLightingSampler / 4];
+    alignas(16) glm::vec3 fog_color;
+    alignas(8) glm::vec2 proctex_noise_f;
+    alignas(8) glm::vec2 proctex_noise_a;
+    alignas(8) glm::vec2 proctex_noise_p;
+    alignas(16) glm::vec3 lighting_global_ambient;
+    LightSrc light_src[8];
+    alignas(16) glm::vec4 const_color[6]; // A vec4 color for each of the six tev stages
+    alignas(16) glm::vec4 tev_combiner_buffer_color;
+    alignas(16) glm::vec4 clip_coef;
+};
+
+static_assert(
+    sizeof(UniformData) == 0x4F0,
+    "The size of the UniformData structure has changed, update the structure in the shader");
+static_assert(sizeof(UniformData) < 16384,
+              "UniformData structure must be less than 16kb as per the OpenGL spec");
+
+/// Uniform struct for the Uniform Buffer Object that contains PICA vertex/geometry shader uniforms.
+// NOTE: the same rule from UniformData also applies here.
+struct PicaUniformsData {
+    void SetFromRegs(const Pica::ShaderRegs& regs, const Pica::Shader::ShaderSetup& setup);
+
+    struct BoolAligned {
+        alignas(16) int b;
+    };
+
+    std::array<BoolAligned, 16> bools;
+    alignas(16) std::array<glm::uvec4, 4> i;
+    alignas(16) std::array<glm::vec4, 96> f;
+};
+
+struct VSUniformData {
+    PicaUniformsData uniforms;
+};
+static_assert(
+    sizeof(VSUniformData) == 1856,
+    "The size of the VSUniformData structure has changed, update the structure in the shader");
+static_assert(sizeof(VSUniformData) < 16384,
+              "VSUniformData structure must be less than 16kb as per the OpenGL spec");
+
+struct ScreenInfo;
+
 class RasterizerVulkan : public VideoCore::RasterizerInterface {
 public:
     explicit RasterizerVulkan(Frontend::EmuWindow& emu_window);
-    ~RasterizerVulkan() override;
+    ~RasterizerVulkan() override = default;
 
     void LoadDiskResources(const std::atomic_bool& stop_loading,
                            const VideoCore::DiskResourceLoadCallback& callback) override;
@@ -52,43 +133,17 @@ public:
     bool AccelerateTextureCopy(const GPU::Regs::DisplayTransferConfig& config) override;
     bool AccelerateFill(const GPU::Regs::MemoryFillConfig& config) override;
     bool AccelerateDisplay(const GPU::Regs::FramebufferConfig& config, PAddr framebuffer_addr,
-                           u32 pixel_stride, OpenGL::ScreenInfo& screen_info) override;
+                           u32 pixel_stride, Vulkan::ScreenInfo& screen_info) override;
     bool AccelerateDrawBatch(bool is_indexed) override;
 
     /// Syncs entire status to match PICA registers
     void SyncEntireState() override;
 
 private:
-    struct SamplerInfo {
-        using TextureConfig = Pica::TexturingRegs::TextureConfig;
-
-        OGLSampler sampler;
-
-        /// Creates the sampler object, initializing its state so that it's in sync with the
-        /// SamplerInfo struct.
-        void Create();
-        /// Syncs the sampler object with the config, updating any necessary state.
-        void SyncWithConfig(const TextureConfig& config);
-
-    private:
-        TextureConfig::TextureFilter mag_filter;
-        TextureConfig::TextureFilter min_filter;
-        TextureConfig::TextureFilter mip_filter;
-        TextureConfig::WrapMode wrap_s;
-        TextureConfig::WrapMode wrap_t;
-        u32 border_color;
-        u32 lod_min;
-        u32 lod_max;
-        s32 lod_bias;
-
-        // TODO(wwylele): remove this once mipmap for cube is implemented
-        bool supress_mipmap_for_cube = false;
-    };
-
-    struct VertexInfo
+    struct VertexBase
     {
-        VertexInfo() = default;
-        VertexInfo(const Pica::Shader::OutputVertex& v, bool flip_quaternion) {
+        VertexBase() = default;
+        VertexBase(const Pica::Shader::OutputVertex& v, bool flip_quaternion) {
             position[0] = v.pos.x.ToFloat32();
             position[1] = v.pos.y.ToFloat32();
             position[2] = v.pos.z.ToFloat32();
@@ -128,21 +183,21 @@ private:
     };
 
     /// Structure that the hardware rendered vertices are composed of
-    struct HardwareVertex : public VertexInfo
+    struct HardwareVertex : public VertexBase
     {
         HardwareVertex() = default;
-        HardwareVertex(const Pica::Shader::OutputVertex& v, bool flip_quaternion) : VertexInfo(v, flip_quaternion) {};
-        static constexpr auto binding_desc = vk::VertexInputBindingDescription(0, sizeof(VertexInfo));
+        HardwareVertex(const Pica::Shader::OutputVertex& v, bool flip_quaternion) : VertexBase(v, flip_quaternion) {};
+        static constexpr auto binding_desc = vk::VertexInputBindingDescription(0, sizeof(VertexBase));
         static constexpr std::array<vk::VertexInputAttributeDescription, 8> attribute_desc =
         {
-              vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexInfo, position)),
-              vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexInfo, color)),
-              vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(VertexInfo, tex_coord0)),
-              vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32Sfloat, offsetof(VertexInfo, tex_coord1)),
-              vk::VertexInputAttributeDescription(4, 0, vk::Format::eR32G32Sfloat, offsetof(VertexInfo, tex_coord2)),
-              vk::VertexInputAttributeDescription(5, 0, vk::Format::eR32Sfloat, offsetof(VertexInfo, tex_coord0_w)),
-              vk::VertexInputAttributeDescription(6, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexInfo, normquat)),
-              vk::VertexInputAttributeDescription(7, 0, vk::Format::eR32G32B32Sfloat, offsetof(VertexInfo, view)),
+              vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexBase, position)),
+              vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexBase, color)),
+              vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(VertexBase, tex_coord0)),
+              vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32Sfloat, offsetof(VertexBase, tex_coord1)),
+              vk::VertexInputAttributeDescription(4, 0, vk::Format::eR32G32Sfloat, offsetof(VertexBase, tex_coord2)),
+              vk::VertexInputAttributeDescription(5, 0, vk::Format::eR32Sfloat, offsetof(VertexBase, tex_coord0_w)),
+              vk::VertexInputAttributeDescription(6, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexBase, normquat)),
+              vk::VertexInputAttributeDescription(7, 0, vk::Format::eR32G32B32Sfloat, offsetof(VertexBase, view)),
         };
     };
 
@@ -254,30 +309,16 @@ private:
     /// Generic draw function for DrawTriangles and AccelerateDrawBatch
     bool Draw(bool accelerate, bool is_indexed);
 
-    /// Internal implementation for AccelerateDrawBatch
-    bool AccelerateDrawBatchInternal(bool is_indexed);
-
     struct VertexArrayInfo {
         u32 vs_input_index_min;
         u32 vs_input_index_max;
         u32 vs_input_size;
     };
 
-    /// Retrieve the range and the size of the input vertex
-    VertexArrayInfo AnalyzeVertexArray(bool is_indexed);
+private:
+    VulkanState state;
 
-    /// Setup vertex shader for AccelerateDrawBatch
-    bool SetupVertexShader();
-
-    /// Setup geometry shader for AccelerateDrawBatch
-    bool SetupGeometryShader();
-
-    bool is_amd;
-
-    OpenGLState state;
-    GLuint default_texture;
-
-    RasterizerCacheOpenGL res_cache;
+    RasterizerCacheVulkan res_cache;
 
     std::vector<HardwareVertex> vertex_batch;
 
@@ -304,33 +345,23 @@ private:
     static constexpr std::size_t UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
     static constexpr std::size_t TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
 
-    OGLVertexArray hw_vao; // VAO for hardware shader / accelerate draw
-    std::array<bool, 16> hw_vao_enabled_attributes{};
-
     std::array<SamplerInfo, 3> texture_samplers;
-    OGLStreamBuffer vertex_buffer;
-    OGLStreamBuffer uniform_buffer;
-    OGLStreamBuffer index_buffer;
-    OGLStreamBuffer texture_buffer;
-    OGLStreamBuffer texture_lf_buffer;
-    OGLFramebuffer framebuffer;
-    GLint uniform_buffer_alignment;
-    std::size_t uniform_size_aligned_vs;
-    std::size_t uniform_size_aligned_fs;
+    VKBuffer vertex_buffer, uniform_buffer, index_buffer;
+    VKBuffer texture_buffer_lut_lf, texture_buffer_lut;
+
+    u32 uniform_buffer_alignment;
+    u32 uniform_size_aligned_vs, uniform_size_aligned_fs;
 
     SamplerInfo texture_cube_sampler;
 
-    OGLTexture texture_buffer_lut_lf;
-    OGLTexture texture_buffer_lut_rg;
-    OGLTexture texture_buffer_lut_rgba;
-
-    std::array<std::array<GLvec2, 256>, Pica::LightingRegs::NumLightingSampler> lighting_lut_data{};
-    std::array<GLvec2, 128> fog_lut_data{};
-    std::array<GLvec2, 128> proctex_noise_lut_data{};
-    std::array<GLvec2, 128> proctex_color_map_data{};
-    std::array<GLvec2, 128> proctex_alpha_map_data{};
-    std::array<GLvec4, 256> proctex_lut_data{};
-    std::array<GLvec4, 256> proctex_diff_lut_data{};
+    std::array<std::array<glm::vec2, 256>,
+               Pica::LightingRegs::NumLightingSampler> lighting_lut_data{};
+    std::array<glm::vec2, 128> fog_lut_data{};
+    std::array<glm::vec2, 128> proctex_noise_lut_data{};
+    std::array<glm::vec2, 128> proctex_color_map_data{};
+    std::array<glm::vec2, 128> proctex_alpha_map_data{};
+    std::array<glm::vec4, 256> proctex_lut_data{};
+    std::array<glm::vec4, 256> proctex_diff_lut_data{};
 
     bool allow_shadow;
 };

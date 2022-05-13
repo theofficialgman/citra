@@ -13,6 +13,10 @@ namespace OpenGL {
 struct ScreenInfo;
 }
 
+namespace Vulkan {
+struct ScreenInfo;
+}
+
 namespace Pica::Shader {
 struct OutputVertex;
 } // namespace Pica::Shader
@@ -77,6 +81,13 @@ public:
     virtual bool AccelerateDisplay(const GPU::Regs::FramebufferConfig& config,
                                    PAddr framebuffer_addr, u32 pixel_stride,
                                    OpenGL::ScreenInfo& screen_info) {
+        return false;
+    }
+
+    /// Attempt to use a faster method to display the framebuffer to screen
+    virtual bool AccelerateDisplay(const GPU::Regs::FramebufferConfig& config,
+                                   PAddr framebuffer_addr, u32 pixel_stride,
+                                   Vulkan::ScreenInfo& screen_info) {
         return false;
     }
 

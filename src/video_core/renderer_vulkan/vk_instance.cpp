@@ -18,6 +18,9 @@ bool VKInstance::Create(vk::Instance instance, vk::PhysicalDevice physical_devic
     this->instance = instance;
     this->physical_device = physical_device;
 
+    // Get physical device limits
+    device_limits = physical_device.getProperties().limits;
+
     // Determine required extensions and features
     if (!FindExtensions() || !FindFeatures())
         return false;

@@ -15,15 +15,13 @@
 namespace Vulkan {
 
 struct SamplerInfo {
-    std::array<vk::SamplerAddressMode, 3> wrapping = { vk::SamplerAddressMode::eClampToEdge };
-    vk::Filter min_filter = vk::Filter::eLinear;
-    vk::Filter mag_filter = vk::Filter::eLinear;
-    vk::SamplerMipmapMode mipmap_mode = vk::SamplerMipmapMode::eLinear;
+    std::array<vk::SamplerAddressMode, 3> wrapping{};
+    vk::Filter min_filter{}, mag_filter{};
+    vk::SamplerMipmapMode mipmap_mode{};
 };
 
 /// Vulkan texture object
 class VKTexture final : public NonCopyable {
-    friend class VKFramebuffer;
 public:
     /// Information for the creation of the target texture
     struct Info {
@@ -31,57 +29,40 @@ public:
         vk::Format format;
         vk::ImageType type;
         vk::ImageViewType view_type;
-        u32 mipmap_levels = 1;
-        u32 array_layers = 1;
+        vk::ImageUsageFlags usage;
+        vk::ImageAspectFlags aspect;
         u32 multisamples = 1;
+        u32 levels = 1, layers = 1;
         SamplerInfo sampler_info = {};
     };
 
     VKTexture() = default;
-    VKTexture(VKTexture&&) = default;
     ~VKTexture();
 
     /// Create a new Vulkan texture object
-    void Create(const Info& info, bool staging = false);
+    void Create(const VKTexture::Info& info);
 
-    /// Create a non-owning texture object, usefull for image object
-    /// from the swapchain that are managed by another object
-    void Adopt(vk::Image image, vk::ImageViewCreateInfo view_info);
+    /// Query objects
+    bool IsValid() const { return texture; }
+    vk::Image GetHandle() const { return texture; }
+    vk::ImageView GetView() const { return view; }
+    vk::Format GetFormat() const { return info.format; }
+    vk::ImageLayout GetLayout() const { return layout; }
+    u32 GetSamples() const { return info.multisamples; }
 
     /// Copies CPU side pixel data to the GPU texture buffer
-    void CopyPixels(std::span<u32> pixels);
-
-    /// Get Vulkan objects
-    vk::Image GetHandle() const { return texture; }
-    vk::ImageView GetView() const { return texture_view; }
-    vk::Format GetFormat() const { return texture_info.format; }
-    vk::Rect2D GetRect() const { return vk::Rect2D({}, { texture_info.width, texture_info.height }); }
-    vk::ImageLayout GetLayout() const { return texture_layout; }
-    u32 GetSamples() const { return texture_info.multisamples; }
-    bool IsValid() { return texture; }
+    void Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels);
 
     /// Used to transition the image to an optimal layout during transfers
-    void TransitionLayout(vk::ImageLayout new_layout, vk::CommandBuffer command_buffer);
-
-    /// Fill the texture with the values provided
-    void Fill(Common::Rectangle<u32> region, vk::ImageAspectFlags aspect,
-              vk::ClearValue value);
-
-    /// Copy current texture to another with optionally performing format convesions
-    void BlitTo(Common::Rectangle<u32> srect, VKTexture* dest,
-                Common::Rectangle<u32> drect, SurfaceParams::SurfaceType type);
+    void Transition(vk::ImageLayout new_layout);
 
 private:
-    bool cleanup_image = true;
-    Info texture_info;
-    vk::ImageLayout texture_layout = vk::ImageLayout::eUndefined;
+    VKTexture::Info info{};
+    vk::ImageLayout layout{};
     vk::Image texture;
-    vk::ImageView texture_view;
-    vk::DeviceMemory texture_memory;
-    u32 channels;
-
-    // TODO: Make a global staging buffer
-    VKBuffer staging;
+    vk::ImageView view;
+    vk::DeviceMemory memory;
+    u32 channels{}, image_size{};
 };
 
 } // namespace Vulkan

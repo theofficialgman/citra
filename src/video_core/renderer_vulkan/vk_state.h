@@ -5,47 +5,51 @@
 #pragma once
 
 #include <array>
+#include <variant>
 #include "video_core/renderer_vulkan/vk_texture.h"
 
 namespace Vulkan {
 
-enum class DirtyState {
-    None,
-    Framebuffer,
-    Pipeline,
-    Texture,
-    Sampler,
-    TexelBuffer,
-    ImageTexture,
-    Depth,
-    Stencil,
-    LogicOp,
-    Viewport,
-    Scissor,
-    CullMode,
-    VertexBuffer,
-    IndexBuffer,
-    Uniform,
-    All
+enum class DirtyFlags {
+    None = 0,
+    Framebuffer = 1,
+    Pipeline = 1 << 1,
+    Texture = 1 << 2,
+    Sampler = 1 << 3,
+    TexelBuffer = 1 << 4,
+    ImageTexture = 1 << 5,
+    DepthTest = 1 << 6,
+    Stencil = 1 << 7,
+    LogicOp = 1 << 8,
+    Viewport = 1 << 9,
+    Scissor = 1 << 10,
+    CullMode = 1 << 11,
+    VertexBuffer = 1 << 12,
+    IndexBuffer = 1 << 13,
+    Uniform = 1 << 14,
+    FrontFace = 1 << 15,
+    BlendConsts = 1 << 16,
+    ColorMask = 1 << 17,
+    StencilMask = 1 << 18,
+    DepthWrite = 1 << 19,
+    All = (1 << 20) - 1
 };
 
-enum class UniformID {
-    Pica = 0,
-    Shader = 1
+enum class BindingID {
+    VertexUniform = 0,
+    PicaUniform = 1,
+    Tex0 = 2,
+    Tex1 = 3,
+    Tex2 = 4,
+    TexCube = 5,
+    LutLF = 6,
+    LutRG = 7,
+    LutRGBA = 8
 };
 
-enum class TextureID {
-    Tex0 = 0,
-    Tex1 = 1,
-    Tex2 = 2,
-    TexCube = 3
-};
-
-enum class TexelBufferID {
-    LF = 0,
-    RG = 1,
-    RGBA = 2
-};
+BindingID operator + (BindingID lhs, u32 rhs) {
+    return static_cast<BindingID>(static_cast<u32>(lhs) + rhs);
+}
 
 /// Tracks global Vulkan state
 class VulkanState {
@@ -56,80 +60,98 @@ public:
     /// Initialize object to its initial state
     void Create();
 
+    /// Query state
+    bool DepthTestEnabled() const { return depth_enabled && depth_writes; }
+    bool StencilTestEnabled() const { return stencil_enabled && stencil_writes; }
+
     /// Configure drawing state
     void SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset);
     void SetViewport(vk::Viewport viewport);
     void SetScissor(vk::Rect2D scissor);
+    void SetCullMode(vk::CullModeFlags flags);
+    void SetFrontFace(vk::FrontFace face);
+    void SetLogicOp(vk::LogicOp logic_op);
+    void SetStencilWrite(u32 mask);
+    void SetStencilInput(u32 mask);
+    void SetStencilTest(bool enable, vk::StencilOp fail, vk::StencilOp pass, vk::StencilOp depth_fail,
+                      vk::CompareOp compare, u32 ref);
+    void SetDepthWrite(bool enable);
+    void SetDepthTest(bool enable, vk::CompareOp compare);
+    void SetColorMask(bool red, bool green, bool blue, bool alpha);
+    void SetBlendEnable(bool enable);
+    void SetBlendCostants(float red, float green, float blue, float alpha);
+    void SetBlendOp(vk::BlendOp rgb_op, vk::BlendOp alpha_op, vk::BlendFactor src_color, vk::BlendFactor dst_color,
+                    vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha);
 
     /// Rendering
-    void SetAttachments(VKTexture* color, VKTexture* depth_stencil);
+    void PushRenderTargets(VKTexture* color, VKTexture* depth_stencil);
+    void PopRenderTargets();
     void SetRenderArea(vk::Rect2D render_area);
     void BeginRendering();
     void EndRendering();
 
     /// Configure shader resources
-    void SetUniformBuffer(UniformID id, VKBuffer* buffer, u32 offset, u32 size);
-    void SetTexture(TextureID id, VKTexture* texture);
-    void SetTexelBuffer(TexelBufferID id, VKBuffer* buffer);
+    void SetUniformBuffer(BindingID id, VKBuffer* buffer, u32 offset, u32 size);
+    void SetTexture(BindingID id, VKTexture* texture);
+    void SetTexelBuffer(BindingID id, VKBuffer* buffer, vk::Format view_format);
     void UnbindTexture(VKTexture* image);
+    void UnbindTexture(u32 index);
 
     /// Apply all dirty state to the current Vulkan command buffer
-    void UpdateDescriptorSet();
     void Apply();
 
 private:
-    // Stage which should be applied
-    DirtyState dirty_flags;
+    void UpdateDescriptorSet();
+    void GetPipeline();
+    void CompileTrivialShader();
+
+private:
+    struct Binding {
+        bool dirty{};
+        std::variant<VKBuffer*, VKTexture*> resource{};
+        vk::UniqueBufferView buffer_view{};
+    };
+
+    struct Attachment {
+        VKTexture* color{};
+        VKTexture* depth_stencil{};
+    };
+
+    DirtyFlags dirty_flags;
     bool rendering = false;
+    VKTexture dummy_texture;
+    vk::UniqueSampler sampler;
 
-    // Input assembly
-    VKBuffer* vertex_buffer = nullptr, * index_buffer = nullptr;
-    vk::DeviceSize vertex_offset = 0, index_offset = 0;
-
-    // Shader bindings. These describe which resources
-    // we have bound to the pipeline and at which
-    // bind points. When the state is applied the
-    // descriptor sets are updated with the new
-    // resources
-    struct
-    {
-        std::array<vk::DescriptorBufferInfo, 2> ubo;
-        std::array<bool, 2> ubo_update;
-        std::array<vk::DescriptorImageInfo, 4> texture;
-        std::array<bool, 4> texture_update;
-        std::array<vk::DescriptorBufferInfo, 3> lut;
-        std::array<bool, 3> lut_update;
-    } bindings = {};
-    std::vector<vk::UniqueDescriptorSet> descriptor_sets = {};
+    VKBuffer* vertex_buffer{}, * index_buffer{};
+    vk::DeviceSize vertex_offset{}, index_offset{};
+    std::array<Binding, 9> bindings{};
+    std::vector<vk::UniqueDescriptorSet> descriptor_sets{};
     vk::UniqueDescriptorPool desc_pool;
 
-    // Rasterization
-    vk::Viewport viewport = { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
-    vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eNone;
-    vk::Rect2D scissor = { {0, 0}, {1, 1} };
-    VKTexture dummy_texture;
+    vk::Viewport viewport{ 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
+    vk::CullModeFlags cull_mode{};
+    vk::FrontFace front_face{};
+    vk::Rect2D scissor{};
+    vk::LogicOp logic_op{};
+    std::array<float, 4> blend_constants{};
 
-    // Render attachments
-    VKTexture* color_attachment = nullptr, * depth_attachment = nullptr;
-    vk::Rect2D render_area = {};
-    vk::ColorComponentFlags color_mask;
-
-    // Depth
-    bool depth_enabled;
+    VKTexture* color_attachment{}, * depth_attachment{};
+    vk::Rect2D render_area{};
+    bool depth_enabled, depth_writes;
     vk::CompareOp test_func;
 
-    // Stencil
-    bool stencil_enabled;
-    vk::StencilFaceFlags face_mask;
-    vk::StencilOp fail_op, pass_op;
-    vk::StencilOp depth_fail_op;
+    u32 stencil_write_mask{}, stencil_input_mask{}, stencil_ref{};
+    bool stencil_enabled{}, stencil_writes{};
+    vk::StencilOp fail_op, pass_op, depth_fail_op;
     vk::CompareOp compare_op;
 
-    vk::LogicOp logic_op;
-    std::array<bool, 2> clip_distance;
+    struct {
+        vk::PipelineColorBlendAttachmentState blend;
+        vk::PipelineDepthStencilStateCreateInfo depth_stencil;
+    } static_state;
 
+    // Pipeline cache
+    vk::UniqueShaderModule trivial_vertex_shader;
 };
-
-extern std::unique_ptr<VulkanState> g_vk_state;
 
 } // namespace Vulkan

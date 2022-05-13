@@ -10,6 +10,7 @@
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_resource_cache.h"
 
 namespace Vulkan {
 
@@ -202,14 +203,24 @@ void VKSwapChain::SetupImages() {
         );
 
         // Wrap swapchain images with VKTexture
-        swapchain_images[i].image.Adopt(images[i], color_attachment_view);
+        swapchain_images[i].image = images[i];
+        swapchain_images[i].image_view = device.createImageViewUnique(color_attachment_view);
 
         // Create framebuffer for each swapchain image
-        VKFramebuffer::Info fb_info = {
-            .color = &swapchain_images[i].image
-        };
+        vk::FramebufferCreateInfo framebuffer_info
+        (
+            {},
+            g_vk_res_cache->GetRenderPass(details.format.format,
+                                          vk::Format::eUndefined,
+                                          vk::SampleCountFlagBits::e1,
+                                          vk::AttachmentLoadOp::eLoad),
+            {},
+            details.extent.width,
+            details.extent.height,
+            1
+        );
 
-        swapchain_images[i].framebuffer.Create(fb_info);
+        swapchain_images[i].framebuffer = device.createFramebufferUnique(framebuffer_info);
     }
 }
 

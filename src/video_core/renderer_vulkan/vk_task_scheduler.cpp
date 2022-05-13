@@ -9,17 +9,24 @@
 
 namespace Vulkan {
 
-VKTaskScheduler::VKTaskScheduler(VKSwapChain* swapchain) : swapchain(swapchain) {
-
-}
+VKTaskScheduler::VKTaskScheduler(VKSwapChain* swapchain) :
+    swapchain(swapchain) {}
 
 VKTaskScheduler::~VKTaskScheduler() {
-    // Sync the GPU before exiting
     SyncToGPU();
 }
 
-vk::CommandBuffer VKTaskScheduler::GetCommandBuffer() {
-    return tasks[current_task].command_buffer;
+std::tuple<u8*, u32> VKTaskScheduler::RequestStaging(u32 size) {
+    auto& task = tasks[current_task];
+    if (size > STAGING_BUFFER_SIZE - task.current_offset) {
+        return std::make_tuple(nullptr, 0);
+    }
+
+    u8* ptr = task.staging.GetHostPointer() + task.current_offset;
+    auto result = std::make_tuple(ptr, task.current_offset);
+
+    task.current_offset += size;
+    return result;
 }
 
 bool VKTaskScheduler::Create() {
@@ -36,7 +43,13 @@ bool VKTaskScheduler::Create() {
 
     timeline = device.createSemaphoreUnique(semaphore_info);
 
-    // Initialize task structures
+    VKBuffer::Info staging_info = {
+        .size = STAGING_BUFFER_SIZE,
+        .properties = vk::MemoryPropertyFlagBits::eHostVisible |
+                      vk::MemoryPropertyFlagBits::eHostCoherent,
+        .usage = vk::BufferUsageFlagBits::eTransferSrc
+    };
+
     for (auto& task : tasks) {
         // Create command buffers
         vk::CommandBufferAllocateInfo buffer_info
@@ -47,6 +60,9 @@ bool VKTaskScheduler::Create() {
         );
 
         task.command_buffer = device.allocateCommandBuffers(buffer_info)[0];
+
+        // Create staging buffer
+        task.staging.Create(staging_info);
     }
 
     // Create present semaphore
@@ -79,8 +95,8 @@ void VKTaskScheduler::SyncToGPU(u64 task_index) {
     // Delete all resources that can be freed now
     for (auto& task : tasks) {
         if (task.task_id > old_gpu_tick && task.task_id <= new_gpu_tick) {
-            for (auto& deleter : task.cleanups) {
-                deleter();
+            for (auto& func : task.cleanups) {
+                func();
             }
         }
     }
@@ -139,17 +155,13 @@ void VKTaskScheduler::BeginTask() {
     // Wait for the GPU to finish with all resources for this task.
     SyncToGPU(next_task_index);
 
-    // Reset command pools to beginning since we can re-use the memory now
     device.resetCommandPool(command_pool.get());
-
-    vk::CommandBufferBeginInfo begin_info(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-
-    // Enable commands to be recorded to the command buffer again.
-    task.command_buffer.begin(begin_info);
+    task.command_buffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
     // Reset upload command buffer state
     current_task = next_task_index;
     task.task_id = current_task_id++;
+    task.current_offset = 0;
 }
 
 std::unique_ptr<VKTaskScheduler> g_vk_task_scheduler;

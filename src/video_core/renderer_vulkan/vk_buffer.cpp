@@ -12,54 +12,45 @@
 namespace Vulkan {
 
 VKBuffer::~VKBuffer() {
-    if (memory != nullptr) {
-        g_vk_instace->GetDevice().unmapMemory(buffer_memory);
-    }
-
-    auto deleter = [this]() {
-        if (buffer) {
-            auto& device = g_vk_instace->GetDevice();
-            device.destroyBuffer(buffer);
-            device.freeMemory(buffer_memory);
-            device.destroyBufferView(buffer_view);
+    if (buffer) {
+        if (memory != nullptr) {
+            g_vk_instace->GetDevice().unmapMemory(buffer_memory);
         }
-    };
 
-    g_vk_task_scheduler->Schedule(deleter);
+        auto deleter = [this]() {
+            auto& device = g_vk_instace->GetDevice();
+                device.destroyBuffer(buffer);
+                device.freeMemory(buffer_memory);
+        };
+
+        g_vk_task_scheduler->Schedule(deleter);
+    }
 }
 
-void VKBuffer::Create(u32 byte_count, vk::MemoryPropertyFlags properties, vk::BufferUsageFlags usage,
-                      vk::Format view_format) {
+void VKBuffer::Create(const VKBuffer::Info& info) {
     auto& device = g_vk_instace->GetDevice();
-    size = byte_count;
+    buffer_info = info;
 
-    vk::BufferCreateInfo bufferInfo({}, byte_count, usage);
+    vk::BufferCreateInfo bufferInfo({}, info.size, info.usage);
     buffer = device.createBuffer(bufferInfo);
 
     auto mem_requirements = device.getBufferMemoryRequirements(buffer);
 
-    auto memory_type_index = FindMemoryType(mem_requirements.memoryTypeBits, properties);
+    auto memory_type_index = FindMemoryType(mem_requirements.memoryTypeBits, info.properties);
     vk::MemoryAllocateInfo alloc_info(mem_requirements.size, memory_type_index);
 
     buffer_memory = device.allocateMemory(alloc_info);
     device.bindBufferMemory(buffer, buffer_memory, 0);
 
     // Optionally map the buffer to CPU memory
-    if (properties & vk::MemoryPropertyFlagBits::eHostVisible) {
-        memory = device.mapMemory(buffer_memory, 0, byte_count);
-    }
-
-    // Create buffer view for texel buffers
-    if (usage & vk::BufferUsageFlagBits::eStorageTexelBuffer ||
-        usage & vk::BufferUsageFlagBits::eUniformTexelBuffer) {
-        vk::BufferViewCreateInfo view_info({}, buffer, view_format, 0, byte_count);
-        buffer_view = device.createBufferView(view_info);
+    if (info.properties & vk::MemoryPropertyFlagBits::eHostVisible) {
+        memory = device.mapMemory(buffer_memory, 0, info.size);
     }
 }
 
-void VKBuffer::CopyBuffer(VKBuffer& src_buffer, VKBuffer& dst_buffer, const vk::BufferCopy& region) {
+void VKBuffer::CopyBuffer(VKBuffer* src_buffer, VKBuffer* dst_buffer, vk::BufferCopy region) {
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    command_buffer.copyBuffer(src_buffer.buffer, dst_buffer.buffer, region);
+    command_buffer.copyBuffer(src_buffer->buffer, dst_buffer->buffer, region);
 }
 
 u32 VKBuffer::FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties) {
@@ -74,21 +65,6 @@ u32 VKBuffer::FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties
 
     LOG_CRITICAL(Render_Vulkan, "Failed to find suitable memory type.");
     UNREACHABLE();
-}
-
-void StagingBuffer::Create(u32 size) {
-    buffer.Create(size, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-                  vk::BufferUsageFlagBits::eTransferSrc);
-}
-
-u8* StagingBuffer::Request(u32 bytes) {
-    // Check if there is enough space left
-    if (buffer.GetSize() - end_offset >= bytes) {
-        u8* ptr = buffer.GetHostPointer() + end_offset;
-        end_offset += bytes;
-
-        // Schedule the memory to be freed
-    }
 }
 
 }

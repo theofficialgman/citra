@@ -17,19 +17,20 @@
 #include "common/blocking_loop.h"
 #include "common/threadsafe_queue.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_buffer.h"
 
 namespace Vulkan {
 
-/// Number of tasks that can be submitted concurrently. This allows the host
-/// to start recording the next frame while the GPU is working on the
-/// current one. Larger values can be used with caution, as they can cause
-/// frame latency if the CPU is too far ahead of the GPU
 constexpr u32 CONCURRENT_TASK_COUNT = 2;
+constexpr u32 STAGING_BUFFER_SIZE = 16 * 1024 * 1024;
 
 class VKSwapChain;
 
-/// Wrapper class around command buffer execution.
-/// Handles synchronization and submission of command buffers
+/// Wrapper class around command buffer execution. Handles an arbitrary
+/// number of tasks that can be submitted concurrently. This allows the host
+/// to start recording the next frame while the GPU is working on the
+/// current one. Larger values can be used with caution, as they can cause
+/// frame latency if the CPU is too far ahead of the GPU
 class VKTaskScheduler {
 public:
     explicit VKTaskScheduler(VKSwapChain* swapchain);
@@ -39,7 +40,9 @@ public:
     bool Create();
 
     /// Retrieve either of the current frame's command buffers
-    vk::CommandBuffer GetCommandBuffer();
+    vk::CommandBuffer GetCommandBuffer() const { return tasks[current_task].command_buffer; }
+    VKBuffer& GetStaging() { return tasks[current_task].staging; }
+    std::tuple<u8*, u32> RequestStaging(u32 size);
 
     /// Returns the task id that the CPU is recording
     u64 GetCPUTick() const { return current_task_id; }
@@ -62,9 +65,11 @@ private:
 
 private:
     struct Task {
+        u64 task_id{};
         std::vector<std::function<void()>> cleanups;
         vk::CommandBuffer command_buffer;
-        u64 task_id = 0;
+        VKBuffer staging;
+        u32 current_offset{};
     };
 
     vk::UniqueSemaphore timeline;
