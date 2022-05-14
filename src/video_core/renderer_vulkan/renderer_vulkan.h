@@ -62,8 +62,7 @@ private:
     void RenderScreenshot();
     void RenderToMailbox(const Layout::FramebufferLayout& layout,
                          std::unique_ptr<Frontend::TextureMailbox>& mailbox, bool flipped);
-    void ConfigureFramebufferTexture(TextureInfo& texture,
-                                     const GPU::Regs::FramebufferConfig& framebuffer);
+    void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
     void DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h);
@@ -78,7 +77,7 @@ private:
     void LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& framebuffer,
                             ScreenInfo& screen_info, bool right_eye);
     // Fills active OpenGL texture with the given RGB color.
-    void LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, const TextureInfo& texture);
+    void LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, const ScreenInfo& screen);
 
     VulkanState state;
 

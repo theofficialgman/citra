@@ -52,10 +52,16 @@ public:
     vk::UniqueDevice device;
 
     // Extensions and features
-    std::vector<const char*> device_extensions;
-    vk::PhysicalDeviceFeatures device_features{};
-    vk::PhysicalDeviceVulkan12Features new_features{};
+    std::vector<const char*> extensions;
+    vk::PhysicalDeviceFeatures2 features{};
     vk::PhysicalDeviceLimits device_limits;
+
+    // Features per vulkan version
+    vk::PhysicalDeviceFeatures vk_features{};
+    vk::PhysicalDeviceVulkan12Features vk12_features{};
+    vk::PhysicalDeviceVulkan13Features vk13_features{};
+    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state{};
+    vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2{};
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;

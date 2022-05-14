@@ -113,55 +113,67 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
 
 bool VKInstance::FindFeatures()
 {
-    auto available_features = physical_device.getFeatures();
+    auto available = physical_device.getFeatures();
 
     // Not having geometry shaders or wide lines will cause issues with rendering.
-    if (!available_features.geometryShader && !available_features.wideLines) {
+    if (!available.geometryShader && !available.wideLines) {
         LOG_WARNING(Render_Vulkan, "Geometry shaders not availabe! Rendering will be limited");
     }
 
     // Enable some common features other emulators like Dolphin use
-    device_features.dualSrcBlend = available_features.dualSrcBlend;
-    device_features.geometryShader = available_features.geometryShader;
-    device_features.samplerAnisotropy = available_features.samplerAnisotropy;
-    device_features.logicOp = available_features.logicOp;
-    device_features.fragmentStoresAndAtomics = available_features.fragmentStoresAndAtomics;
-    device_features.sampleRateShading = available_features.sampleRateShading;
-    device_features.largePoints = available_features.largePoints;
-    device_features.shaderStorageImageMultisample = available_features.shaderStorageImageMultisample;
-    device_features.occlusionQueryPrecise = available_features.occlusionQueryPrecise;
-    device_features.shaderClipDistance = available_features.shaderClipDistance;
-    device_features.depthClamp = available_features.depthClamp;
-    device_features.textureCompressionBC = available_features.textureCompressionBC;
+    vk_features.dualSrcBlend = available.dualSrcBlend;
+    vk_features.geometryShader = available.geometryShader;
+    vk_features.samplerAnisotropy = available.samplerAnisotropy;
+    vk_features.logicOp = available.logicOp;
+    vk_features.fragmentStoresAndAtomics = available.fragmentStoresAndAtomics;
+    vk_features.sampleRateShading = available.sampleRateShading;
+    vk_features.largePoints = available.largePoints;
+    vk_features.shaderStorageImageMultisample = available.shaderStorageImageMultisample;
+    vk_features.occlusionQueryPrecise = available.occlusionQueryPrecise;
+    vk_features.shaderClipDistance = available.shaderClipDistance;
+    vk_features.depthClamp = available.depthClamp;
+    vk_features.textureCompressionBC = available.textureCompressionBC;
 
-    // Enable timeline semaphore support
-    new_features.timelineSemaphore = true;
+    // Enable newer Vulkan features
+    vk12_features.timelineSemaphore = true;
+    vk13_features.dynamicRendering = true;
+    dynamic_state.extendedDynamicState = true;
+    dynamic_state2.extendedDynamicState2 = true;
+    dynamic_state2.extendedDynamicState2LogicOp = true;
+    dynamic_state2.extendedDynamicState2PatchControlPoints = true;
+
+    // Include features in device creation
+    features.setFeatures(vk_features);
+    features.setPNext(&vk12_features);
+    vk12_features.setPNext(&vk13_features);
+    vk13_features.setPNext(&dynamic_state);
+    dynamic_state.setPNext(&dynamic_state2);
 
     return true;
 }
 
 bool VKInstance::FindExtensions()
 {
-    auto extensions = physical_device.enumerateDeviceExtensionProperties();
-    if (extensions.empty()) {
+    auto available = physical_device.enumerateDeviceExtensionProperties();
+    if (available.empty()) {
         LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
         return false;
     }
 
     // List available device extensions
-    for (const auto& prop : extensions) {
+    for (const auto& prop : available) {
         LOG_INFO(Render_Vulkan, "Vulkan extension: {}", prop.extensionName);
     }
 
     // Helper lambda for adding extensions
     auto AddExtension = [&](const char* name, bool required) {
-        auto result = std::find_if(extensions.begin(), extensions.end(), [&](const auto& prop) {
+        auto result = std::find_if(available.begin(), available.end(), [&](const auto& prop) {
             return !std::strcmp(name, prop.extensionName);
         });
 
-        if (result != extensions.end()) {
+        if (result != available.end()) {
             LOG_INFO(Render_Vulkan, "Enabling extension: {}", name);
-            device_extensions.push_back(name);
+            extensions.push_back(name);
             return true;
         }
 
@@ -172,12 +184,13 @@ bool VKInstance::FindExtensions()
         return false;
     };
 
-    // The swapchain extension is required
-    if (!AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true)) {
+    // Add required extensions
+    if (!AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true) ||
+        !AddExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, true) ||
+        !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, true) ||
+        !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, true)) {
         return false;
     }
-
-    // Add more extensions in the future...
 
     return true;
 }

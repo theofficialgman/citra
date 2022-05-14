@@ -6,6 +6,9 @@
 
 #include <array>
 #include <variant>
+#include <xxhash.h>
+#include "video_core/regs.h"
+#include "video_core/renderer_vulkan/vk_shader_state.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 
 namespace Vulkan {
@@ -87,6 +90,7 @@ public:
     void PushRenderTargets(VKTexture* color, VKTexture* depth_stencil);
     void PopRenderTargets();
     void SetRenderArea(vk::Rect2D render_area);
+    void SetFragmentShader(const Pica::Regs& config);
     void BeginRendering();
     void EndRendering();
 
@@ -102,8 +106,8 @@ public:
 
 private:
     void UpdateDescriptorSet();
-    void GetPipeline();
-    void CompileTrivialShader();
+    vk::Pipeline MakePipeline(vk::ShaderModule fragment);
+    vk::ShaderModule MakeShader(const std::string& source, vk::ShaderStageFlagBits stage);
 
 private:
     struct Binding {
@@ -145,13 +149,14 @@ private:
     vk::StencilOp fail_op, pass_op, depth_fail_op;
     vk::CompareOp compare_op;
 
-    struct {
-        vk::PipelineColorBlendAttachmentState blend;
-        vk::PipelineDepthStencilStateCreateInfo depth_stencil;
-    } static_state;
-
     // Pipeline cache
     vk::UniqueShaderModule trivial_vertex_shader;
+    vk::UniquePipelineLayout pipeline_layout;
+    std::vector<vk::DescriptorSetLayout> descriptor_layouts;
+    PipelineCacheKey pipeline_key;
+
+    std::unordered_map<PicaFSConfig, vk::UniqueShaderModule> fragment_shaders;
+    std::unordered_map<PipelineCacheKey, vk::UniquePipeline> pipelines;
 };
 
 } // namespace Vulkan

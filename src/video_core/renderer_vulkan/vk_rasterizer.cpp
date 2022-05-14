@@ -314,13 +314,6 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         uniform_block_data.dirty = true;
     }
 
-    bool need_duplicate_texture = false;
-    auto CheckBarrier = [&need_duplicate_texture, &color_surface](VKTexture* handle) {
-        if (color_surface && &color_surface->texture == handle) {
-            need_duplicate_texture = true;
-        }
-    };
-
     // Sync and bind the texture surfaces
     const auto pica_textures = regs.texturing.GetTextures();
     for (unsigned texture_index = 0; texture_index < pica_textures.size(); ++texture_index) {
@@ -367,11 +360,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
                        vk::Extent2D(draw_rect.GetHeight(), draw_rect.GetHeight()));
     state.SetScissor(scissor);
 
-    // Draw the vertex batch
-    bool succeeded = true;
-    shader_program_manager->UseTrivialVertexShader();
-    shader_program_manager->UseTrivialGeometryShader();
-    shader_program_manager->ApplyTo(state);
+    // Apply pending state
     state.Apply();
 
     std::size_t max_vertices = 3 * (VERTEX_BUFFER_SIZE / (3 * sizeof(HardwareVertex)));
@@ -431,7 +420,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
                                    depth_surface);
     }
 
-    return succeeded;
+    return true;
 }
 
 void RasterizerVulkan::NotifyPicaRegisterChanged(u32 id) {
@@ -1141,11 +1130,11 @@ bool RasterizerVulkan::AccelerateDisplay(const GPU::Regs::FramebufferConfig& con
 
 
 void RasterizerVulkan::SetShader() {
-    shader_program_manager->UseFragmentShader(Pica::g_state.regs);
+    state.SetFragmentShader(Pica::g_state.regs);
 }
 
 void RasterizerVulkan::SyncClipEnabled() {
-    state.clip_distance[1] = Pica::g_state.regs.rasterizer.clip_enable != 0;
+    //state.clip_distance[1] = Pica::g_state.regs.rasterizer.clip_enable != 0;
 }
 
 void RasterizerVulkan::SyncClipCoef() {

@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <vulkan/vulkan.hpp>
 #include "common/hash.h"
 #include "video_core/regs.h"
 #include "video_core/shader/shader.h"
@@ -198,17 +199,14 @@ struct PicaFixedGSConfig : Common::HashableStruct<PicaGSConfigCommonRaw> {
     }
 };
 
-/**
- * This struct combines the vertex and fragment states for a complete pipeline cache key
- */
-struct VKPipelineCacheKey {
-    VKPipelineCacheKey(const Pica::Regs& regs, Pica::Shader::ShaderSetup& setup) :
-    vertex_config(regs.vs, setup), geometry_config(regs),
-    fragment_config(PicaFSConfig::BuildFromRegs(regs)) {}
-
-    PicaVSConfig vertex_config;
-    PicaFixedGSConfig geometry_config;
+struct PipelineCacheKey {
+    vk::PipelineColorBlendAttachmentState blend_config;
     PicaFSConfig fragment_config;
+
+    u64 Hash() const {
+        const u64 hash = Common::CityHash64(reinterpret_cast<const char*>(this), sizeof(PipelineCacheKey));
+        return static_cast<size_t>(hash);
+    }
 };
 
 } // namespace Vulkan
@@ -231,6 +229,13 @@ struct hash<Vulkan::PicaVSConfig> {
 template <>
 struct hash<Vulkan::PicaFixedGSConfig> {
     std::size_t operator()(const Vulkan::PicaFixedGSConfig& k) const noexcept {
+        return k.Hash();
+    }
+};
+
+template <>
+struct hash<Vulkan::PipelineCacheKey> {
+    size_t operator()(const Vulkan::PipelineCacheKey& k) const noexcept {
         return k.Hash();
     }
 };

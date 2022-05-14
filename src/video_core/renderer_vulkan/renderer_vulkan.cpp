@@ -29,23 +29,11 @@
 #include "core/tracer/recorder.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/renderer_opengl/gl_state.h"
-#include "video_core/renderer_opengl/gl_vars.h"
-#include "video_core/renderer_opengl/post_processing_opengl.h"
-#include "video_core/renderer_opengl/renderer_opengl.h"
+#include "video_core/renderer_vulkan/vk_state.h"
+#include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/video_core.h"
 
 namespace Vulkan {
-
-// If the size of this is too small, it ends up creating a soft cap on FPS as the renderer will have
-// to wait on available presentation frames. There doesn't seem to be much of a downside to a larger
-// number but 9 swap textures at 60FPS presentation allows for 800% speed so thats probably fine
-#ifdef ANDROID
-// Reduce the size of swap_chain, since the UI only allows upto 200% speed.
-constexpr std::size_t SWAP_CHAIN_SIZE = 6;
-#else
-constexpr std::size_t SWAP_CHAIN_SIZE = 9;
-#endif
 
 class OGLTextureMailboxException : public std::runtime_error {
 public:
@@ -371,13 +359,13 @@ RendererVulkan::RendererVulkan(Frontend::EmuWindow& window)
     frame_dumper.mailbox = std::make_unique<OGLVideoDumpingMailbox>();
 }
 
-RendererOpenGL::~RendererOpenGL() = default;
+RendererVulkan::~RendererVulkan() = default;
 
 MICROPROFILE_DEFINE(OpenGL_RenderFrame, "OpenGL", "Render Frame", MP_RGB(128, 128, 64));
 MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128, 128, 128));
 
 /// Swap buffers (render frame)
-void RendererOpenGL::SwapBuffers() {
+void RendererVulkan::SwapBuffers() {
     // Maintain the rasterizer's state as a priority
     OpenGLState prev_state = OpenGLState::GetCurState();
     state.Apply();
@@ -415,7 +403,7 @@ void RendererOpenGL::SwapBuffers() {
     }
 }
 
-void RendererOpenGL::RenderScreenshot() {
+void RendererVulkan::RenderScreenshot() {
     if (VideoCore::g_renderer_screenshot_requested) {
         // Draw this frame to the screenshot framebuffer
         screenshot_framebuffer.Create();
@@ -449,7 +437,7 @@ void RendererOpenGL::RenderScreenshot() {
     }
 }
 
-void RendererOpenGL::PrepareRendertarget() {
+void RendererVulkan::PrepareRendertarget() {
     for (int i : {0, 1, 2}) {
         int fb_id = i == 2 ? 1 : 0;
         const auto& framebuffer = GPU::g_regs.framebuffer_config[fb_id];
@@ -486,7 +474,7 @@ void RendererOpenGL::PrepareRendertarget() {
     }
 }
 
-void RendererOpenGL::RenderToMailbox(const Layout::FramebufferLayout& layout,
+void RendererVulkan::RenderToMailbox(const Layout::FramebufferLayout& layout,
                                      std::unique_ptr<Frontend::TextureMailbox>& mailbox,
                                      bool flipped) {
 
@@ -540,7 +528,7 @@ void RendererOpenGL::RenderToMailbox(const Layout::FramebufferLayout& layout,
 /**
  * Loads framebuffer from emulated memory into the active OpenGL texture.
  */
-void RendererOpenGL::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& framebuffer,
+void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& framebuffer,
                                         ScreenInfo& screen_info, bool right_eye) {
 
     if (framebuffer.address_right1 == 0 || framebuffer.address_right2 == 0)
@@ -601,7 +589,7 @@ void RendererOpenGL::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
  * Fills active OpenGL texture with the given RGB color. Since the color is solid, the texture can
  * be 1x1 but will stretch across whatever it's rendered on.
  */
-void RendererOpenGL::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b,
+void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b,
                                                 const TextureInfo& texture) {
     state.texture_units[0].texture_2d = texture.resource.handle;
     state.Apply();
@@ -619,7 +607,7 @@ void RendererOpenGL::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color
 /**
  * Initializes the OpenGL state and creates persistent objects.
  */
-void RendererOpenGL::InitOpenGLObjects() {
+void RendererVulkan::InitOpenGLObjects() {
     glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
                  0.0f);
 
@@ -672,7 +660,7 @@ void RendererOpenGL::InitOpenGLObjects() {
     state.Apply();
 }
 
-void RendererOpenGL::ReloadSampler() {
+void RendererVulkan::ReloadSampler() {
     glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MIN_FILTER,
                         Settings::values.filter_mode ? GL_LINEAR : GL_NEAREST);
     glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MAG_FILTER,
@@ -681,7 +669,7 @@ void RendererOpenGL::ReloadSampler() {
     glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-void RendererOpenGL::ReloadShader() {
+void RendererVulkan::ReloadShader() {
     // Link shaders and get variable locations
     std::string shader_data;
     if (GLES) {
@@ -754,7 +742,7 @@ void RendererOpenGL::ReloadShader() {
     attrib_tex_coord = glGetAttribLocation(shader.handle, "vert_tex_coord");
 }
 
-void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
+void RendererVulkan::ConfigureFramebufferTexture(TextureInfo& texture,
                                                  const GPU::Regs::FramebufferConfig& framebuffer) {
     GPU::Regs::PixelFormat format = framebuffer.color_format;
     GLint internal_format;
@@ -819,7 +807,7 @@ void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
  * Draws a single texture to the emulator window, rotating the texture to correct for the 3DS's LCD
  * rotation.
  */
-void RendererOpenGL::DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y,
+void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y,
                                              float w, float h) {
     const auto& texcoords = screen_info.display_texcoords;
 
@@ -851,7 +839,7 @@ void RendererOpenGL::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
     state.Apply();
 }
 
-void RendererOpenGL::DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w,
+void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w,
                                       float h) {
     const auto& texcoords = screen_info.display_texcoords;
 
@@ -884,7 +872,7 @@ void RendererOpenGL::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
  * Draws a single texture to the emulator window, rotating the texture to correct for the 3DS's LCD
  * rotation.
  */
-void RendererOpenGL::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
+void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
                                                    const ScreenInfo& screen_info_r, float x,
                                                    float y, float w, float h) {
     const auto& texcoords = screen_info_l.display_texcoords;
@@ -919,7 +907,7 @@ void RendererOpenGL::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info
     state.Apply();
 }
 
-void RendererOpenGL::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
+void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
                                             const ScreenInfo& screen_info_r, float x, float y,
                                             float w, float h) {
     const auto& texcoords = screen_info_l.display_texcoords;
@@ -957,7 +945,7 @@ void RendererOpenGL::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
 /**
  * Draws the emulated screens to the emulator window.
  */
-void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool flipped) {
+void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool flipped) {
     if (VideoCore::g_renderer_bg_color_update_requested.exchange(false)) {
         // Update background color before drawing
         glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
@@ -1123,7 +1111,7 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     }
 }
 
-void RendererOpenGL::TryPresent(int timeout_ms) {
+void RendererVulkan::TryPresent(int timeout_ms) {
     const auto& layout = render_window.GetFramebufferLayout();
     auto frame = render_window.mailbox->TryGetPresentFrame(timeout_ms);
     if (!frame) {
@@ -1164,9 +1152,9 @@ void RendererOpenGL::TryPresent(int timeout_ms) {
 }
 
 /// Updates the framerate
-void RendererOpenGL::UpdateFramerate() {}
+void RendererVulkan::UpdateFramerate() {}
 
-void RendererOpenGL::PrepareVideoDumping() {
+void RendererVulkan::PrepareVideoDumping() {
     auto* mailbox = static_cast<OGLVideoDumpingMailbox*>(frame_dumper.mailbox.get());
     {
         std::unique_lock lock(mailbox->swap_chain_lock);
@@ -1175,7 +1163,7 @@ void RendererOpenGL::PrepareVideoDumping() {
     frame_dumper.StartDumping();
 }
 
-void RendererOpenGL::CleanupVideoDumping() {
+void RendererVulkan::CleanupVideoDumping() {
     frame_dumper.StopDumping();
     auto* mailbox = static_cast<OGLVideoDumpingMailbox*>(frame_dumper.mailbox.get());
     {
@@ -1240,7 +1228,7 @@ static void APIENTRY DebugHandler(GLenum source, GLenum type, GLuint id, GLenum 
 }
 
 /// Initialize the renderer
-VideoCore::ResultStatus RendererOpenGL::Init() {
+VideoCore::ResultStatus RendererVulkan::Init() {
 #ifndef ANDROID
     if (!gladLoadGL()) {
         return VideoCore::ResultStatus::ErrorBelowGL33;
@@ -1284,6 +1272,6 @@ VideoCore::ResultStatus RendererOpenGL::Init() {
 }
 
 /// Shutdown the renderer
-void RendererOpenGL::ShutDown() {}
+void RendererVulkan::ShutDown() {}
 
 } // namespace OpenGL
