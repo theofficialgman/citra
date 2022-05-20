@@ -72,7 +72,7 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     static constexpr float queue_priorities[] = { 1.0f };
 
     vk::DeviceCreateInfo device_info;
-    device_info.setPEnabledExtensionNames(device_extensions);
+    device_info.setPEnabledExtensionNames(extensions);
 
     // Create queue create info structs
     if (graphics_queue_family_index != present_queue_family_index) {
@@ -92,8 +92,7 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     }
 
     // Set device features
-    device_info.setPEnabledFeatures(&device_features);
-    device_info.setPNext(&new_features);
+    device_info.setPEnabledFeatures(&vk_features);
 
     // Enable debug layer on debug builds
     if (validation_enabled) {

@@ -31,194 +31,103 @@
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/video_core.h"
+
+// Include these late to avoid polluting previous headers
+#ifdef _WIN32
+#include <windows.h>
+// ensure include order
+#include <vulkan/vulkan_win32.h>
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+#include <X11/Xlib.h>
+#include <vulkan/vulkan_wayland.h>
+#include <vulkan/vulkan_xlib.h>
+#endif
 
 namespace Vulkan {
 
-class OGLTextureMailboxException : public std::runtime_error {
-public:
-    using std::runtime_error::runtime_error;
-};
+vk::SurfaceKHR CreateSurface(const VkInstance& instance,
+                             const Frontend::EmuWindow& emu_window) {
+    const auto& window_info = emu_window.GetWindowInfo();
+    VkSurfaceKHR unsafe_surface = nullptr;
 
-class OGLTextureMailbox : public Frontend::TextureMailbox {
-public:
-    std::mutex swap_chain_lock;
-    std::condition_variable free_cv;
-    std::condition_variable present_cv;
-    std::array<Frontend::Frame, SWAP_CHAIN_SIZE> swap_chain{};
-    std::queue<Frontend::Frame*> free_queue{};
-    std::deque<Frontend::Frame*> present_queue{};
-    Frontend::Frame* previous_frame = nullptr;
-
-    OGLTextureMailbox() {
-        for (auto& frame : swap_chain) {
-            free_queue.push(&frame);
+#ifdef _WIN32
+    if (window_info.type == Core::Frontend::WindowSystemType::Windows) {
+        const HWND hWnd = static_cast<HWND>(window_info.render_surface);
+        const VkWin32SurfaceCreateInfoKHR win32_ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+                                                   nullptr, 0, nullptr, hWnd};
+        if (vkCreateWin32SurfaceKHR(instance, &win32_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
+            LOG_ERROR(Render_Vulkan, "Failed to initialize Win32 surface");
+            UNREACHABLE();
+        }
+    }
+#endif
+#if !defined(_WIN32) && !defined(__APPLE__)
+    if (window_info.type == Frontend::WindowSystemType::X11) {
+        const VkXlibSurfaceCreateInfoKHR xlib_ci{
+            VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR, nullptr, 0,
+            static_cast<Display*>(window_info.display_connection),
+            reinterpret_cast<Window>(window_info.render_surface)};
+        if (vkCreateXlibSurfaceKHR(instance, &xlib_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
+            LOG_ERROR(Render_Vulkan, "Failed to initialize Xlib surface");
+            UNREACHABLE();
         }
     }
 
-    ~OGLTextureMailbox() override {
-        // lock the mutex and clear out the present and free_queues and notify any people who are
-        // blocked to prevent deadlock on shutdown
-        std::scoped_lock lock(swap_chain_lock);
-        std::queue<Frontend::Frame*>().swap(free_queue);
-        present_queue.clear();
-        present_cv.notify_all();
-        free_cv.notify_all();
-    }
-
-    void ReloadPresentFrame(Frontend::Frame* frame, u32 height, u32 width) override {
-        frame->present.Release();
-        frame->present.Create();
-        GLint previous_draw_fbo{};
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw_fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, frame->present.handle);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                  frame->color.handle);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_CRITICAL(Render_OpenGL, "Failed to recreate present FBO!");
+    if (window_info.type == Frontend::WindowSystemType::Wayland) {
+        const VkWaylandSurfaceCreateInfoKHR wayland_ci{
+            VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR, nullptr, 0,
+            static_cast<wl_display*>(window_info.display_connection),
+            static_cast<wl_surface*>(window_info.render_surface)};
+        if (vkCreateWaylandSurfaceKHR(instance, &wayland_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
+            LOG_ERROR(Render_Vulkan, "Failed to initialize Wayland surface");
+            UNREACHABLE();
         }
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, previous_draw_fbo);
-        frame->color_reloaded = false;
+    }
+#endif
+    if (!unsafe_surface) {
+        LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
+        UNREACHABLE();
     }
 
-    void ReloadRenderFrame(Frontend::Frame* frame, u32 width, u32 height) override {
-        OpenGLState prev_state = OpenGLState::GetCurState();
-        OpenGLState state = OpenGLState::GetCurState();
+    return vk::SurfaceKHR(unsafe_surface);
+}
 
-        // Recreate the color texture attachment
-        frame->color.Release();
-        frame->color.Create();
-        state.renderbuffer = frame->color.handle;
-        state.Apply();
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, width, height);
-
-        // Recreate the FBO for the render target
-        frame->render.Release();
-        frame->render.Create();
-        state.draw.read_framebuffer = frame->render.handle;
-        state.draw.draw_framebuffer = frame->render.handle;
-        state.Apply();
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                  frame->color.handle);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_CRITICAL(Render_OpenGL, "Failed to recreate render FBO!");
-        }
-        prev_state.Apply();
-        frame->width = width;
-        frame->height = height;
-        frame->color_reloaded = true;
+std::vector<const char*> RequiredExtensions(Frontend::WindowSystemType window_type, bool enable_debug_utils) {
+    std::vector<const char*> extensions;
+    extensions.reserve(6);
+    switch (window_type) {
+    case Frontend::WindowSystemType::Headless:
+        break;
+#ifdef _WIN32
+    case Frontend::WindowSystemType::Windows:
+        extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+        break;
+#endif
+#if !defined(_WIN32) && !defined(__APPLE__)
+    case Frontend::WindowSystemType::X11:
+        extensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+        break;
+    case Frontend::WindowSystemType::Wayland:
+        extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+        break;
+#endif
+    default:
+        LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
+        break;
     }
-
-    Frontend::Frame* GetRenderFrame() override {
-        std::unique_lock<std::mutex> lock(swap_chain_lock);
-
-        // If theres no free frames, we will reuse the oldest render frame
-        if (free_queue.empty()) {
-            auto frame = present_queue.back();
-            present_queue.pop_back();
-            return frame;
-        }
-
-        Frontend::Frame* frame = free_queue.front();
-        free_queue.pop();
-        return frame;
+    if (window_type != Frontend::WindowSystemType::Headless) {
+        extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
     }
-
-    void ReleaseRenderFrame(Frontend::Frame* frame) override {
-        std::unique_lock<std::mutex> lock(swap_chain_lock);
-        present_queue.push_front(frame);
-        present_cv.notify_one();
+    if (enable_debug_utils) {
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     }
-
-    // This is virtual as it is to be overriden in OGLVideoDumpingMailbox below.
-    virtual void LoadPresentFrame() {
-        // free the previous frame and add it back to the free queue
-        if (previous_frame) {
-            free_queue.push(previous_frame);
-            free_cv.notify_one();
-        }
-
-        // the newest entries are pushed to the front of the queue
-        Frontend::Frame* frame = present_queue.front();
-        present_queue.pop_front();
-        // remove all old entries from the present queue and move them back to the free_queue
-        for (auto f : present_queue) {
-            free_queue.push(f);
-        }
-        present_queue.clear();
-        previous_frame = frame;
-    }
-
-    Frontend::Frame* TryGetPresentFrame(int timeout_ms) override {
-        std::unique_lock<std::mutex> lock(swap_chain_lock);
-        // wait for new entries in the present_queue
-        present_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                            [&] { return !present_queue.empty(); });
-        if (present_queue.empty()) {
-            // timed out waiting for a frame to draw so return the previous frame
-            return previous_frame;
-        }
-
-        LoadPresentFrame();
-        return previous_frame;
-    }
-};
-
-/// This mailbox is different in that it will never discard rendered frames
-class OGLVideoDumpingMailbox : public OGLTextureMailbox {
-public:
-    bool quit = false;
-
-    Frontend::Frame* GetRenderFrame() override {
-        std::unique_lock<std::mutex> lock(swap_chain_lock);
-
-        // If theres no free frames, we will wait until one shows up
-        if (free_queue.empty()) {
-            free_cv.wait(lock, [&] { return (!free_queue.empty() || quit); });
-            if (quit) {
-                throw OGLTextureMailboxException("VideoDumpingMailbox quitting");
-            }
-
-            if (free_queue.empty()) {
-                LOG_CRITICAL(Render_OpenGL, "Could not get free frame");
-                return nullptr;
-            }
-        }
-
-        Frontend::Frame* frame = free_queue.front();
-        free_queue.pop();
-        return frame;
-    }
-
-    void LoadPresentFrame() override {
-        // free the previous frame and add it back to the free queue
-        if (previous_frame) {
-            free_queue.push(previous_frame);
-            free_cv.notify_one();
-        }
-
-        Frontend::Frame* frame = present_queue.back();
-        present_queue.pop_back();
-        previous_frame = frame;
-
-        // Do not remove entries from the present_queue, as video dumping would require
-        // that we preserve all frames
-    }
-
-    Frontend::Frame* TryGetPresentFrame(int timeout_ms) override {
-        std::unique_lock<std::mutex> lock(swap_chain_lock);
-        // wait for new entries in the present_queue
-        present_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                            [&] { return !present_queue.empty(); });
-        if (present_queue.empty()) {
-            // timed out waiting for a frame
-            return nullptr;
-        }
-
-        LoadPresentFrame();
-        return previous_frame;
-    }
-};
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    return extensions;
+}
 
 static const char vertex_shader[] = R"(
 in vec2 vert_position;
@@ -353,13 +262,11 @@ static std::array<GLfloat, 3 * 2> MakeOrthographicMatrix(const float width, cons
 }
 
 RendererVulkan::RendererVulkan(Frontend::EmuWindow& window)
-    : RendererBase{window}, frame_dumper(Core::System::GetInstance().VideoDumper(), window) {
+    : RendererBase{window} {
 
-    window.mailbox = std::make_unique<OGLTextureMailbox>();
-    frame_dumper.mailbox = std::make_unique<OGLVideoDumpingMailbox>();
+    window.mailbox = nullptr;
+    swapchain = std::make_unique<VKSwapChain>(CreateSurface(nullptr, window));
 }
-
-RendererVulkan::~RendererVulkan() = default;
 
 MICROPROFILE_DEFINE(OpenGL_RenderFrame, "OpenGL", "Render Frame", MP_RGB(128, 128, 64));
 MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128, 128, 128));
@@ -372,18 +279,8 @@ void RendererVulkan::SwapBuffers() {
 
     PrepareRendertarget();
 
-    RenderScreenshot();
-
     const auto& layout = render_window.GetFramebufferLayout();
     RenderToMailbox(layout, render_window.mailbox, false);
-
-    if (frame_dumper.IsDumping()) {
-        try {
-            RenderToMailbox(frame_dumper.GetLayout(), frame_dumper.mailbox, true);
-        } catch (const OGLTextureMailboxException& exception) {
-            LOG_DEBUG(Render_OpenGL, "Frame dumper exception caught: {}", exception.what());
-        }
-    }
 
     m_current_frame++;
 
@@ -403,42 +300,8 @@ void RendererVulkan::SwapBuffers() {
     }
 }
 
-void RendererVulkan::RenderScreenshot() {
-    if (VideoCore::g_renderer_screenshot_requested) {
-        // Draw this frame to the screenshot framebuffer
-        screenshot_framebuffer.Create();
-        GLuint old_read_fb = state.draw.read_framebuffer;
-        GLuint old_draw_fb = state.draw.draw_framebuffer;
-        state.draw.read_framebuffer = state.draw.draw_framebuffer = screenshot_framebuffer.handle;
-        state.Apply();
-
-        Layout::FramebufferLayout layout{VideoCore::g_screenshot_framebuffer_layout};
-
-        GLuint renderbuffer;
-        glGenRenderbuffers(1, &renderbuffer);
-        glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGB8, layout.width, layout.height);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                  renderbuffer);
-
-        DrawScreens(layout, false);
-
-        glReadPixels(0, 0, layout.width, layout.height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
-                     VideoCore::g_screenshot_bits);
-
-        screenshot_framebuffer.Release();
-        state.draw.read_framebuffer = old_read_fb;
-        state.draw.draw_framebuffer = old_draw_fb;
-        state.Apply();
-        glDeleteRenderbuffers(1, &renderbuffer);
-
-        VideoCore::g_screenshot_complete_callback();
-        VideoCore::g_renderer_screenshot_requested = false;
-    }
-}
-
 void RendererVulkan::PrepareRendertarget() {
-    for (int i : {0, 1, 2}) {
+    for (int i = 0; i < 3; i++) {
         int fb_id = i == 2 ? 1 : 0;
         const auto& framebuffer = GPU::g_regs.framebuffer_config[fb_id];
 
@@ -450,21 +313,18 @@ void RendererVulkan::PrepareRendertarget() {
         LCD::Read(color_fill.raw, lcd_color_addr);
 
         if (color_fill.is_enabled) {
-            LoadColorToActiveGLTexture(color_fill.color_r, color_fill.color_g, color_fill.color_b,
-                                       screen_infos[i].texture);
-
-            // Resize the texture in case the framebuffer size has changed
-            screen_infos[i].texture.width = 1;
-            screen_infos[i].texture.height = 1;
+            LoadColorToActiveGLTexture(color_fill.color_r, color_fill.color_g, color_fill.color_b, screen_infos[i]);
         } else {
-            if (screen_infos[i].texture.width != (GLsizei)framebuffer.width ||
-                screen_infos[i].texture.height != (GLsizei)framebuffer.height ||
-                screen_infos[i].texture.format != framebuffer.color_format) {
+            auto rect = screen_infos[i].texture->GetExtent();
+            auto format = screen_infos[i].format;
+            if (rect.width != framebuffer.width || rect.height != framebuffer.height ||
+                format != framebuffer.color_format) {
                 // Reallocate texture if the framebuffer size has changed.
                 // This is expected to not happen very often and hence should not be a
                 // performance problem.
-                ConfigureFramebufferTexture(screen_infos[i].texture, framebuffer);
+                ConfigureFramebufferTexture(screen_infos[i], framebuffer);
             }
+
             LoadFBToScreenInfo(framebuffer, screen_infos[i], i == 1);
 
             // Resize the texture in case the framebuffer size has changed
@@ -483,27 +343,6 @@ void RendererVulkan::RenderToMailbox(const Layout::FramebufferLayout& layout,
         MICROPROFILE_SCOPE(OpenGL_WaitPresent);
 
         frame = mailbox->GetRenderFrame();
-
-        // Clean up sync objects before drawing
-
-        // INTEL driver workaround. We can't delete the previous render sync object until we are
-        // sure that the presentation is done
-        if (frame->present_fence) {
-            glClientWaitSync(frame->present_fence, 0, GL_TIMEOUT_IGNORED);
-        }
-
-        // delete the draw fence if the frame wasn't presented
-        if (frame->render_fence) {
-            glDeleteSync(frame->render_fence);
-            frame->render_fence = nullptr;
-        }
-
-        // wait for the presentation to be done
-        if (frame->present_fence) {
-            glWaitSync(frame->present_fence, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(frame->present_fence);
-            frame->present_fence = nullptr;
-        }
     }
 
     {
@@ -519,8 +358,6 @@ void RendererVulkan::RenderToMailbox(const Layout::FramebufferLayout& layout,
         state.Apply();
         DrawScreens(layout, flipped);
         // Create a fence for the frontend to wait on and swap this frame to OffTex
-        frame->render_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-        glFlush();
         mailbox->ReleaseRenderFrame(frame);
     }
 }
@@ -539,7 +376,7 @@ void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
             ? (!right_eye ? framebuffer.address_left1 : framebuffer.address_right1)
             : (!right_eye ? framebuffer.address_left2 : framebuffer.address_right2);
 
-    LOG_TRACE(Render_OpenGL, "0x{:08x} bytes from 0x{:08x}({}x{}), fmt {:x}",
+    LOG_TRACE(Render_Vulkan, "0x{:08x} bytes from 0x{:08x}({}x{}), fmt {:x}",
               framebuffer.stride * framebuffer.height, framebuffer_addr, framebuffer.width.Value(),
               framebuffer.height.Value(), framebuffer.format);
 
@@ -553,35 +390,18 @@ void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
     // only allows rows to have a memory alignement of 4.
     ASSERT(pixel_stride % 4 == 0);
 
-    if (!Rasterizer()->AccelerateDisplay(framebuffer, framebuffer_addr,
-                                         static_cast<u32>(pixel_stride), screen_info)) {
+    if (!Rasterizer()->AccelerateDisplay(framebuffer, framebuffer_addr, static_cast<u32>(pixel_stride), screen_info)) {
         // Reset the screen info's display texture to its own permanent texture
-        screen_info.display_texture = screen_info.texture.resource.handle;
+        screen_info.display_texture = screen_info.texture;
         screen_info.display_texcoords = Common::Rectangle<float>(0.f, 0.f, 1.f, 1.f);
 
         Memory::RasterizerFlushRegion(framebuffer_addr, framebuffer.stride * framebuffer.height);
 
-        const u8* framebuffer_data = VideoCore::g_memory->GetPhysicalPointer(framebuffer_addr);
+        vk::Rect2D region{{0, 0}, {framebuffer.width, framebuffer.height}};
+        std::span<u8> framebuffer_data(VideoCore::g_memory->GetPhysicalPointer(framebuffer_addr),
+                                       screen_info.texture->GetSize());
 
-        state.texture_units[0].texture_2d = screen_info.texture.resource.handle;
-        state.Apply();
-
-        glActiveTexture(GL_TEXTURE0);
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)pixel_stride);
-
-        // Update existing texture
-        // TODO: Test what happens on hardware when you change the framebuffer dimensions so that
-        //       they differ from the LCD resolution.
-        // TODO: Applications could theoretically crash Citra here by specifying too large
-        //       framebuffer sizes. We should make sure that this cannot happen.
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, framebuffer.width, framebuffer.height,
-                        screen_info.texture.gl_format, screen_info.texture.gl_type,
-                        framebuffer_data);
-
-        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-
-        state.texture_units[0].texture_2d = 0;
-        state.Apply();
+        screen_info.texture->Upload(0, 1, pixel_stride, region, framebuffer_data);
     }
 }
 
@@ -590,7 +410,7 @@ void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
  * be 1x1 but will stretch across whatever it's rendered on.
  */
 void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b,
-                                                const TextureInfo& texture) {
+                                                const ScreenInfo& screen) {
     state.texture_units[0].texture_2d = texture.resource.handle;
     state.Apply();
 
@@ -671,8 +491,8 @@ void RendererVulkan::ReloadSampler() {
 
 void RendererVulkan::ReloadShader() {
     // Link shaders and get variable locations
-    std::string shader_data;
-    if (GLES) {
+    std::string shader_data = fragment_shader;
+    /*if (GLES) {
         shader_data += fragment_shader_precision_OES;
     }
     if (Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph) {
@@ -715,7 +535,7 @@ void RendererVulkan::ReloadShader() {
                 shader_data += shader_text;
             }
         }
-    }
+    }*/
     shader.Create(vertex_shader, shader_data.c_str());
     state.draw.shader_program = shader.handle;
     state.Apply();
@@ -948,8 +768,7 @@ void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
 void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool flipped) {
     if (VideoCore::g_renderer_bg_color_update_requested.exchange(false)) {
         // Update background color before drawing
-        glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
-                     0.0f);
+        glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue, 0.0f);
     }
 
     if (VideoCore::g_renderer_sampler_update_requested.exchange(false)) {
@@ -1112,10 +931,13 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
 }
 
 void RendererVulkan::TryPresent(int timeout_ms) {
+
+    g_vk_task_scheduler->Submit(true);
+
     const auto& layout = render_window.GetFramebufferLayout();
     auto frame = render_window.mailbox->TryGetPresentFrame(timeout_ms);
     if (!frame) {
-        LOG_DEBUG(Render_OpenGL, "TryGetPresentFrame returned no frame to present");
+        LOG_DEBUG(Render_Vulkan, "TryGetPresentFrame returned no frame to present");
         return;
     }
 
@@ -1125,9 +947,10 @@ void RendererVulkan::TryPresent(int timeout_ms) {
 
     // Recreate the presentation FBO if the color attachment was changed
     if (frame->color_reloaded) {
-        LOG_DEBUG(Render_OpenGL, "Reloading present frame");
+        LOG_DEBUG(Render_Vulkan, "Reloading present frame");
         render_window.mailbox->ReloadPresentFrame(frame, layout.width, layout.height);
     }
+
     glWaitSync(frame->render_fence, 0, GL_TIMEOUT_IGNORED);
     // INTEL workaround.
     // Normally we could just delete the draw fence here, but due to driver bugs, we can just delete
@@ -1153,25 +976,6 @@ void RendererVulkan::TryPresent(int timeout_ms) {
 
 /// Updates the framerate
 void RendererVulkan::UpdateFramerate() {}
-
-void RendererVulkan::PrepareVideoDumping() {
-    auto* mailbox = static_cast<OGLVideoDumpingMailbox*>(frame_dumper.mailbox.get());
-    {
-        std::unique_lock lock(mailbox->swap_chain_lock);
-        mailbox->quit = false;
-    }
-    frame_dumper.StartDumping();
-}
-
-void RendererVulkan::CleanupVideoDumping() {
-    frame_dumper.StopDumping();
-    auto* mailbox = static_cast<OGLVideoDumpingMailbox*>(frame_dumper.mailbox.get());
-    {
-        std::unique_lock lock(mailbox->swap_chain_lock);
-        mailbox->quit = true;
-    }
-    mailbox->free_cv.notify_one();
-}
 
 static const char* GetSource(GLenum source) {
 #define RET(s)                                                                                     \
@@ -1229,40 +1033,28 @@ static void APIENTRY DebugHandler(GLenum source, GLenum type, GLuint id, GLenum 
 
 /// Initialize the renderer
 VideoCore::ResultStatus RendererVulkan::Init() {
-#ifndef ANDROID
-    if (!gladLoadGL()) {
-        return VideoCore::ResultStatus::ErrorBelowGL33;
-    }
+    // Create vulkan instance
+    vk::ApplicationInfo app_info("PS2 Emulator", 1, nullptr, 0, VK_API_VERSION_1_3);
 
-    // Qualcomm has some spammy info messages that are marked as errors but not important
-    // https://developer.qualcomm.com/comment/11845
-    if (GLAD_GL_KHR_debug) {
-        glEnable(GL_DEBUG_OUTPUT);
-        glDebugMessageCallback(DebugHandler, nullptr);
-    }
-#endif
+    // Get required extensions
+    auto extensions = RequiredExtensions(render_window.GetWindowInfo().type, true);
 
-    const char* gl_version{reinterpret_cast<char const*>(glGetString(GL_VERSION))};
-    const char* gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
-    const char* gpu_model{reinterpret_cast<char const*>(glGetString(GL_RENDERER))};
+    const char* layers = "VK_LAYER_KHRONOS_validation";
+    vk::InstanceCreateInfo instance_info{{}, &app_info, layers, extensions};
 
-    LOG_INFO(Render_OpenGL, "GL_VERSION: {}", gl_version);
-    LOG_INFO(Render_OpenGL, "GL_VENDOR: {}", gpu_vendor);
-    LOG_INFO(Render_OpenGL, "GL_RENDERER: {}", gpu_model);
+    auto instance = vk::createInstance(instance_info);
+    auto surface = swapchain->GetSurface();
+    auto physical_device = instance.enumeratePhysicalDevices()[0];
+
+    // Create global instance
+    g_vk_instace = std::make_unique<VKInstance>();
+    g_vk_instace->Create(instance, physical_device, surface, true);
 
     auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
     constexpr auto user_system = Common::Telemetry::FieldType::UserSystem;
-    telemetry_session.AddField(user_system, "GPU_Vendor", std::string(gpu_vendor));
-    telemetry_session.AddField(user_system, "GPU_Model", std::string(gpu_model));
-    telemetry_session.AddField(user_system, "GPU_OpenGL_Version", std::string(gl_version));
-
-    if (!strcmp(gpu_vendor, "GDI Generic")) {
-        return VideoCore::ResultStatus::ErrorGenericDrivers;
-    }
-
-    if (!(GLAD_GL_VERSION_3_3 || GLAD_GL_ES_VERSION_3_1)) {
-        return VideoCore::ResultStatus::ErrorBelowGL33;
-    }
+    telemetry_session.AddField(user_system, "GPU_Vendor", "NVIDIA");
+    telemetry_session.AddField(user_system, "GPU_Model", "GTX 1650");
+    telemetry_session.AddField(user_system, "GPU_Vulkan_Version", "Vulkan 1.3");
 
     InitOpenGLObjects();
 

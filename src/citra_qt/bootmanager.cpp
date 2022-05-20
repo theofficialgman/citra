@@ -27,6 +27,10 @@
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
+#if !defined(WIN32)
+#include <qpa/qplatformnativeinterface.h>
+#endif
+
 EmuThread::EmuThread(Frontend::GraphicsContext& core_context) : core_context(core_context) {}
 
 EmuThread::~EmuThread() = default;
@@ -189,6 +193,40 @@ bool OpenGLWindow::event(QEvent* event) {
 void OpenGLWindow::exposeEvent(QExposeEvent* event) {
     QWindow::requestUpdate();
     QWindow::exposeEvent(event);
+}
+
+static Frontend::WindowSystemType GetWindowSystemType() {
+    // Determine WSI type based on Qt platform.
+    QString platform_name = QGuiApplication::platformName();
+    if (platform_name == QStringLiteral("windows"))
+        return Frontend::WindowSystemType::Windows;
+    else if (platform_name == QStringLiteral("xcb"))
+        return Frontend::WindowSystemType::X11;
+    else if (platform_name == QStringLiteral("wayland"))
+        return Frontend::WindowSystemType::Wayland;
+
+    LOG_CRITICAL(Frontend, "Unknown Qt platform!");
+    return Frontend::WindowSystemType::Windows;
+}
+
+static Frontend::EmuWindow::WindowSystemInfo GetWindowSystemInfo(QWindow* window) {
+    Frontend::EmuWindow::WindowSystemInfo wsi;
+    wsi.type = GetWindowSystemType();
+
+    // Our Win32 Qt external doesn't have the private API.
+#if defined(WIN32) || defined(__APPLE__)
+    wsi.render_surface = window ? reinterpret_cast<void*>(window->winId()) : nullptr;
+#else
+    QPlatformNativeInterface* pni = QGuiApplication::platformNativeInterface();
+    wsi.display_connection = pni->nativeResourceForWindow("display", window);
+    if (wsi.type == Frontend::WindowSystemType::Wayland)
+        wsi.render_surface = window ? pni->nativeResourceForWindow("surface", window) : nullptr;
+    else
+        wsi.render_surface = window ? reinterpret_cast<void*>(window->winId()) : nullptr;
+#endif
+    wsi.render_surface_scale = window ? static_cast<float>(window->devicePixelRatio()) : 1.0f;
+
+    return wsi;
 }
 
 GRenderWindow::GRenderWindow(QWidget* parent_, EmuThread* emu_thread)
@@ -395,6 +433,9 @@ void GRenderWindow::InitRenderTarget() {
     child_window->create();
     child_widget = createWindowContainer(child_window, this);
     child_widget->resize(Core::kScreenTopWidth, Core::kScreenTopHeight + Core::kScreenBottomHeight);
+
+    // Update the Window System information with the new render target
+    window_info = GetWindowSystemInfo(child_widget->windowHandle());
 
     layout()->addWidget(child_widget);
 

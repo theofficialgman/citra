@@ -6,7 +6,6 @@
 #include <shaderc/shaderc.hpp>
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
-#include "video_core/renderer_vulkan/vk_resource_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_shader_gen.h"
 
@@ -60,11 +59,6 @@ void VulkanState::Create() {
     vk::DescriptorPoolCreateInfo pool_create_info({}, 1024, pool_sizes);
     desc_pool = device.createDescriptorPoolUnique(pool_create_info);
 
-    // Create descriptor sets
-    auto& layouts = g_vk_res_cache->GetDescriptorLayouts();
-    vk::DescriptorSetAllocateInfo alloc_info(desc_pool.get(), layouts);
-    descriptor_sets = device.allocateDescriptorSetsUnique(alloc_info);
-
     // Create texture sampler
     auto props = g_vk_instace->GetPhysicalDevice().getProperties();
     vk::SamplerCreateInfo sampler_info{
@@ -75,47 +69,15 @@ void VulkanState::Create() {
         false, vk::CompareOp::eAlways, {}, {},
         vk::BorderColor::eIntOpaqueBlack, false
     };
-    sampler = g_vk_instace->GetDevice().createSamplerUnique(sampler_info);
-
-
-    // Define the descriptor sets we will be using
-    std::array<vk::DescriptorSetLayoutBinding, 2> ubo_set = {{
-        { 0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex |
-          vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment }, // shader_data
-        { 1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex } // pica_uniforms
-    }};
-
-    std::array<vk::DescriptorSetLayoutBinding, 4> texture_set = {{
-        { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex0
-        { 1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex1
-        { 2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex2
-        { 3, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex_cube
-    }};
-
-    std::array<vk::DescriptorSetLayoutBinding, 3> lut_set = {{
-        { 0, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment }, // texture_buffer_lut_lf
-        { 1, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment }, // texture_buffer_lut_rg
-        { 2, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment } // texture_buffer_lut_rgba
-    }};
-
-    // Create and store descriptor set layouts
-    std::array<vk::DescriptorSetLayoutCreateInfo, DESCRIPTOR_SET_LAYOUT_COUNT> create_infos = {{
-        { vk::DescriptorSetLayoutCreateFlags(), ubo_set },
-        { vk::DescriptorSetLayoutCreateFlags(), texture_set },
-        { vk::DescriptorSetLayoutCreateFlags(), lut_set }
-    }};
-
-    for (int i = 0; i < DESCRIPTOR_SET_LAYOUT_COUNT; i++) {
-        descriptor_layouts[i] = g_vk_instace->GetDevice().createDescriptorSetLayout(create_infos[i]);
-    }
-
-    // Create the standard descriptor set layout
-    vk::PipelineLayoutCreateInfo layout_info({}, descriptor_layouts);
-    pipeline_layout = g_vk_instace->GetDevice().createPipelineLayoutUnique(layout_info);
+    sampler = device.createSamplerUnique(sampler_info);
 
     // Compile trivial vertex shader
     auto source = GenerateTrivialVertexShader(true);
-    MakeShader(source.code, vk::ShaderStageFlagBits::eVertex);
+    trivial_vertex_shader = vk::UniqueShaderModule{CompileShader(source.code, vk::ShaderStageFlagBits::eVertex)};
+
+    // Configure descriptor sets and pipeline builder
+    ConfigureDescriptorSets();
+    ConfigurePipeline();
 
     dirty_flags |= DirtyFlags::All;
 }
@@ -186,13 +148,14 @@ void VulkanState::UnbindTexture(u32 index) {
     dirty_flags |= DirtyFlags::Texture;
 }
 
-void VulkanState::PushRenderTargets(VKTexture* color, VKTexture* depth_stencil) {
-    color_attachment = color;
-    depth_attachment = depth_stencil;
+void VulkanState::PushAttachment(Attachment attachment) {
+    targets.push_back(attachment);
 }
 
-void VulkanState::SetRenderArea(vk::Rect2D new_render_area) {
-    render_area = new_render_area;
+void VulkanState::PopAttachment() {
+    if (!targets.empty()) {
+        targets.pop_back();
+    }
 }
 
 void VulkanState::BeginRendering() {
@@ -201,21 +164,27 @@ void VulkanState::BeginRendering() {
     }
 
     // Make sure attachments are in optimal layout
-    color_attachment->Transition(vk::ImageLayout::eColorAttachmentOptimal);
-    depth_attachment->Transition(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    auto& attachment = targets.back();
+    vk::RenderingInfo render_info{{}, attachment.render_area, 1, {}};
+    std::array<vk::RenderingAttachmentInfo, 2> infos{};
+
+    if (attachment.color) {
+        attachment.color->Transition(vk::ImageLayout::eColorAttachmentOptimal);
+
+        infos[0] = {attachment.color->GetView(), attachment.color->GetLayout()};
+        render_info.colorAttachmentCount = 1;
+        render_info.pColorAttachments = &infos[0];
+    }
+
+    if (attachment.depth_stencil) {
+        attachment.depth_stencil->Transition(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+        infos[1] = {attachment.depth_stencil->GetView(), attachment.depth_stencil->GetLayout()};
+        render_info.pDepthAttachment = &infos[1];
+        render_info.pStencilAttachment = &infos[1];
+    }
 
     // Begin rendering
-    vk::RenderingAttachmentInfoKHR color_info(color_attachment->GetView(), color_attachment->GetLayout());
-    vk::RenderingAttachmentInfoKHR depth_stencil_info(depth_attachment->GetView(), depth_attachment->GetLayout());
-
-    vk::RenderingInfo render_info
-    (
-        {}, render_area, 1, {},
-        color_info,
-        &depth_stencil_info,
-        &depth_stencil_info
-    );
-
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
     command_buffer.beginRendering(render_info);
     rendering = true;
@@ -304,7 +273,7 @@ void VulkanState::SetStencilTest(bool enable, vk::StencilOp fail, vk::StencilOp 
     fail_op = fail;
     pass_op = pass;
     depth_fail_op = depth_fail;
-    compare_op = compare;
+    stencil_op = compare;
     dirty_flags |= DirtyFlags::Stencil;
 }
 
@@ -317,7 +286,7 @@ void VulkanState::SetDepthWrite(bool enable) {
 
 void VulkanState::SetDepthTest(bool enable, vk::CompareOp compare) {
     depth_enabled = enable;
-    test_func = compare;
+    depth_op = compare;
     dirty_flags |= DirtyFlags::DepthTest;
 }
 
@@ -333,36 +302,41 @@ void VulkanState::SetBlendOp(vk::BlendOp rgb_op, vk::BlendOp alpha_op, vk::Blend
 }
 
 void VulkanState::SetFragmentShader(const Pica::Regs& regs) {
-    vk::Pipeline pipeline;
     pipeline_key.fragment_config = PicaFSConfig::BuildFromRegs(regs);
     auto it1 = pipelines.find(pipeline_key);
 
-    do {
-        // Try to use an already complete pipeline
-        if (it1 != pipelines.end()) {
-            pipeline = it1->second.get();
-            break;
-        }
-
+    // Try to use an already complete pipeline
+    vk::Pipeline pipeline;
+    if (it1 != pipelines.end()) {
+        pipeline = it1->second.get();
+    }
+    else {
         // Maybe the shader has been compiled but the pipeline state changed?
         auto shader = fragment_shaders.find(pipeline_key.fragment_config);
         if (shader != fragment_shaders.end()) {
-            pipeline = MakePipeline(shader->second.get());
-            break;
+            builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, shader->second.get());
+            pipeline = builder.Build();
+        }
+        else {
+            // Re-compile shader module and create new pipeline
+            auto result = GenerateFragmentShader(pipeline_key.fragment_config);
+            auto module = CompileShader(result.code, vk::ShaderStageFlagBits::eFragment);
+            fragment_shaders.emplace(pipeline_key.fragment_config, vk::UniqueShaderModule{module});
+
+            builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, shader->second.get());
+            pipeline = builder.Build();
         }
 
-        // Re-compile shader module and create new pipeline
-        auto result = GenerateFragmentShader(pipeline_key.fragment_config);
-        auto module = MakeShader(result.code, vk::ShaderStageFlagBits::eFragment);
-        pipeline = MakePipeline(module);
-    } while (false);
+        // Cache the resulted pipeline
+        pipelines.emplace(pipeline_key, vk::UniquePipeline{pipeline});
+    }
 
     // Bind the pipeline
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
     command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
 }
 
-vk::ShaderModule VulkanState::MakeShader(const std::string& source, vk::ShaderStageFlagBits stage) {
+vk::ShaderModule VulkanState::CompileShader(const std::string& source, vk::ShaderStageFlagBits stage) {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
     options.SetOptimizationLevel(shaderc_optimization_level_performance);
@@ -393,73 +367,8 @@ vk::ShaderModule VulkanState::MakeShader(const std::string& source, vk::ShaderSt
     vk::ShaderModuleCreateInfo shader_info{{}, shader_code};
 
     auto& device = g_vk_instace->GetDevice();
-    auto shader = device.createShaderModuleUnique(shader_info);
-
-    if (stage == vk::ShaderStageFlagBits::eFragment) {
-        auto handle = shader.get();
-        fragment_shaders[pipeline_key.fragment_config] = std::move(shader);
-        return handle;
-    }
-    else if (stage == vk::ShaderStageFlagBits::eVertex) {
-        trivial_vertex_shader = std::move(shader);
-        return trivial_vertex_shader.get();
-    }
-
-    UNREACHABLE();
-}
-
-vk::Pipeline VulkanState::MakePipeline(vk::ShaderModule fragment) {
-    std::array<vk::PipelineShaderStageCreateInfo, 2> shader_stages {{
-        { {}, vk::ShaderStageFlagBits::eVertex, trivial_vertex_shader.get(), "main" },
-        { {}, vk::ShaderStageFlagBits::eFragment, fragment, "main" }
-    }};
-
-    vk::PipelineVertexInputStateCreateInfo vertex_input_info{
-        {}, HardwareVertex::binding_desc, HardwareVertex::attribute_desc
-    };
-
-    vk::PipelineInputAssemblyStateCreateInfo input_assembly{{}, vk::PrimitiveTopology::eTriangleList, false};
-    vk::PipelineRasterizationStateCreateInfo rasterizer{
-        {}, false, false, vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
-        vk::FrontFace::eClockwise, false
-    };
-
-    vk::PipelineMultisampleStateCreateInfo multisampling{{}, vk::SampleCountFlagBits::e1};
-    vk::PipelineColorBlendStateCreateInfo color_blending{{}, false, vk::LogicOp::eCopy, pipeline_key.blend_config};
-
-    // Enable every required dynamic state
-    std::array<vk::DynamicState, 14> dynamic_states{
-        vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth,
-        vk::DynamicState::eDepthTestEnable, vk::DynamicState::eColorWriteEnableEXT,
-        vk::DynamicState::eStencilTestEnable, vk::DynamicState::eStencilOp,
-        vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
-        vk::DynamicState::eCullMode, vk::DynamicState::eBlendConstants,
-        vk::DynamicState::eViewport, vk::DynamicState::eScissor,
-        vk::DynamicState::eLogicOpEXT, vk::DynamicState::eFrontFace
-    };
-
-    vk::PipelineDynamicStateCreateInfo dynamic_info{{}, dynamic_states};
-
-    vk::PipelineDepthStencilStateCreateInfo depth_info{
-        {}, true, true, vk::CompareOp::eGreaterOrEqual, false, true
-    };
-
-    vk::GraphicsPipelineCreateInfo pipeline_info{
-        {}, shader_stages, &vertex_input_info, &input_assembly, nullptr, nullptr,
-        &rasterizer, &multisampling, &depth_info, &color_blending, &dynamic_info,
-        pipeline_layout.get(), nullptr
-    };
-
-    auto& device = g_vk_instace->GetDevice();
-    auto result = device.createGraphicsPipelineUnique(nullptr, pipeline_info);
-
-    if (result.result == vk::Result::eSuccess) {
-        auto handle = result.value.get();
-        pipelines[pipeline_key] = std::move(result.value);
-        return handle;
-    }
-
-    return VK_NULL_HANDLE;
+    auto shader = device.createShaderModule(shader_info);
+    return shader;
 }
 
 void VulkanState::Apply() {
@@ -487,7 +396,124 @@ void VulkanState::Apply() {
         command_buffer.setScissor(0, scissor);
     }
 
+    if (dirty_flags & DirtyFlags::DepthTest) {
+        command_buffer.setDepthTestEnable(depth_enabled);
+        command_buffer.setDepthCompareOp(depth_op);
+    }
+
+    if (dirty_flags & DirtyFlags::Stencil) {
+        command_buffer.setStencilTestEnable(stencil_enabled);
+        command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, stencil_ref);
+        command_buffer.setStencilOp(vk::StencilFaceFlagBits::eFrontAndBack, fail_op, pass_op,
+                                    depth_fail_op, stencil_op);
+    }
+
+    if (dirty_flags & DirtyFlags::LogicOp) {
+        command_buffer.setLogicOpEXT(logic_op);
+    }
+
+    if (dirty_flags & DirtyFlags::CullMode) {
+        command_buffer.setCullMode(cull_mode);
+    }
+
+    if (dirty_flags & DirtyFlags::FrontFace) {
+        command_buffer.setFrontFace(front_face);
+    }
+
+    if (dirty_flags & DirtyFlags::BlendConsts) {
+        command_buffer.setBlendConstants(blend_constants.data());
+    }
+
+    if (dirty_flags & DirtyFlags::StencilMask) {
+        command_buffer.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, stencil_write_mask);
+        command_buffer.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, stencil_input_mask);
+    }
+
+    if (dirty_flags & DirtyFlags::DepthWrite) {
+        command_buffer.setDepthWriteEnable(depth_writes);
+    }
+
     dirty_flags = DirtyFlags::None;
+}
+
+void VulkanState::ConfigureDescriptorSets() {
+    // Define the descriptor sets we will be using
+    std::array<vk::DescriptorSetLayoutBinding, 2> ubo_set = {{
+        { 0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex |
+          vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment }, // shader_data
+        { 1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex } // pica_uniforms
+    }};
+
+    std::array<vk::DescriptorSetLayoutBinding, 4> texture_set = {{
+        { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex0
+        { 1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex1
+        { 2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex2
+        { 3, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex_cube
+    }};
+
+    std::array<vk::DescriptorSetLayoutBinding, 3> lut_set = {{
+        { 0, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment }, // texture_buffer_lut_lf
+        { 1, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment }, // texture_buffer_lut_rg
+        { 2, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment } // texture_buffer_lut_rgba
+    }};
+
+    // Create and store descriptor set layouts
+    std::array<vk::DescriptorSetLayoutCreateInfo, DESCRIPTOR_SET_LAYOUT_COUNT> create_infos{{
+        { vk::DescriptorSetLayoutCreateFlags(), ubo_set },
+        { vk::DescriptorSetLayoutCreateFlags(), texture_set },
+        { vk::DescriptorSetLayoutCreateFlags(), lut_set }
+    }};
+
+    auto& device = g_vk_instace->GetDevice();
+    for (int i = 0; i < DESCRIPTOR_SET_LAYOUT_COUNT; i++) {
+        descriptor_layouts[i] = device.createDescriptorSetLayout(create_infos[i]);
+    }
+
+    vk::DescriptorSetAllocateInfo alloc_info(desc_pool.get(), descriptor_layouts);
+    descriptor_sets = device.allocateDescriptorSetsUnique(alloc_info);
+
+    // Create the standard descriptor set layout
+    vk::PipelineLayoutCreateInfo layout_info({}, descriptor_layouts);
+    pipeline_layout = device.createPipelineLayoutUnique(layout_info);
+
+}
+
+void VulkanState::ConfigurePipeline() {
+    builder.SetPipelineLayout(pipeline_layout.get());
+
+    // Set rasterization state
+    builder.SetPrimitiveTopology(vk::PrimitiveTopology::eTriangleList);
+    builder.SetLineWidth(1.0f);
+    builder.SetRasterizationState(vk::PolygonMode::eFill, vk::CullModeFlagBits::eNone,
+                                  vk::FrontFace::eClockwise);
+
+    // Set depth, stencil tests and blending
+    builder.SetNoDepthTestState();
+    builder.SetNoStencilState();
+    builder.SetBlendConstants(1.f, 1.f, 1.f, 1.f);
+    builder.SetBlendAttachment(true, vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+                               vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd,
+                               vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                               vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
+
+
+    // Enable every required dynamic state
+    std::array<vk::DynamicState, MAX_DYNAMIC_STATES> dynamic_states{
+        vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth,
+        vk::DynamicState::eDepthTestEnable, vk::DynamicState::eColorWriteEnableEXT,
+        vk::DynamicState::eStencilTestEnable, vk::DynamicState::eStencilOp,
+        vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
+        vk::DynamicState::eCullMode, vk::DynamicState::eBlendConstants,
+        vk::DynamicState::eViewport, vk::DynamicState::eScissor,
+        vk::DynamicState::eLogicOpEXT, vk::DynamicState::eFrontFace
+    };
+
+    for (auto& state : dynamic_states) {
+        builder.AddDynamicState(state);
+    }
+
+    // Add trivial vertex shader
+    builder.SetShaderStage(vk::ShaderStageFlagBits::eVertex, trivial_vertex_shader.get());
 }
 
 void VulkanState::UpdateDescriptorSet() {

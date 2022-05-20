@@ -10,6 +10,7 @@
 #include "core/hw/gpu.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/vk_resource_cache.h"
+#include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_state.h"
 
 namespace Layout {
@@ -38,8 +39,8 @@ struct ScreenInfo {
 
 class RendererVulkan : public RendererBase {
 public:
-    explicit RendererVulkan(Frontend::EmuWindow& window);
-    ~RendererVulkan() override;
+    RendererVulkan(Frontend::EmuWindow& window);
+    ~RendererVulkan() override = default;
 
     /// Initialize the renderer
     VideoCore::ResultStatus Init() override;
@@ -59,7 +60,6 @@ private:
     void ReloadSampler();
     void ReloadShader();
     void PrepareRendertarget();
-    void RenderScreenshot();
     void RenderToMailbox(const Layout::FramebufferLayout& layout,
                          std::unique_ptr<Frontend::TextureMailbox>& mailbox, bool flipped);
     void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
@@ -83,11 +83,12 @@ private:
 
     // OpenGL object IDs
     VKBuffer vertex_buffer;
-    OGLProgram shader;
-    OGLSampler filter_sampler;
+    //OGLProgram shader;
+    //OGLSampler filter_sampler;
 
     /// Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;
+    std::unique_ptr<VKSwapChain> swapchain;
 };
 
 } // namespace OpenGL

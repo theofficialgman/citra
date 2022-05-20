@@ -164,18 +164,18 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
 }
 
 void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels) {
-    u8* staging = g_vk_task_scheduler->RequestStaging(pixels.size());
-    if (!staging) {
+    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(pixels.size());
+    if (!buffer) {
         LOG_ERROR(Render_Vulkan, "Cannot copy pixels without staging buffer!");
     }
 
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
 
     // Copy pixels to staging buffer
-    std::memcpy(staging, pixels.data(), pixels.size());
+    std::memcpy(buffer, pixels.data(), pixels.size());
 
-    vk::BufferImageCopy copy_region {
-        0, row_length, region.extent.height,
+    vk::BufferImageCopy copy_region{
+        offset, row_length, region.extent.height,
         {info.aspect, level, layer, 1},
         { region.offset.x, region.offset.y, 0 },
         { region.extent.width, region.extent.height, 1 }

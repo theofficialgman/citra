@@ -9,6 +9,7 @@
 #include <xxhash.h>
 #include "video_core/regs.h"
 #include "video_core/renderer_vulkan/vk_shader_state.h"
+#include "video_core/renderer_vulkan/vk_pipeline_builder.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 
 namespace Vulkan {
@@ -54,6 +55,15 @@ BindingID operator + (BindingID lhs, u32 rhs) {
     return static_cast<BindingID>(static_cast<u32>(lhs) + rhs);
 }
 
+struct Attachment {
+    VKTexture* color{}, *depth_stencil{};
+    vk::ClearColorValue clear_color;
+    vk::ClearDepthStencilValue depth_color;
+    vk::Rect2D render_area{-1};
+};
+
+constexpr u32 DESCRIPTOR_SET_LAYOUT_COUNT = 3;
+
 /// Tracks global Vulkan state
 class VulkanState {
 public:
@@ -87,9 +97,8 @@ public:
                     vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha);
 
     /// Rendering
-    void PushRenderTargets(VKTexture* color, VKTexture* depth_stencil);
-    void PopRenderTargets();
-    void SetRenderArea(vk::Rect2D render_area);
+    void PushAttachment(Attachment attachment);
+    void PopAttachment();
     void SetFragmentShader(const Pica::Regs& config);
     void BeginRendering();
     void EndRendering();
@@ -105,9 +114,10 @@ public:
     void Apply();
 
 private:
+    void ConfigureDescriptorSets();
+    void ConfigurePipeline();
     void UpdateDescriptorSet();
-    vk::Pipeline MakePipeline(vk::ShaderModule fragment);
-    vk::ShaderModule MakeShader(const std::string& source, vk::ShaderStageFlagBits stage);
+    vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage);
 
 private:
     struct Binding {
@@ -116,40 +126,32 @@ private:
         vk::UniqueBufferView buffer_view{};
     };
 
-    struct Attachment {
-        VKTexture* color{};
-        VKTexture* depth_stencil{};
-    };
-
     DirtyFlags dirty_flags;
     bool rendering = false;
     VKTexture dummy_texture;
     vk::UniqueSampler sampler;
+    std::vector<Attachment> targets;
 
     VKBuffer* vertex_buffer{}, * index_buffer{};
-    vk::DeviceSize vertex_offset{}, index_offset{};
-    std::array<Binding, 9> bindings{};
-    std::vector<vk::UniqueDescriptorSet> descriptor_sets{};
+    vk::DeviceSize vertex_offset, index_offset;
+    std::array<Binding, 9> bindings;
+    std::vector<vk::UniqueDescriptorSet> descriptor_sets;
     vk::UniqueDescriptorPool desc_pool;
 
-    vk::Viewport viewport{ 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
+    vk::Viewport viewport{0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
     vk::CullModeFlags cull_mode{};
     vk::FrontFace front_face{};
     vk::Rect2D scissor{};
     vk::LogicOp logic_op{};
     std::array<float, 4> blend_constants{};
 
-    VKTexture* color_attachment{}, * depth_attachment{};
-    vk::Rect2D render_area{};
-    bool depth_enabled, depth_writes;
-    vk::CompareOp test_func;
-
     u32 stencil_write_mask{}, stencil_input_mask{}, stencil_ref{};
-    bool stencil_enabled{}, stencil_writes{};
+    bool depth_enabled{}, depth_writes{}, stencil_enabled{}, stencil_writes{};
     vk::StencilOp fail_op, pass_op, depth_fail_op;
-    vk::CompareOp compare_op;
+    vk::CompareOp depth_op, stencil_op;
 
     // Pipeline cache
+    PipelineBuilder builder;
     vk::UniqueShaderModule trivial_vertex_shader;
     vk::UniquePipelineLayout pipeline_layout;
     std::vector<vk::DescriptorSetLayout> descriptor_layouts;

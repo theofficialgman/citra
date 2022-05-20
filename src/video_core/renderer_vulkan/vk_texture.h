@@ -49,6 +49,8 @@ public:
     vk::Format GetFormat() const { return info.format; }
     vk::ImageLayout GetLayout() const { return layout; }
     u32 GetSamples() const { return info.multisamples; }
+    u32 GetSize() const { return image_size; }
+    vk::Extent2D GetExtent() const { return {info.width, info.height}; }
 
     /// Copies CPU side pixel data to the GPU texture buffer
     void Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels);
