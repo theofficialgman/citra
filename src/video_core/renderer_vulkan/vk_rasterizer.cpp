@@ -277,7 +277,15 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
                                          surfaces_rect.bottom, surfaces_rect.top))}; // Bottom
 
     // Bind the framebuffer surfaces
-    state.PushRenderTargets(&color_surface->texture, &depth_surface->texture);
+    Attachment color = {
+        .image = &color_surface->texture,
+    };
+
+    Attachment depth = {
+        .image = &depth_surface->texture,
+    };
+
+    state.BeginRendering(color, depth);
 
     // Sync the viewport
     vk::Viewport viewport(0, 0, viewport_rect_unscaled.GetWidth() * res_scale,

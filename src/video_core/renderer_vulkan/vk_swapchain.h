@@ -13,7 +13,6 @@ namespace Vulkan {
 struct SwapChainImage {
     vk::Image image;
     vk::UniqueImageView image_view;
-    vk::UniqueFramebuffer framebuffer;
 };
 
 struct SwapChainDetails {
@@ -48,10 +47,7 @@ public:
     vk::SurfaceKHR GetSurface() const { return surface; }
     vk::SurfaceFormatKHR GetSurfaceFormat() const { return details.format; }
     vk::SwapchainKHR GetSwapChain() const { return swapchain.get(); }
-
-    /// Retrieve current texture and framebuffer
-    vk::Image GetCurrentImage() { return swapchain_images[image_index].image; }
-    vk::Framebuffer GetCurrentFramebuffer() { return swapchain_images[image_index].framebuffer.get(); }
+    vk::Image GetCurrentImage() const { return swapchain_images[image_index].image; }
 
 private:
     void PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height);

@@ -28,7 +28,9 @@
 #include "core/settings.h"
 #include "video_core/pica_state.h"
 #include "video_core/renderer_base.h"
+#include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_rasterizer_cache.h"
+#include "video_core/renderer_vulkan/vk_format_reinterpreter.h"
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/utils.h"
 #include "video_core/video_core.h"
@@ -45,6 +47,26 @@ static constexpr std::array<vk::Format, 5> fb_format_tuples = {{
     vk::Format::eR5G6B5UnormPack16,     // RGB565
     vk::Format::eR4G4B4A4UnormPack16,   // RGBA4
 }};
+
+static constexpr std::array<vk::Format, 4> depth_format_tuples = {{
+    vk::Format::eD16Unorm, // D16
+    vk::Format::eUndefined,
+    vk::Format::eD24UnormS8Uint,   // D24
+    vk::Format::eD24UnormS8Uint, // D24S8
+}};
+
+vk::Format GetFormatTuple(PixelFormat pixel_format) {
+    const SurfaceType type = SurfaceParams::GetFormatType(pixel_format);
+    if (type == SurfaceType::Color) {
+        ASSERT(static_cast<std::size_t>(pixel_format) < fb_format_tuples.size());
+        return fb_format_tuples[static_cast<unsigned int>(pixel_format)];
+    } else if (type == SurfaceType::Depth || type == SurfaceType::DepthStencil) {
+        std::size_t tuple_idx = static_cast<std::size_t>(pixel_format) - 14;
+        ASSERT(tuple_idx < depth_format_tuples.size());
+        return depth_format_tuples[tuple_idx];
+    }
+    return vk::Format::eR8G8B8A8Unorm;
+}
 
 template <typename Map, typename Interval>
 static constexpr auto RangeFromInterval(Map& map, const Interval& interval) {
@@ -205,6 +227,68 @@ static constexpr std::array<void (*)(u32, u32, u8*, PAddr, PAddr, PAddr), 18> gp
     MortonCopy<false, PixelFormat::D24S8> // 17
 };
 
+inline vk::ImageSubresourceRange SubResourceLayersToRange(const vk::ImageSubresourceLayers& in) {
+    vk::ImageSubresourceRange out;
+    out.aspectMask = in.aspectMask;
+    out.baseArrayLayer = in.baseArrayLayer;
+    out.layerCount = in.layerCount;
+    out.baseMipLevel = in.mipLevel;
+    out.levelCount = 1;
+    return out;
+}
+
+static bool BlitTextures(const Surface& src_surface, const Common::Rectangle<u32>& src_rect,
+                         const Surface& dst_surface, const Common::Rectangle<u32>& dst_rect, SurfaceType type) {
+    vk::ImageSubresourceLayers image_range({}, {}, 0, 1);
+    switch (src_surface->type) {
+    case SurfaceParams::SurfaceType::Color:
+    case SurfaceParams::SurfaceType::Texture:
+        image_range.aspectMask = vk::ImageAspectFlagBits::eColor;
+        break;
+    case SurfaceParams::SurfaceType::Depth:
+        image_range.aspectMask = vk::ImageAspectFlagBits::eDepth;
+        break;
+    case SurfaceParams::SurfaceType::DepthStencil:
+        image_range.aspectMask =
+            vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+        break;
+    default:
+        UNIMPLEMENTED();
+    }
+
+    // Prepare images for transfer
+    auto old_src_layout = src_surface->texture.GetLayout();
+    auto old_dst_layout = dst_surface->texture.GetLayout();
+
+    src_surface->texture.Transition(vk::ImageLayout::eTransferSrcOptimal);
+    dst_surface->texture.Transition(vk::ImageLayout::eTransferDstOptimal);
+
+    vk::ImageBlit blit_area;
+    blit_area.srcSubresource = image_range;
+    blit_area.srcOffsets[0] = vk::Offset3D(src_rect.left, src_rect.bottom, 0);
+    blit_area.srcOffsets[1] = vk::Offset3D(src_rect.right, src_rect.top, 1);
+    blit_area.dstSubresource = image_range;
+    blit_area.dstOffsets[0] = vk::Offset3D(dst_rect.left, dst_rect.bottom, 0);
+    blit_area.dstOffsets[1] = vk::Offset3D(dst_rect.right, dst_rect.top, 1);
+
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+    command_buffer.blitImage(src_surface->texture.GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
+                             dst_surface->texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
+                             {blit_area}, vk::Filter::eNearest);
+
+    // Revert changes to the layout
+    src_surface->texture.Transition(old_src_layout);
+    dst_surface->texture.Transition(old_dst_layout);
+
+    return true;
+}
+
+static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
+    vk::Offset2D offset{static_cast<s32>(rect.left), static_cast<s32>(rect.bottom)};
+    vk::Extent2D extent{rect.GetWidth(), rect.GetHeight()};
+    return vk::Rect2D{offset, extent};
+}
+
 // Allocate an uninitialized texture of appropriate size and format for the surface
 VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 width, u32 height)
 {
@@ -224,7 +308,7 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
         .format = format,
         .type = vk::ImageType::e2D,
         .view_type = vk::ImageViewType::e2D,
-        .mipmap_levels = levels
+        .levels = levels
     };
 
     VKTexture texture;
@@ -303,10 +387,11 @@ void RasterizerCacheVulkan::CopySurface(const Surface& src_surface, const Surfac
     if (src_surface->CanSubRect(subrect_params)) {
         auto srect = src_surface->GetScaledSubRect(subrect_params);
         auto drect = dst_surface->GetScaledSubRect(subrect_params);
-        src_surface->texture.BlitTo(srect, &dst_surface->texture, drect, src_surface->type);
 
+        BlitTextures(src_surface, srect, dst_surface, drect, src_surface->type);
         return;
     }
+
     UNREACHABLE();
 }
 
@@ -426,88 +511,23 @@ void CachedSurface::FlushGPUBuffer(PAddr flush_start, PAddr flush_end) {
     }
 }
 
-MICROPROFILE_DEFINE(OpenGL_TextureUL, "OpenGL", "Texture Upload", MP_RGB(128, 192, 64));
+MICROPROFILE_DEFINE(Vulkan_TextureUL, "Vulkan", "Texture Upload", MP_RGB(128, 192, 64));
 void CachedSurface::UploadGPUTexture(Common::Rectangle<u32> rect) {
     if (type == SurfaceType::Fill)
         return;
 
-    MICROPROFILE_SCOPE(OpenGL_TextureUL);
+    MICROPROFILE_SCOPE(Vulkan_TextureUL);
 
     ASSERT(vk_buffer.size() == width * height * GetBytesPerPixel(pixel_format));
 
-    u64 tex_hash = 0;
-
-    if (Settings::values.dump_textures || Settings::values.custom_textures) {
-        tex_hash = Common::ComputeHash64(vk_buffer.data(), vk_buffer.size());
-    }
-
-    if (Settings::values.custom_textures) {
-        is_custom = LoadCustomTexture(tex_hash);
-    }
+    // TODO: Handle resolution scaling and custom textures
 
     // Load data from memory to the surface
-    int x0 = static_cast<int>(rect.left);
-    int y0 = static_cast<int>(rect.bottom);
-    std::size_t buffer_offset = (y0 * stride + x0) * GetBytesPerPixel(pixel_format);
+    auto buffer_offset = (rect.bottom * stride + rect.left) * GetBytesPerPixel(pixel_format);
+    auto update_size = rect.GetWidth() * rect.GetHeight() * GetBytesPerPixel(pixel_format);
+    std::span<u8> memory(vk_buffer.data() + buffer_offset, update_size);
 
-    //const FormatTuple& tuple = GetFormatTuple(pixel_format);
-    //GLuint target_tex = texture.handle;
-
-    // If not 1x scale, create 1x texture that we will blit from to replace texture subrect in
-    // surface
-    VKTexture unscaled_tex;
-    if (res_scale != 1) {
-        x0 = 0;
-        y0 = 0;
-
-        VKTexture::Info info = {
-            .width = rect.GetWidth(),
-            .height = rect.GetHeight(),
-            .format = fb_format_tuples[static_cast<u32>(pixel_format)],
-            .type = vk::ImageType::e2D,
-            .view_type = vk::ImageViewType::e2D
-        };
-
-        unscaled_tex.Create(info);
-    }
-
-    //OpenGLState cur_state = OpenGLState::GetCurState();
-
-    //GLuint old_tex = cur_state.texture_units[0].texture_2d;
-    //cur_state.texture_units[0].texture_2d = target_tex;
-    //cur_state.Apply();
-
-    // Ensure no bad interactions with GL_UNPACK_ALIGNMENT
-    //ASSERT(stride * GetBytesPerPixel(pixel_format) % 4 == 0);
-    //glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(stride));
-
-        //glActiveTexture(GL_TEXTURE0);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, x0, y0, static_cast<GLsizei>(rect.GetWidth()),
-                        static_cast<GLsizei>(rect.GetHeight()), tuple.format, tuple.type,
-                        &gl_buffer[buffer_offset]);
-
-    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-    //if (Settings::values.dump_textures && !is_custom)
-     //   DumpTexture(target_tex, tex_hash);
-
-    cur_state.texture_units[0].texture_2d = old_tex;
-    cur_state.Apply();
-
-    if (res_scale != 1) {
-        auto scaled_rect = rect;
-        scaled_rect.left *= res_scale;
-        scaled_rect.top *= res_scale;
-        scaled_rect.right *= res_scale;
-        scaled_rect.bottom *= res_scale;
-        auto from_rect =
-            is_custom ? Common::Rectangle<u32>{0, custom_tex_info.height, custom_tex_info.width, 0}
-                      : Common::Rectangle<u32>{0, rect.GetHeight(), rect.GetWidth(), 0};
-        if (!owner.texture_filterer->Filter(unscaled_tex.handle, from_rect, texture.handle,
-                                            scaled_rect, type, read_fb_handle, draw_fb_handle)) {
-            BlitTextures(unscaled_tex.handle, from_rect, texture.handle, scaled_rect, type,
-                         read_fb_handle, draw_fb_handle);
-        }
-    }
+    texture.Upload(0, 0, stride, FromRect(rect), memory);
 
     InvalidateAllWatcher();
 }
@@ -520,87 +540,17 @@ void CachedSurface::DownloadGPUTexture(const Common::Rectangle<u32>& rect) {
 
     MICROPROFILE_SCOPE(OpenGL_TextureDL);
 
-    if (gl_buffer.empty()) {
-        gl_buffer.resize(width * height * GetGLBytesPerPixel(pixel_format));
+    if (vk_buffer.empty()) {
+        vk_buffer.resize(width * height * GetBytesPerPixel(pixel_format));
     }
 
-    OpenGLState state = OpenGLState::GetCurState();
-    OpenGLState prev_state = state;
-    SCOPE_EXIT({ prev_state.Apply(); });
+    // TODO: Handle resolution scaling and custom textures
 
-    const FormatTuple& tuple = GetFormatTuple(pixel_format);
+    auto buffer_offset = (rect.bottom * stride + rect.left) * GetBytesPerPixel(pixel_format);
+    auto buffer_size = rect.GetWidth() * rect.GetHeight() * GetBytesPerPixel(pixel_format);
+    std::span<u8> memory(vk_buffer.data() + buffer_offset, buffer_size);
 
-    // Ensure no bad interactions with GL_PACK_ALIGNMENT
-    ASSERT(stride * GetGLBytesPerPixel(pixel_format) % 4 == 0);
-    glPixelStorei(GL_PACK_ROW_LENGTH, static_cast<GLint>(stride));
-    std::size_t buffer_offset =
-        (rect.bottom * stride + rect.left) * GetGLBytesPerPixel(pixel_format);
-
-    // If not 1x scale, blit scaled texture to a new 1x texture and use that to flush
-    if (res_scale != 1) {
-        auto scaled_rect = rect;
-        scaled_rect.left *= res_scale;
-        scaled_rect.top *= res_scale;
-        scaled_rect.right *= res_scale;
-        scaled_rect.bottom *= res_scale;
-
-        Common::Rectangle<u32> unscaled_tex_rect{0, rect.GetHeight(), rect.GetWidth(), 0};
-        OGLTexture unscaled_tex =
-            owner.AllocateSurfaceTexture(tuple, rect.GetWidth(), rect.GetHeight());
-        BlitTextures(texture.handle, scaled_rect, unscaled_tex.handle, unscaled_tex_rect, type,
-                     read_fb_handle, draw_fb_handle);
-
-        state.texture_units[0].texture_2d = unscaled_tex.handle;
-        state.Apply();
-
-        glActiveTexture(GL_TEXTURE0);
-        if (GLES) {
-            owner.texture_downloader_es->GetTexImage(GL_TEXTURE_2D, 0, tuple.format, tuple.type,
-                                                     rect.GetHeight(), rect.GetWidth(),
-                                                     &gl_buffer[buffer_offset]);
-        } else {
-            glGetTexImage(GL_TEXTURE_2D, 0, tuple.format, tuple.type, &gl_buffer[buffer_offset]);
-        }
-    } else {
-        state.ResetTexture(texture.handle);
-        state.draw.read_framebuffer = read_fb_handle;
-        state.Apply();
-
-        if (type == SurfaceType::Color || type == SurfaceType::Texture) {
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                   texture.handle, 0);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                                   0, 0);
-        } else if (type == SurfaceType::Depth) {
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                                   texture.handle, 0);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-        } else {
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                                   texture.handle, 0);
-        }
-        switch (glCheckFramebufferStatus(GL_FRAMEBUFFER)) {
-        case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:
-            LOG_WARNING(Render_OpenGL, "Framebuffer incomplete attachment");
-            break;
-        case GL_FRAMEBUFFER_INCOMPLETE_DIMENSIONS:
-            LOG_WARNING(Render_OpenGL, "Framebuffer incomplete dimensions");
-            break;
-        case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:
-            LOG_WARNING(Render_OpenGL, "Framebuffer incomplete missing attachment");
-            break;
-        case GL_FRAMEBUFFER_UNSUPPORTED:
-            LOG_WARNING(Render_OpenGL, "Framebuffer unsupported");
-            break;
-        }
-        glReadPixels(static_cast<GLint>(rect.left), static_cast<GLint>(rect.bottom),
-                     static_cast<GLsizei>(rect.GetWidth()), static_cast<GLsizei>(rect.GetHeight()),
-                     tuple.format, tuple.type, &gl_buffer[buffer_offset]);
-    }
-
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    texture.Download(0, 0, stride, FromRect(rect), memory);
 }
 
 enum MatchFlags {
@@ -708,12 +658,7 @@ static Surface FindMatch(const SurfaceCache& surface_cache, const SurfaceParams&
 
 RasterizerCacheVulkan::RasterizerCacheVulkan() {
     resolution_scale_factor = VideoCore::GetResolutionScaleFactor();
-    texture_filterer = std::make_unique<TextureFilterer>(Settings::values.texture_filter_name,
-                                                         resolution_scale_factor);
-    format_reinterpreter = std::make_unique<FormatReinterpreterOpenGL>();
-
-    read_framebuffer.Create();
-    draw_framebuffer.Create();
+    //format_reinterpreter = std::make_unique<FormatReinterpreterVulkan>();
 }
 
 RasterizerCacheVulkan::~RasterizerCacheVulkan() {
@@ -734,10 +679,7 @@ bool RasterizerCacheVulkan::BlitSurfaces(const Surface& src_surface,
         return false;
 
     dst_surface->InvalidateAllWatcher();
-
-    return BlitTextures(src_surface->texture.handle, src_rect, dst_surface->texture.handle,
-                        dst_rect, src_surface->type, read_framebuffer.handle,
-                        draw_framebuffer.handle);
+    return BlitTextures(src_surface, src_rect, dst_surface, dst_rect, src_surface->type);
 }
 
 Surface RasterizerCacheVulkan::GetSurface(const SurfaceParams& params, ScaleMatch match_res_scale,
@@ -886,18 +828,19 @@ Surface RasterizerCacheVulkan::GetTextureSurface(const Pica::Texture::TextureInf
     params.height = info.height;
     params.is_tiled = true;
     params.pixel_format = SurfaceParams::PixelFormatFromTextureFormat(info.format);
-    params.res_scale = texture_filterer->IsNull() ? 1 : resolution_scale_factor;
+    //params.res_scale = texture_filterer->IsNull() ? 1 : resolution_scale_factor;
+    params.res_scale = 1;
     params.UpdateParams();
 
     u32 min_width = info.width >> max_level;
     u32 min_height = info.height >> max_level;
     if (min_width % 8 != 0 || min_height % 8 != 0) {
-        LOG_CRITICAL(Render_OpenGL, "Texture size ({}x{}) is not multiple of 8", min_width,
+        LOG_CRITICAL(Render_Vulkan, "Texture size ({}x{}) is not multiple of 8", min_width,
                      min_height);
         return nullptr;
     }
     if (info.width != (min_width << max_level) || info.height != (min_height << max_level)) {
-        LOG_CRITICAL(Render_OpenGL,
+        LOG_CRITICAL(Render_Vulkan,
                      "Texture size ({}x{}) does not support required mipmap level ({})",
                      params.width, params.height, max_level);
         return nullptr;
@@ -912,49 +855,10 @@ Surface RasterizerCacheVulkan::GetTextureSurface(const Pica::Texture::TextureInf
         if (max_level >= 8) {
             // since PICA only supports texture size between 8 and 1024, there are at most eight
             // possible mipmap levels including the base.
-            LOG_CRITICAL(Render_OpenGL, "Unsupported mipmap level {}", max_level);
+            LOG_CRITICAL(Render_Vulkan, "Unsupported mipmap level {}", max_level);
             return nullptr;
         }
-        OpenGLState prev_state = OpenGLState::GetCurState();
-        OpenGLState state;
-        SCOPE_EXIT({ prev_state.Apply(); });
-        auto format_tuple = GetFormatTuple(params.pixel_format);
 
-        // Allocate more mipmap level if necessary
-        if (surface->max_level < max_level) {
-            state.texture_units[0].texture_2d = surface->texture.handle;
-            state.Apply();
-            glActiveTexture(GL_TEXTURE0);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, max_level);
-            u32 width;
-            u32 height;
-            if (surface->is_custom) {
-                width = surface->custom_tex_info.width;
-                height = surface->custom_tex_info.height;
-            } else {
-                width = surface->GetScaledWidth();
-                height = surface->GetScaledHeight();
-            }
-            // If we are using ARB_texture_storage then we've already allocated all of the mipmap
-            // levels
-            if (!GL_ARB_texture_storage) {
-                for (u32 level = surface->max_level + 1; level <= max_level; ++level) {
-                    glTexImage2D(GL_TEXTURE_2D, level, format_tuple.internal_format, width >> level,
-                                 height >> level, 0, format_tuple.format, format_tuple.type,
-                                 nullptr);
-                }
-            }
-            if (surface->is_custom || !texture_filterer->IsNull()) {
-                // TODO: proper mipmap support for custom textures
-                glGenerateMipmap(GL_TEXTURE_2D);
-            }
-            surface->max_level = max_level;
-        }
-
-        // Blit mipmaps that have been invalidated
-        state.draw.read_framebuffer = read_framebuffer.handle;
-        state.draw.draw_framebuffer = draw_framebuffer.handle;
-        state.ResetTexture(surface->texture.handle);
         SurfaceParams surface_params = *surface;
         for (u32 level = 1; level <= max_level; ++level) {
             // In PICA all mipmap levels are stored next to each other
@@ -979,24 +883,13 @@ Surface RasterizerCacheVulkan::GetTextureSurface(const Pica::Texture::TextureInf
                 if (!level_surface->invalid_regions.empty()) {
                     ValidateSurface(level_surface, level_surface->addr, level_surface->size);
                 }
-                state.ResetTexture(level_surface->texture.handle);
-                state.Apply();
-                if (!surface->is_custom && texture_filterer->IsNull()) {
-                    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                           level_surface->texture.handle, 0);
-                    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                                           GL_TEXTURE_2D, 0, 0);
 
-                    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                           surface->texture.handle, level);
-                    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                                           GL_TEXTURE_2D, 0, 0);
-
+                //state.ResetTexture(level_surface->texture.handle);
+                //state.Apply();
+                if (!surface->is_custom /*&& texture_filterer->IsNull()*/) {
                     auto src_rect = level_surface->GetScaledRect();
                     auto dst_rect = surface_params.GetScaledRect();
-                    glBlitFramebuffer(src_rect.left, src_rect.bottom, src_rect.right, src_rect.top,
-                                      dst_rect.left, dst_rect.bottom, dst_rect.right, dst_rect.top,
-                                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                    BlitSurfaces(level_surface, src_rect, surface, dst_rect);
                 }
                 watcher->Validate();
             }
@@ -1006,106 +899,13 @@ Surface RasterizerCacheVulkan::GetTextureSurface(const Pica::Texture::TextureInf
     return surface;
 }
 
-const CachedTextureCube& RasterizerCacheVulkan::GetTextureCube(const TextureCubeConfig& config) {
-    auto& cube = texture_cube_cache[config];
-
-    struct Face {
-        Face(std::shared_ptr<SurfaceWatcher>& watcher, PAddr address, GLenum gl_face)
-            : watcher(watcher), address(address), gl_face(gl_face) {}
-        std::shared_ptr<SurfaceWatcher>& watcher;
-        PAddr address;
-        GLenum gl_face;
-    };
-
-    const std::array<Face, 6> faces{{
-        {cube.px, config.px, GL_TEXTURE_CUBE_MAP_POSITIVE_X},
-        {cube.nx, config.nx, GL_TEXTURE_CUBE_MAP_NEGATIVE_X},
-        {cube.py, config.py, GL_TEXTURE_CUBE_MAP_POSITIVE_Y},
-        {cube.ny, config.ny, GL_TEXTURE_CUBE_MAP_NEGATIVE_Y},
-        {cube.pz, config.pz, GL_TEXTURE_CUBE_MAP_POSITIVE_Z},
-        {cube.nz, config.nz, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z},
-    }};
-
-    for (const Face& face : faces) {
-        if (!face.watcher || !face.watcher->Get()) {
-            Pica::Texture::TextureInfo info;
-            info.physical_address = face.address;
-            info.height = info.width = config.width;
-            info.format = config.format;
-            info.SetDefaultStride();
-            auto surface = GetTextureSurface(info);
-            if (surface) {
-                face.watcher = surface->CreateWatcher();
-            } else {
-                // Can occur when texture address is invalid. We mark the watcher with nullptr
-                // in this case and the content of the face wouldn't get updated. These are
-                // usually leftover setup in the texture unit and games are not supposed to draw
-                // using them.
-                face.watcher = nullptr;
-            }
-        }
-    }
-
-    if (cube.texture.handle == 0) {
-        for (const Face& face : faces) {
-            if (face.watcher) {
-                auto surface = face.watcher->Get();
-                cube.res_scale = std::max(cube.res_scale, surface->res_scale);
-            }
-        }
-
-        cube.texture.Create();
-        AllocateTextureCube(
-            cube.texture.handle,
-            GetFormatTuple(CachedSurface::PixelFormatFromTextureFormat(config.format)),
-            cube.res_scale * config.width);
-    }
-
-    u32 scaled_size = cube.res_scale * config.width;
-
-    OpenGLState prev_state = OpenGLState::GetCurState();
-    SCOPE_EXIT({ prev_state.Apply(); });
-
-    OpenGLState state;
-    state.draw.read_framebuffer = read_framebuffer.handle;
-    state.draw.draw_framebuffer = draw_framebuffer.handle;
-    state.ResetTexture(cube.texture.handle);
-
-    for (const Face& face : faces) {
-        if (face.watcher && !face.watcher->IsValid()) {
-            auto surface = face.watcher->Get();
-            if (!surface->invalid_regions.empty()) {
-                ValidateSurface(surface, surface->addr, surface->size);
-            }
-            state.ResetTexture(surface->texture.handle);
-            state.Apply();
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                   surface->texture.handle, 0);
-            glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                                   0, 0);
-
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, face.gl_face,
-                                   cube.texture.handle, 0);
-            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
-                                   0, 0);
-
-            auto src_rect = surface->GetScaledRect();
-            glBlitFramebuffer(src_rect.left, src_rect.bottom, src_rect.right, src_rect.top, 0, 0,
-                              scaled_size, scaled_size, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-            face.watcher->Validate();
-        }
-    }
-
-    return cube;
-}
-
 SurfaceSurfaceRect_Tuple RasterizerCacheVulkan::GetFramebufferSurfaces(
     bool using_color_fb, bool using_depth_fb, const Common::Rectangle<s32>& viewport_rect) {
     const auto& regs = Pica::g_state.regs;
     const auto& config = regs.framebuffer.framebuffer;
 
     // update resolution_scale_factor and reset cache if changed
-    if ((resolution_scale_factor != VideoCore::GetResolutionScaleFactor()) |
+    /*if ((resolution_scale_factor != VideoCore::GetResolutionScaleFactor()) |
         (VideoCore::g_texture_filter_update_requested.exchange(false) &&
          texture_filterer->Reset(Settings::values.texture_filter_name, resolution_scale_factor))) {
         resolution_scale_factor = VideoCore::GetResolutionScaleFactor();
@@ -1113,7 +913,7 @@ SurfaceSurfaceRect_Tuple RasterizerCacheVulkan::GetFramebufferSurfaces(
         while (!surface_cache.empty())
             UnregisterSurface(*surface_cache.begin()->second.begin());
         texture_cube_cache.clear();
-    }
+    }*/
 
     Common::Rectangle<u32> viewport_clamped{
         static_cast<u32>(std::clamp(viewport_rect.left, 0, static_cast<s32>(config.GetWidth()))),
@@ -1320,9 +1120,8 @@ void RasterizerCacheVulkan::ValidateSurface(const Surface& surface, PAddr addr, 
 
         // Load data from 3DS memory
         FlushRegion(params.addr, params.size);
-        surface->LoadGLBuffer(params.addr, params.end);
-        surface->UploadGLTexture(surface->GetSubRect(params), read_framebuffer.handle,
-                                 draw_framebuffer.handle);
+        surface->LoadGPUBuffer(params.addr, params.end);
+        surface->UploadGPUTexture(surface->GetSubRect(params));
         notify_validated(params.GetInterval());
     }
 }
@@ -1385,32 +1184,7 @@ bool RasterizerCacheVulkan::ValidateByReinterpretation(const Surface& surface,
             auto src_rect = reinterpret_surface->GetScaledSubRect(reinterpret_params);
             auto dest_rect = surface->GetScaledSubRect(reinterpret_params);
 
-            if (!texture_filterer->IsNull() && reinterpret_surface->res_scale == 1 &&
-                surface->res_scale == resolution_scale_factor) {
-                // The destination surface is either a framebuffer, or a filtered texture.
-                // Create an intermediate surface to convert to before blitting to the
-                // destination.
-                Common::Rectangle<u32> tmp_rect{0, dest_rect.GetHeight() / resolution_scale_factor,
-                                                dest_rect.GetWidth() / resolution_scale_factor, 0};
-                OGLTexture tmp_tex = AllocateSurfaceTexture(
-                    GetFormatTuple(reinterpreter->first.dst_format), tmp_rect.right, tmp_rect.top);
-                reinterpreter->second->Reinterpret(reinterpret_surface->texture.handle, src_rect,
-                                                   read_framebuffer.handle, tmp_tex.handle,
-                                                   tmp_rect, draw_framebuffer.handle);
-                SurfaceParams::SurfaceType type =
-                    SurfaceParams::GetFormatType(reinterpreter->first.dst_format);
-
-                if (!texture_filterer->Filter(tmp_tex.handle, tmp_rect, surface->texture.handle,
-                                              dest_rect, type, read_framebuffer.handle,
-                                              draw_framebuffer.handle)) {
-                    BlitTextures(tmp_tex.handle, tmp_rect, surface->texture.handle, dest_rect, type,
-                                 read_framebuffer.handle, draw_framebuffer.handle);
-                }
-            } else {
-                reinterpreter->second->Reinterpret(reinterpret_surface->texture.handle, src_rect,
-                                                   read_framebuffer.handle, surface->texture.handle,
-                                                   dest_rect, draw_framebuffer.handle);
-            }
+            reinterpreter->second->Reinterpret(reinterpret_surface, src_rect, surface, dest_rect);
             return true;
         }
     }
@@ -1465,10 +1239,10 @@ void RasterizerCacheVulkan::FlushRegion(PAddr addr, u32 size, Surface flush_surf
 
         if (surface->type != SurfaceType::Fill) {
             SurfaceParams params = surface->FromInterval(interval);
-            surface->DownloadGLTexture(surface->GetSubRect(params), read_framebuffer.handle,
-                                       draw_framebuffer.handle);
+            surface->DownloadGPUTexture(surface->GetSubRect(params));
         }
-        surface->FlushGLBuffer(boost::icl::first(interval), boost::icl::last_next(interval));
+
+        surface->FlushGPUBuffer(boost::icl::first(interval), boost::icl::last_next(interval));
         flushed_intervals += interval;
     }
     // Reset dirty regions
@@ -1548,11 +1322,8 @@ Surface RasterizerCacheVulkan::CreateSurface(const SurfaceParams& params) {
     static_cast<SurfaceParams&>(*surface) = params;
 
     surface->invalid_regions.insert(surface->GetInterval());
-
-    surface->texture =
-        AllocateSurfaceTexture(GetFormatTuple(surface->pixel_format), surface->GetScaledWidth(),
-                               surface->GetScaledHeight());
-
+    surface->texture = AllocateSurfaceTexture(GetFormatTuple(surface->pixel_format),
+                                              surface->GetScaledWidth(), surface->GetScaledHeight());
     return surface;
 }
 

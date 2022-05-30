@@ -73,6 +73,8 @@ add_library(video_core STATIC
     renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/vk_buffer.cpp
     renderer_vulkan/vk_buffer.h
+    renderer_vulkan/vk_format_reinterpreter.cpp
+    renderer_vulkan/vk_format_reinterpreter.h
     renderer_vulkan/vk_instance.cpp
     renderer_vulkan/vk_instance.h
     renderer_vulkan/vk_pipeline_builder.cpp

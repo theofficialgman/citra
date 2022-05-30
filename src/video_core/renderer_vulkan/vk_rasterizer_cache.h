@@ -29,7 +29,7 @@ class RasterizerCacheVulkan;
 class TextureFilterer;
 class FormatReinterpreterVulkan;
 
-const vk::Format& GetFormatTuple(SurfaceParams::PixelFormat pixel_format);
+vk::Format GetFormatTuple(SurfaceParams::PixelFormat pixel_format);
 
 struct HostTextureTag {
     vk::Format format;
@@ -272,9 +272,6 @@ public:
     Surface GetTextureSurface(const Pica::TexturingRegs::FullTextureConfig& config);
     Surface GetTextureSurface(const Pica::Texture::TextureInfo& info, u32 max_level = 0);
 
-    /// Get a texture cube based on the texture configuration
-    const CachedTextureCube& GetTextureCube(const TextureCubeConfig& config);
-
     /// Get the color and depth surfaces based on the framebuffer configuration
     SurfaceSurfaceRect_Tuple GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
                                                     const Common::Rectangle<s32>& viewport_rect);
@@ -346,10 +343,7 @@ private:
 
 public:
     VKTexture AllocateSurfaceTexture(vk::Format format, u32 width, u32 height);
-
-    std::unique_ptr<TextureFilterer> texture_filterer;
     std::unique_ptr<FormatReinterpreterVulkan> format_reinterpreter;
-    std::unique_ptr<TextureDownloader> texture_downloader_es;
 };
 
 } // namespace OpenGL

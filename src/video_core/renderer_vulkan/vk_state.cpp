@@ -11,6 +11,8 @@
 
 namespace Vulkan {
 
+std::unique_ptr<VulkanState> s_vulkan_state{};
+
 // Define bitwise operators for DirtyFlags enum
 DirtyFlags operator |=(DirtyFlags lhs, DirtyFlags rhs) {
     return static_cast<DirtyFlags> (
@@ -34,7 +36,7 @@ bool operator <(BindingID lhs, BindingID rhs) {
            static_cast<u32>(rhs);
 }
 
-void VulkanState::Create() {
+VulkanState::VulkanState() {
     // Create a dummy texture which can be used in place of a real binding.
     VKTexture::Info info = {
         .width = 1,
@@ -80,6 +82,17 @@ void VulkanState::Create() {
     ConfigurePipeline();
 
     dirty_flags |= DirtyFlags::All;
+}
+
+void VulkanState::Create() {
+    if (!s_vulkan_state) {
+        s_vulkan_state = std::make_unique<VulkanState>();
+    }
+}
+
+VulkanState& VulkanState::Get() {
+    assert(s_vulkan_state);
+    return *s_vulkan_state;
 }
 
 void VulkanState::SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset) {
@@ -148,38 +161,35 @@ void VulkanState::UnbindTexture(u32 index) {
     dirty_flags |= DirtyFlags::Texture;
 }
 
-void VulkanState::PushAttachment(Attachment attachment) {
-    targets.push_back(attachment);
-}
-
-void VulkanState::PopAttachment() {
-    if (!targets.empty()) {
-        targets.pop_back();
-    }
-}
-
-void VulkanState::BeginRendering() {
+void VulkanState::BeginRendering(Attachment color, Attachment depth_stencil) {
     if (rendering) {
         return;
     }
 
     // Make sure attachments are in optimal layout
-    auto& attachment = targets.back();
-    vk::RenderingInfo render_info{{}, attachment.render_area, 1, {}};
+    vk::RenderingInfo render_info{{}, color.image->GetArea(), 1, {}};
     std::array<vk::RenderingAttachmentInfo, 2> infos{};
 
-    if (attachment.color) {
-        attachment.color->Transition(vk::ImageLayout::eColorAttachmentOptimal);
+    if (color.image) {
+        color.image->Transition(vk::ImageLayout::eColorAttachmentOptimal);
 
-        infos[0] = {attachment.color->GetView(), attachment.color->GetLayout()};
+        infos[0] = vk::RenderingAttachmentInfo{
+            color.image->GetView(), color.image->GetLayout(), {}, {}, {},
+            color.load_op, color.store_op, color.clear_color
+        };
+
         render_info.colorAttachmentCount = 1;
         render_info.pColorAttachments = &infos[0];
     }
 
-    if (attachment.depth_stencil) {
-        attachment.depth_stencil->Transition(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    if (depth_stencil.image) {
+        depth_stencil.image->Transition(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
-        infos[1] = {attachment.depth_stencil->GetView(), attachment.depth_stencil->GetLayout()};
+        infos[1] = vk::RenderingAttachmentInfo{
+                depth_stencil.image->GetView(), depth_stencil.image->GetLayout(), {}, {}, {},
+                depth_stencil.load_op, depth_stencil.store_op, depth_stencil.clear_color
+        };
+
         render_info.pDepthAttachment = &infos[1];
         render_info.pStencilAttachment = &infos[1];
     }
@@ -374,9 +384,6 @@ vk::ShaderModule VulkanState::CompileShader(const std::string& source, vk::Shade
 void VulkanState::Apply() {
     // Update resources in descriptor sets if changed
     UpdateDescriptorSet();
-
-    // Start rendering if not already started
-    BeginRendering();
 
     // Re-apply dynamic parts of the pipeline
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();

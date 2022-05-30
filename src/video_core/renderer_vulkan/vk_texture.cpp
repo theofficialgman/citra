@@ -6,7 +6,6 @@
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
-#include "video_core/renderer_vulkan/vk_resource_cache.h"
 #include "video_core/renderer_vulkan/vk_state.h"
 
 namespace Vulkan {
@@ -14,7 +13,8 @@ namespace Vulkan {
 VKTexture::~VKTexture() {
     if (texture) {
         // Make sure to unbind the texture before destroying it
-        g_vk_state->UnbindTexture(this);
+        auto& state = VulkanState::Get();
+        state.UnbindTexture(this);
 
         auto deleter = [this]() {
             auto& device = g_vk_instace->GetDevice();
@@ -27,6 +27,10 @@ VKTexture::~VKTexture() {
         // by the GPU
         g_vk_task_scheduler->Schedule(deleter);
     }
+}
+
+VKTexture& VKTexture::operator=(VKTexture&& move) {
+
 }
 
 void VKTexture::Create(const VKTexture::Info& create_info) {
@@ -164,9 +168,9 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
 }
 
 void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels) {
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(pixels.size());
+    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(pixels.size_bytes());
     if (!buffer) {
-        LOG_ERROR(Render_Vulkan, "Cannot copy pixels without staging buffer!");
+        LOG_ERROR(Render_Vulkan, "Cannot upload pixels without staging buffer!");
     }
 
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
@@ -177,18 +181,53 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     vk::BufferImageCopy copy_region{
         offset, row_length, region.extent.height,
         {info.aspect, level, layer, 1},
-        { region.offset.x, region.offset.y, 0 },
-        { region.extent.width, region.extent.height, 1 }
+        {region.offset.x, region.offset.y, 0},
+        {region.extent.width, region.extent.height, 1}
     };
 
     // Transition image to transfer format
+    auto old_layout = GetLayout();
     Transition(vk::ImageLayout::eTransferDstOptimal);
+
     command_buffer.copyBufferToImage(g_vk_task_scheduler->GetStaging().GetBuffer(),
                                      texture, vk::ImageLayout::eTransferDstOptimal,
                                      copy_region);
 
-    // Prepare for shader reads
-    Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
+    // Restore layout
+    Transition(old_layout);
+}
+
+void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
+    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(memory.size_bytes());
+    if (!buffer) {
+        LOG_ERROR(Render_Vulkan, "Cannot download texture without staging buffer!");
+    }
+
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+
+    // Copy pixels to staging buffer
+    vk::BufferImageCopy download_region{
+        offset, row_length, region.extent.height,
+        {info.aspect, level, layer, 1},
+        {region.offset.x, region.offset.y, 0},
+        {region.extent.width, region.extent.height, 1}
+    };
+
+    // Transition image to transfer format
+    auto old_layout = GetLayout();
+    Transition(vk::ImageLayout::eTransferSrcOptimal);
+
+    command_buffer.copyImageToBuffer(texture, vk::ImageLayout::eTransferSrcOptimal,
+                                     g_vk_task_scheduler->GetStaging().GetBuffer(),
+                                     download_region);
+
+    // Wait for the data to be available
+    // NOTE: This is really slow and should be reworked
+    g_vk_task_scheduler->Submit(false, true);
+    std::memcpy(memory.data(), buffer, memory.size_bytes());
+
+    // Restore layout
+    Transition(old_layout);
 }
 
 }

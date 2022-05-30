@@ -56,10 +56,10 @@ BindingID operator + (BindingID lhs, u32 rhs) {
 }
 
 struct Attachment {
-    VKTexture* color{}, *depth_stencil{};
-    vk::ClearColorValue clear_color;
-    vk::ClearDepthStencilValue depth_color;
-    vk::Rect2D render_area{-1};
+    VKTexture* image{};
+    vk::ClearValue clear_color;
+    vk::AttachmentLoadOp load_op{vk::AttachmentLoadOp::eLoad};
+    vk::AttachmentStoreOp store_op{vk::AttachmentStoreOp::eStore};
 };
 
 constexpr u32 DESCRIPTOR_SET_LAYOUT_COUNT = 3;
@@ -67,11 +67,12 @@ constexpr u32 DESCRIPTOR_SET_LAYOUT_COUNT = 3;
 /// Tracks global Vulkan state
 class VulkanState {
 public:
-    VulkanState() = default;
+    VulkanState();
     ~VulkanState() = default;
 
     /// Initialize object to its initial state
-    void Create();
+    static void Create();
+    static VulkanState& Get();
 
     /// Query state
     bool DepthTestEnabled() const { return depth_enabled && depth_writes; }
@@ -97,10 +98,8 @@ public:
                     vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha);
 
     /// Rendering
-    void PushAttachment(Attachment attachment);
-    void PopAttachment();
     void SetFragmentShader(const Pica::Regs& config);
-    void BeginRendering();
+    void BeginRendering(Attachment color, Attachment depth_stencil);
     void EndRendering();
 
     /// Configure shader resources
@@ -130,7 +129,6 @@ private:
     bool rendering = false;
     VKTexture dummy_texture;
     vk::UniqueSampler sampler;
-    std::vector<Attachment> targets;
 
     VKBuffer* vertex_buffer{}, * index_buffer{};
     vk::DeviceSize vertex_offset, index_offset;
