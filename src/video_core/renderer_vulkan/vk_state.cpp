@@ -36,6 +36,51 @@ bool operator <(BindingID lhs, BindingID rhs) {
            static_cast<u32>(rhs);
 }
 
+DescriptorUpdater::DescriptorUpdater() {
+    Clear();
+}
+
+void DescriptorUpdater::Clear() {
+    writes = {};
+    write_count = 0;
+}
+
+void DescriptorUpdater::Update() {
+    assert(write_count > 0);
+
+    auto& device = g_vk_instace->GetDevice();
+    device.updateDescriptorSets(writes, {});
+}
+
+void DescriptorUpdater::SetDescriptorSet(vk::DescriptorSet _set) {
+    set = _set;
+}
+
+void DescriptorUpdater::AddCombinedImageSamplerDescriptorWrite(u32 binding, vk::Sampler sampler,
+                                                               const VKTexture& image) {
+    assert(write_count < MAX_WRITES && image_info_count < MAX_IMAGE_INFOS);
+
+    auto& info = image_infos[image_info_count++];
+    info = vk::DescriptorImageInfo{sampler, image.GetView(), image.GetLayout()};
+
+    writes[write_count++] = vk::WriteDescriptorSet{
+        set, binding, 0, 1, vk::DescriptorType::eCombinedImageSampler, &info
+    };
+}
+
+void DescriptorUpdater::AddBufferDescriptorWrite(u32 binding, vk::DescriptorType buffer_type,
+                                                 u32 offset, u32 size, const VKBuffer& buffer,
+                                                 const vk::BufferView& view) {
+    assert(write_count < MAX_WRITES && buffer_info_count < MAX_BUFFER_INFOS);
+
+    auto& info = buffer_infos[buffer_info_count++];
+    info = vk::DescriptorBufferInfo{buffer.GetBuffer(), offset, size};
+
+    writes[write_count++] = vk::WriteDescriptorSet{
+        set, binding, 0, 1, buffer_type, nullptr, &info, &view
+    };
+}
+
 VulkanState::VulkanState() {
     // Create a dummy texture which can be used in place of a real binding.
     VKTexture::Info info = {
@@ -46,20 +91,8 @@ VulkanState::VulkanState() {
         .view_type = vk::ImageViewType::e2D
     };
 
-    dummy_texture.Create(info);
-    dummy_texture.Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
-
-    // Create descriptor pool
-    // TODO: Choose sizes more wisely
-    const std::array<vk::DescriptorPoolSize, 3> pool_sizes{{
-        { vk::DescriptorType::eUniformBuffer, 32 },
-        { vk::DescriptorType::eCombinedImageSampler, 32 },
-        { vk::DescriptorType::eStorageTexelBuffer, 32 },
-    }};
-
-    auto& device = g_vk_instace->GetDevice();
-    vk::DescriptorPoolCreateInfo pool_create_info({}, 1024, pool_sizes);
-    desc_pool = device.createDescriptorPoolUnique(pool_create_info);
+    placeholder.Create(info);
+    placeholder.Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
 
     // Create texture sampler
     auto props = g_vk_instace->GetPhysicalDevice().getProperties();
@@ -71,6 +104,8 @@ VulkanState::VulkanState() {
         false, vk::CompareOp::eAlways, {}, {},
         vk::BorderColor::eIntOpaqueBlack, false
     };
+
+    auto& device = g_vk_instace->GetDevice();
     sampler = device.createSamplerUnique(sampler_info);
 
     // Compile trivial vertex shader
@@ -105,60 +140,44 @@ void VulkanState::SetVertexBuffer(VKBuffer* buffer, vk::DeviceSize offset) {
     dirty_flags |= DirtyFlags::VertexBuffer;
 }
 
-void VulkanState::SetUniformBuffer(BindingID id, VKBuffer* buffer, u32 offset, u32 size) {
+void VulkanState::SetUniformBuffer(BindingID id, u32 offset, u32 size, const VKBuffer& buffer) {
     assert(id < BindingID::Tex0);
-    u32 index = static_cast<u32>(id);
+    u32 binding = static_cast<u32>(id);
 
-    auto& binding = bindings[index];
-    auto old_buffer = std::get<VKBuffer*>(binding.resource);
-    if (old_buffer != buffer) {
-        binding.resource = buffer;
-        dirty_flags |= DirtyFlags::Uniform;
-        binding.dirty = true;
-    }
+    updater.SetDescriptorSet(g_vk_task_scheduler->GetDescriptorSet(0));
+    updater.AddBufferDescriptorWrite(binding, vk::DescriptorType::eUniformBuffer, offset, size, buffer);
 }
 
-void VulkanState::SetTexture(BindingID id, VKTexture* image) {
+void VulkanState::SetTexture(BindingID id, const VKTexture& image) {
     assert(id > BindingID::PicaUniform && id < BindingID::LutLF);
-    u32 index = static_cast<u32>(id);
+    u32 binding = static_cast<u32>(id);
 
-    auto& binding = bindings[index];
-    auto old_image = std::get<VKTexture*>(binding.resource);
-    if (old_image != image) {
-        binding.resource = image;
-        dirty_flags |= DirtyFlags::Texture;
-        binding.dirty = true;
-    }
+    updater.SetDescriptorSet(g_vk_task_scheduler->GetDescriptorSet(1));
+    updater.AddCombinedImageSamplerDescriptorWrite(binding, sampler.get(), image);
 }
 
-void VulkanState::SetTexelBuffer(BindingID id, VKBuffer* buffer, vk::Format view_format) {
+void VulkanState::SetTexelBuffer(BindingID id, u32 offset, u32 size, const VKBuffer& buffer, u32 view_index) {
     assert(id > BindingID::TexCube);
-    u32 index = static_cast<u32>(id);
+    u32 binding = static_cast<u32>(id);
 
-    auto& binding = bindings[index];
-    auto old_buffer = std::get<VKBuffer*>(binding.resource);
-    if (old_buffer != buffer) {
-        auto& device = g_vk_instace->GetDevice();
-
-        binding.resource = buffer;
-        binding.buffer_view = device.createBufferViewUnique({{}, buffer->GetBuffer(), view_format});
-        dirty_flags |= DirtyFlags::TexelBuffer;
-        binding.dirty = true;
-    }
+    updater.SetDescriptorSet(g_vk_task_scheduler->GetDescriptorSet(2));
+    updater.AddBufferDescriptorWrite(binding, vk::DescriptorType::eStorageTexelBuffer,
+                                     offset, size, buffer, buffer.GetView(view_index));
 }
 
-void VulkanState::UnbindTexture(VKTexture* image) {
+void VulkanState::UnbindTexture(const VKTexture& image) {
+    updater.SetDescriptorSet(g_vk_task_scheduler->GetDescriptorSet(1));
     for (auto i = u32(BindingID::Tex0); i <= u32(BindingID::TexCube); i++) {
-        auto current_image = std::get<VKTexture*>(bindings[i].resource);
-        if (current_image == image) {
-            UnbindTexture(i);
+        auto view = updater.GetResource<vk::ImageView>(i);
+        if (view == image.GetView()) {
+            updater.AddCombinedImageSamplerDescriptorWrite(i, sampler.get(), placeholder);
         }
     }
 }
 
 void VulkanState::UnbindTexture(u32 index) {
-    bindings[index].resource = &dummy_texture;
-    dirty_flags |= DirtyFlags::Texture;
+    updater.SetDescriptorSet(g_vk_task_scheduler->GetDescriptorSet(1));
+    updater.AddCombinedImageSamplerDescriptorWrite(index, sampler.get(), placeholder);
 }
 
 void VulkanState::BeginRendering(Attachment color, Attachment depth_stencil) {
@@ -383,7 +402,7 @@ vk::ShaderModule VulkanState::CompileShader(const std::string& source, vk::Shade
 
 void VulkanState::Apply() {
     // Update resources in descriptor sets if changed
-    UpdateDescriptorSet();
+    updater.Update();
 
     // Re-apply dynamic parts of the pipeline
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
@@ -444,21 +463,21 @@ void VulkanState::Apply() {
 }
 
 void VulkanState::ConfigureDescriptorSets() {
-    // Define the descriptor sets we will be using
-    std::array<vk::DescriptorSetLayoutBinding, 2> ubo_set = {{
+    // Draw descriptor sets
+    std::array<vk::DescriptorSetLayoutBinding, 2> ubo_set{{
         { 0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex |
           vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment }, // shader_data
         { 1, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex } // pica_uniforms
     }};
 
-    std::array<vk::DescriptorSetLayoutBinding, 4> texture_set = {{
+    std::array<vk::DescriptorSetLayoutBinding, 4> texture_set{{
         { 0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex0
         { 1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex1
         { 2, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex2
         { 3, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment }, // tex_cube
     }};
 
-    std::array<vk::DescriptorSetLayoutBinding, 3> lut_set = {{
+    std::array<vk::DescriptorSetLayoutBinding, 3> lut_set{{
         { 0, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment }, // texture_buffer_lut_lf
         { 1, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment }, // texture_buffer_lut_rg
         { 2, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment } // texture_buffer_lut_rgba
@@ -476,13 +495,9 @@ void VulkanState::ConfigureDescriptorSets() {
         descriptor_layouts[i] = device.createDescriptorSetLayout(create_infos[i]);
     }
 
-    vk::DescriptorSetAllocateInfo alloc_info(desc_pool.get(), descriptor_layouts);
-    descriptor_sets = device.allocateDescriptorSetsUnique(alloc_info);
-
     // Create the standard descriptor set layout
     vk::PipelineLayoutCreateInfo layout_info({}, descriptor_layouts);
     pipeline_layout = device.createPipelineLayoutUnique(layout_info);
-
 }
 
 void VulkanState::ConfigurePipeline() {
@@ -505,7 +520,7 @@ void VulkanState::ConfigurePipeline() {
 
 
     // Enable every required dynamic state
-    std::array<vk::DynamicState, MAX_DYNAMIC_STATES> dynamic_states{
+    std::array<vk::DynamicState, 14> dynamic_states{
         vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth,
         vk::DynamicState::eDepthTestEnable, vk::DynamicState::eColorWriteEnableEXT,
         vk::DynamicState::eStencilTestEnable, vk::DynamicState::eStencilOp,
@@ -515,61 +530,14 @@ void VulkanState::ConfigurePipeline() {
         vk::DynamicState::eLogicOpEXT, vk::DynamicState::eFrontFace
     };
 
-    for (auto& state : dynamic_states) {
-        builder.AddDynamicState(state);
-    }
+    builder.SetDynamicStates(dynamic_states);
+
+    // Configure vertex buffer
+    auto attributes = HardwareVertex::attribute_desc;
+    builder.AddVertexBuffer(0, sizeof(HardwareVertex), vk::VertexInputRate::eVertex, attributes);
 
     // Add trivial vertex shader
     builder.SetShaderStage(vk::ShaderStageFlagBits::eVertex, trivial_vertex_shader.get());
-}
-
-void VulkanState::UpdateDescriptorSet() {
-    std::vector<vk::WriteDescriptorSet> writes;
-    std::vector<vk::DescriptorBufferInfo> buffer_infos;
-    std::vector<vk::DescriptorImageInfo> image_infos;
-
-    auto& device = g_vk_instace->GetDevice();
-
-    // Check if any resource has been updated
-    if (dirty_flags & DirtyFlags::Uniform) {
-        for (int i = 0; i < 2; i++) {
-            if (bindings[i].dirty) {
-                auto buffer = std::get<VKBuffer*>(bindings[i].resource);
-                buffer_infos.emplace_back(buffer->GetBuffer(), 0, VK_WHOLE_SIZE);
-                writes.emplace_back(descriptor_sets[i].get(), i, 0, 1, vk::DescriptorType::eUniformBuffer,
-                                    nullptr, &buffer_infos.back(), nullptr);
-                bindings[i].dirty = false;
-            }
-        }
-    }
-
-    if (dirty_flags & DirtyFlags::Texture) {
-        for (int i = 2; i < 6; i++) {
-            if (bindings[i].dirty) {
-                auto texture = std::get<VKTexture*>(bindings[i].resource);
-                image_infos.emplace_back(sampler.get(), texture->GetView(), vk::ImageLayout::eShaderReadOnlyOptimal);
-                writes.emplace_back(descriptor_sets[i].get(), i, 0, 1, vk::DescriptorType::eCombinedImageSampler,
-                                    &image_infos.back());
-                bindings[i].dirty = false;
-            }
-        }
-    }
-
-    if (dirty_flags & DirtyFlags::TexelBuffer) {
-        for (int i = 6; i < 9; i++) {
-            if (bindings[i].dirty) {
-                auto buffer = std::get<VKBuffer*>(bindings[i].resource);
-                buffer_infos.emplace_back(buffer->GetBuffer(), 0, VK_WHOLE_SIZE);
-                writes.emplace_back(descriptor_sets[i].get(), i, 0, 1, vk::DescriptorType::eStorageTexelBuffer,
-                                    nullptr, &buffer_infos.back(), &bindings[i].buffer_view.get());
-                bindings[i].dirty = false;
-            }
-        }
-    }
-
-    if (!writes.empty()) {
-        device.updateDescriptorSets(writes, {});
-    }
 }
 
 }  // namespace Vulkan

@@ -51,7 +51,7 @@ class FormatReinterpreterVulkan : NonCopyable {
 
 public:
     explicit FormatReinterpreterVulkan();
-    ~FormatReinterpreterVulkan();
+    ~FormatReinterpreterVulkan() = default;
 
     std::pair<ReinterpreterMap::iterator, ReinterpreterMap::iterator> GetPossibleReinterpretations(
         SurfaceParams::PixelFormat dst_format);

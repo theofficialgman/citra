@@ -76,7 +76,10 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
         .usage = vk::BufferUsageFlagBits::eStorageTexelBuffer,
     };
 
+    texel_buffer_info.view_formats[0] = vk::Format::eR32G32Sfloat;
     texture_buffer_lut_lf.Create(texel_buffer_info);
+
+    texel_buffer_info.view_formats[1] = vk::Format::eR32G32B32A32Sfloat;
     texture_buffer_lut.Create(texel_buffer_info);
 
     // Create and bind uniform buffers
@@ -87,13 +90,15 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     };
 
     uniform_buffer.Create(uniform_info);
-    state.SetUniformBuffer(BindingID::VertexUniform, &uniform_buffer, 0, uniform_size_aligned_vs);
-    state.SetUniformBuffer(BindingID::PicaUniform, &uniform_buffer, uniform_size_aligned_vs, uniform_size_aligned_fs);
+    state.SetUniformBuffer(BindingID::VertexUniform, 0, uniform_size_aligned_vs,
+                           uniform_buffer);
+    state.SetUniformBuffer(BindingID::PicaUniform, uniform_size_aligned_vs, uniform_size_aligned_fs,
+                           uniform_buffer);
 
     // Bind texel buffers
-    state.SetTexelBuffer(BindingID::LutLF, &texture_buffer_lut_lf, vk::Format::eR32G32Sfloat);
-    state.SetTexelBuffer(BindingID::LutRG, &texture_buffer_lut, vk::Format::eR32G32Sfloat);
-    state.SetTexelBuffer(BindingID::LutRGBA, &texture_buffer_lut, vk::Format::eR32G32B32A32Sfloat);
+    state.SetTexelBuffer(BindingID::LutLF, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut_lf, 0);
+    state.SetTexelBuffer(BindingID::LutRG, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 0);
+    state.SetTexelBuffer(BindingID::LutRGBA, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 1);
 
     // Create vertex and index buffers
     VKBuffer::Info vertex_info = {
@@ -331,7 +336,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
             //texture_samplers[texture_index].SyncWithConfig(texture.config);
             Surface surface = res_cache.GetTextureSurface(texture);
             if (surface != nullptr) {
-                state.SetTexture(BindingID::Tex0 + texture_index, &surface->texture);
+                state.SetTexture(BindingID::Tex0 + texture_index, surface->texture);
             } else {
                 // Can occur when texture addr is null or its memory is unmapped/invalid
                 // HACK: In this case, the correct behaviour for the PICA is to use the last
@@ -404,13 +409,6 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     }
 
     vertex_batch.clear();
-
-    // Reset textures in rasterizer state context because the rasterizer cache might delete them
-    for (unsigned texture_index = 0; texture_index < pica_textures.size(); ++texture_index) {
-        state.UnbindTexture(texture_index);
-    }
-
-    state.Apply();
 
     // Mark framebuffer surfaces as dirty
     Common::Rectangle<u32> draw_rect_unscaled{draw_rect.left / res_scale, draw_rect.top / res_scale,
@@ -1132,7 +1130,7 @@ bool RasterizerVulkan::AccelerateDisplay(const GPU::Regs::FramebufferConfig& con
         (float)src_rect.bottom / (float)scaled_height, (float)src_rect.left / (float)scaled_width,
         (float)src_rect.top / (float)scaled_height, (float)src_rect.right / (float)scaled_width);
 
-    screen_info.display_texture = &src_surface->texture;
+    screen_info.display_texture = src_surface->texture.GetHandle();
     return true;
 }
 

@@ -189,17 +189,11 @@ void VKSwapChain::SetupImages() {
 
     // Create the swapchain buffers containing the image and imageview
     swapchain_images.resize(images.size());
-    for (int i = 0; i < swapchain_images.size(); i++)
-    {
-        vk::ImageViewCreateInfo color_attachment_view
-        (
-            {},
-            images[i],
-            vk::ImageViewType::e2D,
-            details.format.format,
-            {},
+    for (int i = 0; i < swapchain_images.size(); i++) {
+        vk::ImageViewCreateInfo color_attachment_view{
+            {}, images[i], vk::ImageViewType::e2D, details.format.format, {},
             { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
-        );
+        };
 
         // Wrap swapchain images with VKTexture
         swapchain_images[i].image = images[i];

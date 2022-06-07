@@ -30,10 +30,16 @@ namespace Vulkan {
 
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {
-    Vulkan::VKTexture* display_texture;
+    vk::Image display_texture;
     Common::Rectangle<float> display_texcoords;
-    Vulkan::VKTexture* texture;
+    Vulkan::VKTexture texture;
     GPU::Regs::PixelFormat format;
+};
+
+struct DrawInfo {
+    glm::vec4 i_resolution;
+    glm::vec4 o_resolution;
+    int layer;
 };
 
 class RendererVulkan : public RendererBase {
@@ -47,29 +53,25 @@ public:
     /// Shutdown the renderer
     void ShutDown() override;
 
-    /// Finalizes rendering the guest frame
-    void SwapBuffers() override;
-
-    /// Draws the latest frame from texture mailbox to the currently bound draw framebuffer in this
-    /// context
-    void TryPresent(int timeout_ms) override;
+    bool BeginPresent();
+    void EndPresent();
 
 private:
-    void InitOpenGLObjects();
+    void CreateVulkanObjects();
+    void ConfigureRenderPipeline();
     void ReloadSampler();
     void ReloadShader();
     void PrepareRendertarget();
-    void RenderToMailbox(const Layout::FramebufferLayout& layout,
-                         std::unique_ptr<Frontend::TextureMailbox>& mailbox, bool flipped);
     void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
+
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
     void DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h);
     void DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
-                                       const ScreenInfo& screen_info_r, float x, float y, float w,
-                                       float h);
+                                       const ScreenInfo& screen_info_r, float x, float y, float w, float h);
     void DrawSingleScreenStereo(const ScreenInfo& screen_info_l, const ScreenInfo& screen_info_r,
                                 float x, float y, float w, float h);
+
     void UpdateFramerate();
 
     // Loads framebuffer from emulated memory into the display information structure
@@ -78,12 +80,18 @@ private:
     // Fills active OpenGL texture with the given RGB color.
     void LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, const ScreenInfo& screen);
 
+private:
+    // Vulkan state
+    DrawInfo draw_info{};
     VulkanState state;
 
-    // OpenGL object IDs
+    // Vulkan objects
+    vk::UniqueShaderModule vertex_shader, fragment_shader;
+    vk::UniqueDescriptorSet descriptor_set;
+    vk::UniqueDescriptorSetLayout descriptor_layout;
+    vk::UniquePipelineLayout pipeline_layout;
+    vk::UniquePipeline pipeline;
     VKBuffer vertex_buffer;
-    //OGLProgram shader;
-    //OGLSampler filter_sampler;
 
     /// Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;

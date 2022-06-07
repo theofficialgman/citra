@@ -12,19 +12,7 @@
 namespace Vulkan {
 
 VKBuffer::~VKBuffer() {
-    if (buffer) {
-        if (memory != nullptr) {
-            g_vk_instace->GetDevice().unmapMemory(buffer_memory);
-        }
-
-        auto deleter = [this]() {
-            auto& device = g_vk_instace->GetDevice();
-                device.destroyBuffer(buffer);
-                device.freeMemory(buffer_memory);
-        };
-
-        g_vk_task_scheduler->Schedule(deleter);
-    }
+    Destroy();
 }
 
 void VKBuffer::Create(const VKBuffer::Info& info) {
@@ -45,6 +33,32 @@ void VKBuffer::Create(const VKBuffer::Info& info) {
     // Optionally map the buffer to CPU memory
     if (info.properties & vk::MemoryPropertyFlagBits::eHostVisible) {
         memory = device.mapMemory(buffer_memory, 0, info.size);
+    }
+
+    for (auto& format : info.view_formats) {
+        if (format != vk::Format::eUndefined) {
+            views[view_count++] = device.createBufferView({{}, buffer, format, 0, info.size});
+        }
+    }
+}
+
+void VKBuffer::Destroy() {
+    if (buffer) {
+        if (memory != nullptr) {
+            g_vk_instace->GetDevice().unmapMemory(buffer_memory);
+        }
+
+        auto deleter = [this]() {
+            auto& device = g_vk_instace->GetDevice();
+            device.destroyBuffer(buffer);
+            device.freeMemory(buffer_memory);
+
+            for (int i = 0; i < view_count; i++) {
+                device.destroyBufferView(views[i]);
+            }
+        };
+
+        g_vk_task_scheduler->Schedule(deleter);
     }
 }
 

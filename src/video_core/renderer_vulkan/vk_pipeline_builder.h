@@ -15,25 +15,46 @@
 
 namespace Vulkan {
 
-constexpr u32 MAX_DYNAMIC_STATES = 14;
-constexpr u32 MAX_SHADER_STAGES = 3;
+class PipelineLayoutBuilder {
+public:
+    PipelineLayoutBuilder();
+    ~PipelineLayoutBuilder() = default;
+
+    void Clear();
+    vk::PipelineLayout Build();
+
+    void AddDescriptorSet(vk::DescriptorSetLayout layout);
+    void AddPushConstants(vk::ShaderStageFlags stages, u32 offset, u32 size);
+
+private:
+    static constexpr u32 MAX_SETS = 8;
+    static constexpr u32 MAX_PUSH_CONSTANTS = 1;
+
+    vk::PipelineLayoutCreateInfo pipeline_layout_info;
+    std::array<vk::DescriptorSetLayout, MAX_SETS> sets;
+    std::array<vk::PushConstantRange, MAX_PUSH_CONSTANTS> push_constants;
+};
 
 class PipelineBuilder {
 public:
     PipelineBuilder();
     ~PipelineBuilder() = default;
 
+    void Clear();
     vk::Pipeline Build();
 
     void SetPipelineLayout(vk::PipelineLayout layout);
+    void AddVertexBuffer(u32 binding, u32 stride, vk::VertexInputRate input_rate,
+                         const std::span<vk::VertexInputAttributeDescription> attributes);
     void SetShaderStage(vk::ShaderStageFlagBits stage, vk::ShaderModule module);
 
     void SetPrimitiveTopology(vk::PrimitiveTopology topology, bool enable_primitive_restart = false);
     void SetLineWidth(float width);
-    void SetMultisamples(u32 multisamples, bool per_sample_shading);
+    void SetMultisamples(vk::SampleCountFlagBits samples, bool per_sample_shading);
     void SetRasterizationState(vk::PolygonMode polygon_mode, vk::CullModeFlags cull_mode,
                                vk::FrontFace front_face);
 
+    void SetNoCullRasterizationState();
     void SetDepthState(bool depth_test, bool depth_write, vk::CompareOp compare_op);
     void SetStencilState(bool stencil_test, vk::StencilOpState front, vk::StencilOpState back);
     void SetNoDepthTestState();
@@ -47,14 +68,21 @@ public:
 
     void SetViewport(float x, float y, float width, float height, float min_depth, float max_depth);
     void SetScissorRect(s32 x, s32 y, u32 width, u32 height);
-    void AddDynamicState(vk::DynamicState state);
-    void SetMultisamples(vk::SampleCountFlagBits samples);
+    void SetDynamicStates(std::span<vk::DynamicState> states);
 
 private:
+    static constexpr u32 MAX_DYNAMIC_STATES = 14;
+    static constexpr u32 MAX_SHADER_STAGES = 3;
+    static constexpr u32 MAX_VERTEX_BUFFERS = 8;
+    static constexpr u32 MAX_VERTEX_ATTRIBUTES = 16;
+
     vk::GraphicsPipelineCreateInfo pipeline_info;
     std::vector<vk::PipelineShaderStageCreateInfo> shader_stages;
 
     vk::PipelineVertexInputStateCreateInfo vertex_input_state;
+    std::array<vk::VertexInputBindingDescription, MAX_VERTEX_BUFFERS> vertex_buffers;
+    std::array<vk::VertexInputAttributeDescription, MAX_VERTEX_ATTRIBUTES> vertex_attributes;
+
     vk::PipelineInputAssemblyStateCreateInfo input_assembly;
     vk::PipelineRasterizationStateCreateInfo rasterization_state;
     vk::PipelineDepthStencilStateCreateInfo depth_state;

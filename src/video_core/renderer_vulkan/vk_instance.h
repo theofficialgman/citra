@@ -13,8 +13,7 @@
 namespace Vulkan {
 
 /// The global Vulkan instance
-class VKInstance
-{
+class VKInstance {
 public:
     VKInstance() = default;
     ~VKInstance();

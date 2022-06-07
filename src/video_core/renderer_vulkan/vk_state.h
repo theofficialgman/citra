@@ -64,6 +64,41 @@ struct Attachment {
 
 constexpr u32 DESCRIPTOR_SET_LAYOUT_COUNT = 3;
 
+class DescriptorUpdater {
+    enum : u32
+    {
+        MAX_WRITES = 16,
+        MAX_IMAGE_INFOS = 8,
+        MAX_BUFFER_INFOS = 4,
+        MAX_VIEWS = 4,
+        MAX_SETS = 6
+    };
+
+public:
+    DescriptorUpdater();
+    ~DescriptorUpdater() = default;
+
+    void Clear();
+    void Update();
+
+    template <typename T>
+    T GetResource(u32 binding);
+
+    void SetDescriptorSet(vk::DescriptorSet set);
+    void AddCombinedImageSamplerDescriptorWrite(u32 binding, vk::Sampler sampler, const VKTexture& image);
+    void AddBufferDescriptorWrite(u32 binding, vk::DescriptorType buffer_type, u32 offset, u32 size,
+                                  const VKBuffer& buffer, const vk::BufferView& view = VK_NULL_HANDLE);
+private:
+    vk::DescriptorSet set;
+    std::array<vk::WriteDescriptorSet, MAX_WRITES> writes;
+    std::array<vk::DescriptorBufferInfo, MAX_BUFFER_INFOS> buffer_infos;
+    std::array<vk::DescriptorImageInfo, MAX_IMAGE_INFOS> image_infos;
+    std::array<vk::BufferView, MAX_VIEWS> views;
+
+    u32 write_count = 0, buffer_info_count = 0;
+    u32 image_info_count = 0, view_count = 0;
+};
+
 /// Tracks global Vulkan state
 class VulkanState {
 public:
@@ -73,6 +108,7 @@ public:
     /// Initialize object to its initial state
     static void Create();
     static VulkanState& Get();
+    static vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage);
 
     /// Query state
     bool DepthTestEnabled() const { return depth_enabled && depth_writes; }
@@ -88,7 +124,7 @@ public:
     void SetStencilWrite(u32 mask);
     void SetStencilInput(u32 mask);
     void SetStencilTest(bool enable, vk::StencilOp fail, vk::StencilOp pass, vk::StencilOp depth_fail,
-                      vk::CompareOp compare, u32 ref);
+                        vk::CompareOp compare, u32 ref);
     void SetDepthWrite(bool enable);
     void SetDepthTest(bool enable, vk::CompareOp compare);
     void SetColorMask(bool red, bool green, bool blue, bool alpha);
@@ -103,10 +139,10 @@ public:
     void EndRendering();
 
     /// Configure shader resources
-    void SetUniformBuffer(BindingID id, VKBuffer* buffer, u32 offset, u32 size);
-    void SetTexture(BindingID id, VKTexture* texture);
-    void SetTexelBuffer(BindingID id, VKBuffer* buffer, vk::Format view_format);
-    void UnbindTexture(VKTexture* image);
+    void SetUniformBuffer(BindingID id, u32 offset, u32 size, const VKBuffer& buffer);
+    void SetTexture(BindingID id,  const VKTexture& texture);
+    void SetTexelBuffer(BindingID id, u32 offset, u32 size, const VKBuffer& buffer, u32 view_index);
+    void UnbindTexture(const VKTexture& image);
     void UnbindTexture(u32 index);
 
     /// Apply all dirty state to the current Vulkan command buffer
@@ -115,27 +151,18 @@ public:
 private:
     void ConfigureDescriptorSets();
     void ConfigurePipeline();
-    void UpdateDescriptorSet();
-    vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage);
 
 private:
-    struct Binding {
-        bool dirty{};
-        std::variant<VKBuffer*, VKTexture*> resource{};
-        vk::UniqueBufferView buffer_view{};
-    };
-
     DirtyFlags dirty_flags;
-    bool rendering = false;
-    VKTexture dummy_texture;
+    DescriptorUpdater updater;
+    VKTexture placeholder;
     vk::UniqueSampler sampler;
 
+    // Vertex buffer
     VKBuffer* vertex_buffer{}, * index_buffer{};
     vk::DeviceSize vertex_offset, index_offset;
-    std::array<Binding, 9> bindings;
-    std::vector<vk::UniqueDescriptorSet> descriptor_sets;
-    vk::UniqueDescriptorPool desc_pool;
 
+    // Viewport
     vk::Viewport viewport{0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
     vk::CullModeFlags cull_mode{};
     vk::FrontFace front_face{};
@@ -143,6 +170,7 @@ private:
     vk::LogicOp logic_op{};
     std::array<float, 4> blend_constants{};
 
+    bool rendering = false;
     u32 stencil_write_mask{}, stencil_input_mask{}, stencil_ref{};
     bool depth_enabled{}, depth_writes{}, stencil_enabled{}, stencil_writes{};
     vk::StencilOp fail_op, pass_op, depth_fail_op;
@@ -158,5 +186,21 @@ private:
     std::unordered_map<PicaFSConfig, vk::UniqueShaderModule> fragment_shaders;
     std::unordered_map<PipelineCacheKey, vk::UniquePipeline> pipelines;
 };
+
+template <typename T>
+T DescriptorUpdater::GetResource(u32 binding) {
+    for (auto& write : writes) {
+        if (write.dstBinding == binding) {
+            if constexpr (std::is_same_v<T, vk::ImageView>) {
+                return write.pImageInfo[0].imageView;
+            }
+            else if constexpr (std::is_same_v<T, vk::Buffer>) {
+                return write.pBufferInfo[0].buffer;
+            }
+        }
+    }
+
+    return VK_NULL_HANDLE;
+}
 
 } // namespace Vulkan

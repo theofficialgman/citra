@@ -33,16 +33,18 @@ class VKSwapChain;
 /// frame latency if the CPU is too far ahead of the GPU
 class VKTaskScheduler {
 public:
-    explicit VKTaskScheduler(VKSwapChain* swapchain);
+    VKTaskScheduler() = default;
     ~VKTaskScheduler();
 
     /// Create and initialize the work scheduler
     bool Create();
 
     /// Retrieve either of the current frame's command buffers
-    vk::CommandBuffer GetCommandBuffer() const { return tasks[current_task].command_buffer; }
-    VKBuffer& GetStaging() { return tasks[current_task].staging; }
+    vk::CommandBuffer GetCommandBuffer() const;
+    vk::DescriptorSet GetDescriptorSet(u32 index) const;
+
     std::tuple<u8*, u32> RequestStaging(u32 size);
+    VKBuffer& GetStaging() { return tasks[current_task].staging; }
 
     /// Returns the task id that the CPU is recording
     u64 GetCPUTick() const { return current_task_id; }
@@ -58,18 +60,19 @@ public:
     void Schedule(std::function<void()> func);
 
     /// Submit the current work batch and move to the next frame
-    void Submit(bool present = true, bool wait_completion = false);
+    void Submit(bool wait_completion = false);
 
 private:
     void BeginTask();
 
 private:
     struct Task {
-        u64 task_id{};
-        std::vector<std::function<void()>> cleanups;
-        vk::CommandBuffer command_buffer;
         VKBuffer staging;
-        u32 current_offset{};
+        u64 current_offset{}, task_id{};
+        vk::CommandBuffer command_buffer;
+        std::vector<vk::UniqueDescriptorSet> descriptor_sets;
+        vk::UniqueDescriptorPool desc_pool;
+        std::vector<std::function<void()>> cleanups;
     };
 
     vk::UniqueSemaphore timeline;
@@ -78,11 +81,7 @@ private:
 
     // Each task contains unique resources
     std::array<Task, CONCURRENT_TASK_COUNT> tasks;
-    u32 current_task = CONCURRENT_TASK_COUNT - 1;
-
-    // Presentation semaphore
-    vk::UniqueSemaphore present_semaphore;
-    VKSwapChain* swapchain = nullptr;
+    u64 current_task = 0;
 };
 
 extern std::unique_ptr<VKTaskScheduler> g_vk_task_scheduler;

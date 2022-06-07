@@ -9,9 +9,6 @@
 
 namespace Vulkan {
 
-VKTaskScheduler::VKTaskScheduler(VKSwapChain* swapchain) :
-    swapchain(swapchain) {}
-
 VKTaskScheduler::~VKTaskScheduler() {
     SyncToGPU();
 }
@@ -50,28 +47,39 @@ bool VKTaskScheduler::Create() {
         .usage = vk::BufferUsageFlagBits::eTransferSrc
     };
 
+    const std::array<vk::DescriptorPoolSize, 3> pool_sizes{{
+        { vk::DescriptorType::eUniformBuffer, 32 },
+        { vk::DescriptorType::eCombinedImageSampler, 32 },
+        { vk::DescriptorType::eStorageTexelBuffer, 32 },
+    }};
+
     for (auto& task : tasks) {
         // Create command buffers
-        vk::CommandBufferAllocateInfo buffer_info
-        (
-            command_pool.get(),
-            vk::CommandBufferLevel::ePrimary,
-            1, task.command_buffer
-        );
-
+        vk::CommandBufferAllocateInfo buffer_info{
+            command_pool.get(), vk::CommandBufferLevel::ePrimary, 1, task.command_buffer
+        };
         task.command_buffer = device.allocateCommandBuffers(buffer_info)[0];
 
         // Create staging buffer
         task.staging.Create(staging_info);
-    }
 
-    // Create present semaphore
-    present_semaphore = device.createSemaphoreUnique({});
+        // Create descriptor pool
+        vk::DescriptorPoolCreateInfo pool_create_info({}, 1024, pool_sizes);
+        task.desc_pool = device.createDescriptorPoolUnique(pool_create_info);
+    }
 
     // Activate the first task.
     BeginTask();
 
     return true;
+}
+
+vk::CommandBuffer VKTaskScheduler::GetCommandBuffer() const {
+    return tasks[current_task].command_buffer;
+}
+
+vk::DescriptorSet VKTaskScheduler::GetDescriptorSet(u32 index) const {
+    return tasks[current_task].descriptor_sets[index].get();
 }
 
 void VKTaskScheduler::SyncToGPU(u64 task_index) {
@@ -106,7 +114,7 @@ void VKTaskScheduler::SyncToGPU() {
     SyncToGPU(current_task);
 }
 
-void VKTaskScheduler::Submit(bool present, bool wait_completion) {
+void VKTaskScheduler::Submit(bool wait_completion) {
     // End the current task recording.
     auto& task = tasks[current_task];
     task.command_buffer.end();
@@ -114,23 +122,11 @@ void VKTaskScheduler::Submit(bool present, bool wait_completion) {
     // When the task completes the timeline will increment to the task id
     vk::TimelineSemaphoreSubmitInfo timeline_info({}, task.task_id);
 
-    std::array<vk::Semaphore, 2> signal_semaphores = { timeline.get(), present_semaphore.get() };
     vk::PipelineStageFlags wait_stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    vk::SubmitInfo submit_info({}, wait_stage, task.command_buffer, signal_semaphores, &timeline_info);
-
-    // Wait for new swapchain image
-    if (present) {
-        auto available = swapchain->AcquireNextImage();
-        submit_info.setWaitSemaphores(available);
-    }
+    vk::SubmitInfo submit_info({}, wait_stage, task.command_buffer, timeline.get(), &timeline_info);
 
     // Submit the command buffer
     g_vk_instace->GetGraphicsQueue().submit(submit_info);
-
-    // Present the image when rendering has finished
-    if (present) {
-        swapchain->Present(present_semaphore.get());
-    }
 
     // Block host until the GPU catches up
     if (wait_completion) {

@@ -32,6 +32,7 @@
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
+#include "video_core/renderer_vulkan/vk_pipeline_builder.h"
 #include "video_core/video_core.h"
 
 // Include these late to avoid polluting previous headers
@@ -129,17 +130,17 @@ std::vector<const char*> RequiredExtensions(Frontend::WindowSystemType window_ty
     return extensions;
 }
 
-static const char vertex_shader[] = R"(
-in vec2 vert_position;
-in vec2 vert_tex_coord;
-out vec2 frag_tex_coord;
+static const char vertex_shader_source[] = R"(
+layout (location = 0) in vec2 vert_position;
+layout (location = 1) in vec2 vert_tex_coord;
+layout (location = 0) out vec2 frag_tex_coord;
 
 // This is a truncated 3x3 matrix for 2D transformations:
 // The upper-left 2x2 submatrix performs scaling/rotation/mirroring.
 // The third column performs translation.
 // The third row could be used for projection, which we don't need in 2D. It hence is assumed to
 // implicitly be [0, 0, 1]
-uniform mat3x2 modelview_matrix;
+layout (push_constant) uniform mat3x2 modelview_matrix;
 
 void main() {
     // Multiply input position by the rotscale part of the matrix and then manually translate by
@@ -150,13 +151,15 @@ void main() {
 }
 )";
 
-static const char fragment_shader[] = R"(
-in vec2 frag_tex_coord;
-layout(location = 0) out vec4 color;
+static const char fragment_shader_source[] = R"(
+layout (location = 0) in vec2 frag_tex_coord;
+layout (location = 0) out vec4 color;
 
-uniform vec4 i_resolution;
-uniform vec4 o_resolution;
-uniform int layer;
+layout (push_constant) uniform DrawInfo {
+    vec4 i_resolution;
+    vec4 o_resolution;
+    int layer;
+};
 
 uniform sampler2D color_texture;
 
@@ -165,70 +168,32 @@ void main() {
 }
 )";
 
-static const char fragment_shader_anaglyph[] = R"(
-
-// Anaglyph Red-Cyan shader based on Dubois algorithm
-// Constants taken from the paper:
-// "Conversion of a Stereo Pair to Anaglyph with
-// the Least-Squares Projection Method"
-// Eric Dubois, March 2009
-const mat3 l = mat3( 0.437, 0.449, 0.164,
-              -0.062,-0.062,-0.024,
-              -0.048,-0.050,-0.017);
-const mat3 r = mat3(-0.011,-0.032,-0.007,
-               0.377, 0.761, 0.009,
-              -0.026,-0.093, 1.234);
-
-in vec2 frag_tex_coord;
-out vec4 color;
-
-uniform vec4 resolution;
-uniform int layer;
-
-uniform sampler2D color_texture;
-uniform sampler2D color_texture_r;
-
-void main() {
-    vec4 color_tex_l = texture(color_texture, frag_tex_coord);
-    vec4 color_tex_r = texture(color_texture_r, frag_tex_coord);
-    color = vec4(color_tex_l.rgb*l+color_tex_r.rgb*r, color_tex_l.a);
-}
-)";
-
-static const char fragment_shader_interlaced[] = R"(
-
-in vec2 frag_tex_coord;
-out vec4 color;
-
-uniform vec4 o_resolution;
-
-uniform sampler2D color_texture;
-uniform sampler2D color_texture_r;
-
-uniform int reverse_interlaced;
-
-void main() {
-    float screen_row = o_resolution.x * frag_tex_coord.x;
-    if (int(screen_row) % 2 == reverse_interlaced)
-        color = texture(color_texture, frag_tex_coord);
-    else
-        color = texture(color_texture_r, frag_tex_coord);
-}
-)";
-
 /**
  * Vertex structure that the drawn screen rectangles are composed of.
  */
-struct ScreenRectVertex {
-    ScreenRectVertex(GLfloat x, GLfloat y, GLfloat u, GLfloat v) {
-        position[0] = x;
-        position[1] = y;
-        tex_coord[0] = u;
-        tex_coord[1] = v;
+
+struct ScreenRectVertexBase {
+    ScreenRectVertexBase() = default;
+    ScreenRectVertexBase(float x, float y, float u, float v) {
+        position.x = x;
+        position.y = y;
+        tex_coord.x = u;
+        tex_coord.y = v;
     }
 
-    GLfloat position[2];
-    GLfloat tex_coord[2];
+    glm::vec2 position;
+    glm::vec2 tex_coord;
+};
+
+struct ScreenRectVertex : public ScreenRectVertexBase {
+    ScreenRectVertex() = default;
+    ScreenRectVertex(float x, float y, float u, float v) : ScreenRectVertexBase(x, y, u, v) {};
+    static constexpr auto binding_desc = vk::VertexInputBindingDescription(0, sizeof(ScreenRectVertexBase));
+    static constexpr std::array<vk::VertexInputAttributeDescription, 8> attribute_desc =
+    {
+          vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, position)),
+          vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, tex_coord)),
+    };
 };
 
 /**
@@ -273,14 +238,10 @@ MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128
 
 /// Swap buffers (render frame)
 void RendererVulkan::SwapBuffers() {
-    // Maintain the rasterizer's state as a priority
-    OpenGLState prev_state = OpenGLState::GetCurState();
-    state.Apply();
-
     PrepareRendertarget();
 
     const auto& layout = render_window.GetFramebufferLayout();
-    RenderToMailbox(layout, render_window.mailbox, false);
+    DrawScreens(layout, false);
 
     m_current_frame++;
 
@@ -292,7 +253,6 @@ void RendererVulkan::SwapBuffers() {
         Core::System::GetInstance().CoreTiming().GetGlobalTimeUs());
     Core::System::GetInstance().perf_stats->BeginSystemFrame();
 
-    prev_state.Apply();
     RefreshRasterizerSetting();
 
     if (Pica::g_debug_context && Pica::g_debug_context->recorder) {
@@ -315,9 +275,9 @@ void RendererVulkan::PrepareRendertarget() {
         if (color_fill.is_enabled) {
             LoadColorToActiveGLTexture(color_fill.color_r, color_fill.color_g, color_fill.color_b, screen_infos[i]);
         } else {
-            auto rect = screen_infos[i].texture->GetExtent();
+            auto extent = screen_infos[i].texture.GetArea().extent;
             auto format = screen_infos[i].format;
-            if (rect.width != framebuffer.width || rect.height != framebuffer.height ||
+            if (extent.width != framebuffer.width || extent.height != framebuffer.height ||
                 format != framebuffer.color_format) {
                 // Reallocate texture if the framebuffer size has changed.
                 // This is expected to not happen very often and hence should not be a
@@ -328,37 +288,9 @@ void RendererVulkan::PrepareRendertarget() {
             LoadFBToScreenInfo(framebuffer, screen_infos[i], i == 1);
 
             // Resize the texture in case the framebuffer size has changed
-            screen_infos[i].texture.width = framebuffer.width;
-            screen_infos[i].texture.height = framebuffer.height;
+            //screen_infos[i].texture.width = framebuffer.width;
+            //screen_infos[i].texture.height = framebuffer.height;
         }
-    }
-}
-
-void RendererVulkan::RenderToMailbox(const Layout::FramebufferLayout& layout,
-                                     std::unique_ptr<Frontend::TextureMailbox>& mailbox,
-                                     bool flipped) {
-
-    Frontend::Frame* frame;
-    {
-        MICROPROFILE_SCOPE(OpenGL_WaitPresent);
-
-        frame = mailbox->GetRenderFrame();
-    }
-
-    {
-        MICROPROFILE_SCOPE(OpenGL_RenderFrame);
-        // Recreate the frame if the size of the window has changed
-        if (layout.width != frame->width || layout.height != frame->height) {
-            LOG_DEBUG(Render_OpenGL, "Reloading render frame");
-            mailbox->ReloadRenderFrame(frame, layout.width, layout.height);
-        }
-
-        GLuint render_texture = frame->color.handle;
-        state.draw.draw_framebuffer = frame->render.handle;
-        state.Apply();
-        DrawScreens(layout, flipped);
-        // Create a fence for the frontend to wait on and swap this frame to OffTex
-        mailbox->ReleaseRenderFrame(frame);
     }
 }
 
@@ -392,16 +324,16 @@ void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
 
     if (!Rasterizer()->AccelerateDisplay(framebuffer, framebuffer_addr, static_cast<u32>(pixel_stride), screen_info)) {
         // Reset the screen info's display texture to its own permanent texture
-        screen_info.display_texture = screen_info.texture;
+        screen_info.display_texture = screen_info.texture.GetHandle();
         screen_info.display_texcoords = Common::Rectangle<float>(0.f, 0.f, 1.f, 1.f);
 
         Memory::RasterizerFlushRegion(framebuffer_addr, framebuffer.stride * framebuffer.height);
 
         vk::Rect2D region{{0, 0}, {framebuffer.width, framebuffer.height}};
         std::span<u8> framebuffer_data(VideoCore::g_memory->GetPhysicalPointer(framebuffer_addr),
-                                       screen_info.texture->GetSize());
+                                       screen_info.texture.GetSize());
 
-        screen_info.texture->Upload(0, 1, pixel_stride, region, framebuffer_data);
+        screen_info.texture.Upload(0, 1, pixel_stride, region, framebuffer_data);
     }
 }
 
@@ -409,9 +341,8 @@ void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
  * Fills active OpenGL texture with the given RGB color. Since the color is solid, the texture can
  * be 1x1 but will stretch across whatever it's rendered on.
  */
-void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b,
-                                                const ScreenInfo& screen) {
-    state.texture_units[0].texture_2d = texture.resource.handle;
+void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color_b, const ScreenInfo& screen) {
+    /*state.texture_units[0].texture_2d = texture.resource.handle;
     state.Apply();
 
     glActiveTexture(GL_TEXTURE0);
@@ -421,161 +352,105 @@ void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 1, 1, 0, GL_RGB, GL_UNSIGNED_BYTE, framebuffer_data);
 
     state.texture_units[0].texture_2d = 0;
-    state.Apply();
+    state.Apply();*/
 }
 
 /**
  * Initializes the OpenGL state and creates persistent objects.
  */
-void RendererVulkan::InitOpenGLObjects() {
+void RendererVulkan::CreateVulkanObjects() {
     glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
                  0.0f);
 
-    filter_sampler.Create();
-    ReloadSampler();
+    //filter_sampler.Create();
+    //ReloadSampler();
 
     ReloadShader();
 
     // Generate VBO handle for drawing
-    vertex_buffer.Create();
+    VKBuffer::Info vertex_info{
+        .size = sizeof(ScreenRectVertex) * 4,
+        .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
+        .usage = vk::BufferUsageFlagBits::eVertexBuffer |
+                 vk::BufferUsageFlagBits::eTransferDst
+    };
+    vertex_buffer.Create(vertex_info);
+}
 
-    // Generate VAO
-    vertex_array.Create();
+void RendererVulkan::ConfigureRenderPipeline() {
+    // Define the descriptor sets we will be using
+    vk::DescriptorSetLayoutBinding color_texture{
+        0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment
+    };
+    vk::DescriptorSetLayoutCreateInfo color_texture_info{{}, color_texture};
 
-    state.draw.vertex_array = vertex_array.handle;
-    state.draw.vertex_buffer = vertex_buffer.handle;
-    state.draw.uniform_buffer = 0;
-    state.Apply();
+    auto& device = g_vk_instace->GetDevice();
+    descriptor_layout = device.createDescriptorSetLayoutUnique(color_texture_info);
 
-    // Attach vertex data to VAO
-    glBufferData(GL_ARRAY_BUFFER, sizeof(ScreenRectVertex) * 4, nullptr, GL_STREAM_DRAW);
-    glVertexAttribPointer(attrib_position, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenRectVertex),
-                          (GLvoid*)offsetof(ScreenRectVertex, position));
-    glVertexAttribPointer(attrib_tex_coord, 2, GL_FLOAT, GL_FALSE, sizeof(ScreenRectVertex),
-                          (GLvoid*)offsetof(ScreenRectVertex, tex_coord));
-    glEnableVertexAttribArray(attrib_position);
-    glEnableVertexAttribArray(attrib_tex_coord);
+    // Build the display pipeline layout
+    PipelineLayoutBuilder lbuilder;
+    lbuilder.AddDescriptorSet(descriptor_layout.get());
+    lbuilder.AddPushConstants(vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat2x3));
+    lbuilder.AddPushConstants(vk::ShaderStageFlagBits::eFragment, 0, sizeof(DrawInfo));
+    pipeline_layout = vk::UniquePipelineLayout{lbuilder.Build()};
 
-    // Allocate textures for each screen
-    for (auto& screen_info : screen_infos) {
-        screen_info.texture.resource.Create();
+    std::array<vk::DynamicState, 3> dynamic_states{
+        vk::DynamicState::eLineWidth, vk::DynamicState::eViewport, vk::DynamicState::eScissor,
+    };
 
-        // Allocation of storage is deferred until the first frame, when we
-        // know the framebuffer size.
+    // Build the display pipeline
+    PipelineBuilder builder;
+    builder.SetNoStencilState();
+    builder.SetNoBlendingState();
+    builder.SetNoDepthTestState();
+    builder.SetNoCullRasterizationState();
+    builder.SetLineWidth(1.0f);
+    builder.SetPrimitiveTopology(vk::PrimitiveTopology::eTriangleList);
+    builder.SetShaderStage(vk::ShaderStageFlagBits::eVertex, vertex_shader.get());
+    builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, fragment_shader.get());
+    builder.SetDynamicStates(dynamic_states);
+    builder.SetPipelineLayout(pipeline_layout.get());
 
-        state.texture_units[0].texture_2d = screen_info.texture.resource.handle;
-        state.Apply();
+    // Configure vertex buffer
+    auto attributes = ScreenRectVertex::attribute_desc;
+    builder.AddVertexBuffer(0, sizeof(ScreenRectVertex), vk::VertexInputRate::eVertex, attributes);
 
-        glActiveTexture(GL_TEXTURE0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        screen_info.display_texture = screen_info.texture.resource.handle;
-    }
-
-    state.texture_units[0].texture_2d = 0;
-    state.Apply();
+    pipeline = vk::UniquePipeline{builder.Build()};
 }
 
 void RendererVulkan::ReloadSampler() {
-    glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MIN_FILTER,
+    /*glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MIN_FILTER,
                         Settings::values.filter_mode ? GL_LINEAR : GL_NEAREST);
     glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MAG_FILTER,
                         Settings::values.filter_mode ? GL_LINEAR : GL_NEAREST);
     glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);*/
 }
 
 void RendererVulkan::ReloadShader() {
     // Link shaders and get variable locations
-    std::string shader_data = fragment_shader;
-    /*if (GLES) {
-        shader_data += fragment_shader_precision_OES;
-    }
-    if (Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph) {
-        if (Settings::values.pp_shader_name == "dubois (builtin)") {
-            shader_data += fragment_shader_anaglyph;
-        } else {
-            std::string shader_text =
-                OpenGL::GetPostProcessingShaderCode(true, Settings::values.pp_shader_name);
-            if (shader_text.empty()) {
-                // Should probably provide some information that the shader couldn't load
-                shader_data += fragment_shader_anaglyph;
-            } else {
-                shader_data += shader_text;
-            }
-        }
-    } else if (Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
-               Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced) {
-        if (Settings::values.pp_shader_name == "horizontal (builtin)") {
-            shader_data += fragment_shader_interlaced;
-        } else {
-            std::string shader_text =
-                OpenGL::GetPostProcessingShaderCode(true, Settings::values.pp_shader_name);
-            if (shader_text.empty()) {
-                // Should probably provide some information that the shader couldn't load
-                shader_data += fragment_shader_interlaced;
-            } else {
-                shader_data += shader_text;
-            }
-        }
-    } else {
-        if (Settings::values.pp_shader_name == "none (builtin)") {
-            shader_data += fragment_shader;
-        } else {
-            std::string shader_text =
-                OpenGL::GetPostProcessingShaderCode(false, Settings::values.pp_shader_name);
-            if (shader_text.empty()) {
-                // Should probably provide some information that the shader couldn't load
-                shader_data += fragment_shader;
-            } else {
-                shader_data += shader_text;
-            }
-        }
-    }*/
-    shader.Create(vertex_shader, shader_data.c_str());
-    state.draw.shader_program = shader.handle;
-    state.Apply();
-    uniform_modelview_matrix = glGetUniformLocation(shader.handle, "modelview_matrix");
-    uniform_color_texture = glGetUniformLocation(shader.handle, "color_texture");
-    if (Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
-        Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
-        Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced) {
-        uniform_color_texture_r = glGetUniformLocation(shader.handle, "color_texture_r");
-    }
-    if (Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
-        Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced) {
-        GLuint uniform_reverse_interlaced =
-            glGetUniformLocation(shader.handle, "reverse_interlaced");
-        if (Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced)
-            glUniform1i(uniform_reverse_interlaced, 1);
-        else
-            glUniform1i(uniform_reverse_interlaced, 0);
-    }
-    uniform_i_resolution = glGetUniformLocation(shader.handle, "i_resolution");
-    uniform_o_resolution = glGetUniformLocation(shader.handle, "o_resolution");
-    uniform_layer = glGetUniformLocation(shader.handle, "layer");
-    attrib_position = glGetAttribLocation(shader.handle, "vert_position");
-    attrib_tex_coord = glGetAttribLocation(shader.handle, "vert_tex_coord");
+    vertex_shader = vk::UniqueShaderModule{VulkanState::CompileShader(vertex_shader_source,
+                                                                      vk::ShaderStageFlagBits::eVertex)};
+    fragment_shader = vk::UniqueShaderModule{VulkanState::CompileShader(fragment_shader_source,
+                                                                        vk::ShaderStageFlagBits::eFragment)};
 }
 
-void RendererVulkan::ConfigureFramebufferTexture(TextureInfo& texture,
-                                                 const GPU::Regs::FramebufferConfig& framebuffer) {
+void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer) {
     GPU::Regs::PixelFormat format = framebuffer.color_format;
-    GLint internal_format;
 
-    texture.format = format;
-    texture.width = framebuffer.width;
-    texture.height = framebuffer.height;
+    VKTexture::Info texture_info{
+        .width = framebuffer.width,
+        .height = framebuffer.height,
+        .type = vk::ImageType::e2D,
+        .view_type = vk::ImageViewType::e2D,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment |
+                 vk::ImageUsageFlagBits::eTransferDst,
+        .aspect = vk::ImageAspectFlagBits::eColor,
+    };
 
     switch (format) {
     case GPU::Regs::PixelFormat::RGBA8:
-        internal_format = GL_RGBA;
-        texture.gl_format = GL_RGBA;
-        texture.gl_type = GLES ? GL_UNSIGNED_BYTE : GL_UNSIGNED_INT_8_8_8_8;
+        texture_info.format = vk::Format::eR8G8B8A8Unorm;
         break;
 
     case GPU::Regs::PixelFormat::RGB8:
@@ -583,44 +458,33 @@ void RendererVulkan::ConfigureFramebufferTexture(TextureInfo& texture,
         // specific OpenGL type used in this function using native-endian (that is, little-endian
         // mostly everywhere) for words or half-words.
         // TODO: check how those behave on big-endian processors.
-        internal_format = GL_RGB;
+        //internal_format = GL_RGB;
 
         // GLES Dosen't support BGR , Use RGB instead
-        texture.gl_format = GLES ? GL_RGB : GL_BGR;
-        texture.gl_type = GL_UNSIGNED_BYTE;
+        //texture.gl_format = GLES ? GL_RGB : GL_BGR;
+        //texture.gl_type = GL_UNSIGNED_BYTE;
+        texture_info.format = vk::Format::eR8G8B8Unorm;
         break;
 
     case GPU::Regs::PixelFormat::RGB565:
-        internal_format = GL_RGB;
-        texture.gl_format = GL_RGB;
-        texture.gl_type = GL_UNSIGNED_SHORT_5_6_5;
+        texture_info.format = vk::Format::eR5G6B5UnormPack16;
         break;
 
     case GPU::Regs::PixelFormat::RGB5A1:
-        internal_format = GL_RGBA;
-        texture.gl_format = GL_RGBA;
-        texture.gl_type = GL_UNSIGNED_SHORT_5_5_5_1;
+        texture_info.format = vk::Format::eR5G5B5A1UnormPack16;
         break;
 
     case GPU::Regs::PixelFormat::RGBA4:
-        internal_format = GL_RGBA;
-        texture.gl_format = GL_RGBA;
-        texture.gl_type = GL_UNSIGNED_SHORT_4_4_4_4;
+        texture_info.format = vk::Format::eR4G4B4A4UnormPack16;
         break;
 
     default:
         UNIMPLEMENTED();
     }
 
-    state.texture_units[0].texture_2d = texture.resource.handle;
-    state.Apply();
-
-    glActiveTexture(GL_TEXTURE0);
-    glTexImage2D(GL_TEXTURE_2D, 0, internal_format, texture.width, texture.height, 0,
-                 texture.gl_format, texture.gl_type, nullptr);
-
-    state.texture_units[0].texture_2d = 0;
-    state.Apply();
+    auto& texture = screen.texture;
+    texture.Destroy();
+    texture.Create(texture_info);
 }
 
 /**
@@ -638,15 +502,21 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
         ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right),
     }};
 
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+
     // As this is the "DrawSingleScreenRotated" function, the output resolution dimensions have been
     // swapped. If a non-rotated draw-screen function were to be added for book-mode games, those
     // should probably be set to the standard (w, h, 1.0 / w, 1.0 / h) ordering.
     const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
-    glUniform4f(uniform_i_resolution, static_cast<float>(screen_info.texture.width * scale_factor),
-                static_cast<float>(screen_info.texture.height * scale_factor),
-                1.0f / static_cast<float>(screen_info.texture.width * scale_factor),
-                1.0f / static_cast<float>(screen_info.texture.height * scale_factor));
-    glUniform4f(uniform_o_resolution, h, w, 1.0f / h, 1.0f / w);
+    auto [width, height] = screen_info.texture.GetArea().extent;
+
+    draw_info.i_resolution = glm::vec4(width * scale_factor, height * scale_factor,
+                                       1.0f / (width * scale_factor),
+                                       1.0f / (height * scale_factor));
+    draw_info.o_resolution = glm::vec4(h, w, 1.0f / h, 1.0f / w);
+    command_buffer.pushConstants(pipeline_layout.get(), vk::ShaderStageFlagBits::eFragment,
+                                 0, sizeof(DrawInfo), &draw_info);
+
     state.texture_units[0].texture_2d = screen_info.display_texture;
     state.texture_units[0].sampler = filter_sampler.handle;
     state.Apply();
@@ -776,12 +646,12 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
         ReloadSampler();
     }
 
-    if (VideoCore::g_renderer_shader_update_requested.exchange(false)) {
+    /*if (VideoCore::g_renderer_shader_update_requested.exchange(false)) {
         // Update fragment shader before drawing
         shader.Release();
         // Link shaders and get variable locations
         ReloadShader();
-    }
+    }*/
 
     const auto& top_screen = layout.top_screen;
     const auto& bottom_screen = layout.bottom_screen;
@@ -930,105 +800,42 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     }
 }
 
-void RendererVulkan::TryPresent(int timeout_ms) {
+bool RendererVulkan::BeginPresent() {
+    // Previous frame needs to be presented before we can acquire the swap chain.
+    g_vulkan_context->WaitForPresentComplete();
 
-    g_vk_task_scheduler->Submit(true);
+    auto available = swapchain->AcquireNextImage();
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
 
-    const auto& layout = render_window.GetFramebufferLayout();
-    auto frame = render_window.mailbox->TryGetPresentFrame(timeout_ms);
-    if (!frame) {
-        LOG_DEBUG(Render_Vulkan, "TryGetPresentFrame returned no frame to present");
-        return;
-    }
+    // Swap chain images start in undefined
+    Vulkan::Texture& swap_chain_texture = m_swap_chain->GetCurrentTexture();
+    swap_chain_texture.OverrideImageLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+    swap_chain_texture.TransitionToLayout(cmdbuffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-    // Clearing before a full overwrite of a fbo can signal to drivers that they can avoid a
-    // readback since we won't be doing any blending
-    glClear(GL_COLOR_BUFFER_BIT);
+    const VkClearValue clear_value = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    const VkRenderPassBeginInfo rp = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr, m_swap_chain->GetClearRenderPass(),
+        m_swap_chain->GetCurrentFramebuffer(), {{0, 0}, {swap_chain_texture.GetWidth(), swap_chain_texture.GetHeight()}}, 1u, &clear_value};
+    vkCmdBeginRenderPass(g_vulkan_context->GetCurrentCommandBuffer(), &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-    // Recreate the presentation FBO if the color attachment was changed
-    if (frame->color_reloaded) {
-        LOG_DEBUG(Render_Vulkan, "Reloading present frame");
-        render_window.mailbox->ReloadPresentFrame(frame, layout.width, layout.height);
-    }
-
-    glWaitSync(frame->render_fence, 0, GL_TIMEOUT_IGNORED);
-    // INTEL workaround.
-    // Normally we could just delete the draw fence here, but due to driver bugs, we can just delete
-    // it on the emulation thread without too much penalty
-    // glDeleteSync(frame.render_sync);
-    // frame.render_sync = 0;
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, frame->present.handle);
-    glBlitFramebuffer(0, 0, frame->width, frame->height, 0, 0, layout.width, layout.height,
-                      GL_COLOR_BUFFER_BIT, GL_LINEAR);
-
-    // Delete the fence if we're re-presenting to avoid leaking fences
-    if (frame->present_fence) {
-        glDeleteSync(frame->present_fence);
-    }
-
-    /* insert fence for the main thread to block on */
-    frame->present_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    glFlush();
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    const VkViewport vp{
+        0.0f, 0.0f, static_cast<float>(swap_chain_texture.GetWidth()), static_cast<float>(swap_chain_texture.GetHeight()), 0.0f, 1.0f};
+    const VkRect2D scissor{{0, 0}, {static_cast<u32>(swap_chain_texture.GetWidth()), static_cast<u32>(swap_chain_texture.GetHeight())}};
+    vkCmdSetViewport(g_vulkan_context->GetCurrentCommandBuffer(), 0, 1, &vp);
+    vkCmdSetScissor(g_vulkan_context->GetCurrentCommandBuffer(), 0, 1, &scissor);
+    return true;
 }
 
-/// Updates the framerate
-void RendererVulkan::UpdateFramerate() {}
+void RendererVulkan::EndPresent() {
+    ImGui::Render();
+    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData());
 
-static const char* GetSource(GLenum source) {
-#define RET(s)                                                                                     \
-    case GL_DEBUG_SOURCE_##s:                                                                      \
-        return #s
-    switch (source) {
-        RET(API);
-        RET(WINDOW_SYSTEM);
-        RET(SHADER_COMPILER);
-        RET(THIRD_PARTY);
-        RET(APPLICATION);
-        RET(OTHER);
-    default:
-        UNREACHABLE();
-    }
-#undef RET
-}
+    VkCommandBuffer cmdbuffer = g_vulkan_context->GetCurrentCommandBuffer();
+    vkCmdEndRenderPass(g_vulkan_context->GetCurrentCommandBuffer());
+    m_swap_chain->GetCurrentTexture().TransitionToLayout(cmdbuffer, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-static const char* GetType(GLenum type) {
-#define RET(t)                                                                                     \
-    case GL_DEBUG_TYPE_##t:                                                                        \
-        return #t
-    switch (type) {
-        RET(ERROR);
-        RET(DEPRECATED_BEHAVIOR);
-        RET(UNDEFINED_BEHAVIOR);
-        RET(PORTABILITY);
-        RET(PERFORMANCE);
-        RET(OTHER);
-        RET(MARKER);
-    default:
-        UNREACHABLE();
-    }
-#undef RET
-}
-
-static void APIENTRY DebugHandler(GLenum source, GLenum type, GLuint id, GLenum severity,
-                                  GLsizei length, const GLchar* message, const void* user_param) {
-    Log::Level level;
-    switch (severity) {
-    case GL_DEBUG_SEVERITY_HIGH:
-        level = Log::Level::Critical;
-        break;
-    case GL_DEBUG_SEVERITY_MEDIUM:
-        level = Log::Level::Warning;
-        break;
-    case GL_DEBUG_SEVERITY_NOTIFICATION:
-    case GL_DEBUG_SEVERITY_LOW:
-        level = Log::Level::Debug;
-        break;
-    }
-    LOG_GENERIC(Log::Class::Render_OpenGL, level, "{} {} {}: {}", GetSource(source), GetType(type),
-                id, message);
+    g_vulkan_context->SubmitCommandBuffer(m_swap_chain->GetImageAvailableSemaphore(), m_swap_chain->GetRenderingFinishedSemaphore(),
+        m_swap_chain->GetSwapChain(), m_swap_chain->GetCurrentImageIndex(), !m_swap_chain->IsPresentModeSynchronizing());
+    g_vulkan_context->MoveToNextCommandBuffer();
 }
 
 /// Initialize the renderer
@@ -1050,14 +857,19 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     g_vk_instace = std::make_unique<VKInstance>();
     g_vk_instace->Create(instance, physical_device, surface, true);
 
+    // Create Vulkan state and task manager
+    VulkanState::Create();
+    g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
+    g_vk_task_scheduler->Create();
+
     auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
     constexpr auto user_system = Common::Telemetry::FieldType::UserSystem;
     telemetry_session.AddField(user_system, "GPU_Vendor", "NVIDIA");
     telemetry_session.AddField(user_system, "GPU_Model", "GTX 1650");
     telemetry_session.AddField(user_system, "GPU_Vulkan_Version", "Vulkan 1.3");
 
-    InitOpenGLObjects();
-
+    // Initialize the renderer
+    CreateVulkanObjects();
     RefreshRasterizerSetting();
 
     return VideoCore::ResultStatus::Success;

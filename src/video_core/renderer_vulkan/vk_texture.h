@@ -14,12 +14,6 @@
 
 namespace Vulkan {
 
-struct SamplerInfo {
-    std::array<vk::SamplerAddressMode, 3> wrapping{};
-    vk::Filter min_filter{}, mag_filter{};
-    vk::SamplerMipmapMode mipmap_mode{};
-};
-
 /// Vulkan texture object
 class VKTexture final : public NonCopyable {
 public:
@@ -33,7 +27,6 @@ public:
         vk::ImageAspectFlags aspect;
         u32 multisamples = 1;
         u32 levels = 1, layers = 1;
-        SamplerInfo sampler_info = {};
     };
 
     VKTexture() = default;
@@ -44,6 +37,8 @@ public:
 
     /// Create a new Vulkan texture object
     void Create(const VKTexture::Info& info);
+    void Adopt
+    void Destroy();
 
     /// Query objects
     bool IsValid() const { return texture; }
@@ -68,7 +63,8 @@ private:
     vk::Image texture;
     vk::ImageView view;
     vk::DeviceMemory memory;
-    u32 channels{}, image_size{};
+    u32 image_size{};
+    bool adopted = false;
 };
 
 } // namespace Vulkan

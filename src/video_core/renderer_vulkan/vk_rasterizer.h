@@ -280,14 +280,11 @@ private:
     static constexpr std::size_t UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
     static constexpr std::size_t TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
 
-    std::array<SamplerInfo, 3> texture_samplers;
     VKBuffer vertex_buffer, uniform_buffer, index_buffer;
     VKBuffer texture_buffer_lut_lf, texture_buffer_lut;
 
     u32 uniform_buffer_alignment;
     u32 uniform_size_aligned_vs, uniform_size_aligned_fs;
-
-    SamplerInfo texture_cube_sampler;
 
     std::array<std::array<glm::vec2, 256>,
                Pica::LightingRegs::NumLightingSampler> lighting_lut_data{};

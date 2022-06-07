@@ -10,49 +10,31 @@
 
 namespace Vulkan {
 
-VKTexture::~VKTexture() {
-    if (texture) {
-        // Make sure to unbind the texture before destroying it
-        auto& state = VulkanState::Get();
-        state.UnbindTexture(this);
-
-        auto deleter = [this]() {
-            auto& device = g_vk_instace->GetDevice();
-            device.destroyImage(texture);
-            device.destroyImageView(view);
-            device.freeMemory(memory);
-        };
-
-        // Schedule deletion of the texture after it's no longer used
-        // by the GPU
-        g_vk_task_scheduler->Schedule(deleter);
+static int BytesPerPixel(vk::Format format) {
+    switch (format) {
+    case vk::Format::eR8G8B8A8Uint:
+        return 4;
+    case vk::Format::eR8G8B8Uint:
+        return 3;
+    case vk::Format::eR5G6B5UnormPack16:
+    case vk::Format::eR5G5B5A1UnormPack16:
+    case vk::Format::eR4G4B4A4UnormPack16:
+        return 2;
+    default:
+        UNREACHABLE();
     }
 }
 
-VKTexture& VKTexture::operator=(VKTexture&& move) {
-
+VKTexture::~VKTexture() {
+    Destroy();
 }
 
 void VKTexture::Create(const VKTexture::Info& create_info) {
     auto& device = g_vk_instace->GetDevice();
     info = create_info;
 
-    switch (info.format)
-    {
-    case vk::Format::eR8G8B8A8Uint:
-    case vk::Format::eR8G8B8A8Srgb:
-    case vk::Format::eR32Uint:
-        channels = 4;
-        break;
-    case vk::Format::eR8G8B8Uint:
-        channels = 3;
-        break;
-    default:
-        LOG_CRITICAL(Render_Vulkan, "Unknown texture format {}", info.format);
-    }
-
     // Create the texture
-    image_size = info.width * info.height * channels;
+    image_size = info.width * info.height * BytesPerPixel(info.format);
 
     vk::ImageCreateFlags flags{};
     if (info.view_type == vk::ImageViewType::eCube) {
@@ -71,7 +53,8 @@ void VKTexture::Create(const VKTexture::Info& create_info) {
 
     // Create texture memory
     auto requirements = device.getImageMemoryRequirements(texture);
-    auto memory_index = VKBuffer::FindMemoryType(requirements.memoryTypeBits, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    auto memory_index = VKBuffer::FindMemoryType(requirements.memoryTypeBits,
+                                                 vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo alloc_info(requirements.size, memory_index);
 
     memory = device.allocateMemory(alloc_info);
@@ -84,6 +67,25 @@ void VKTexture::Create(const VKTexture::Info& create_info) {
     };
 
     view = device.createImageView(view_info);
+}
+
+void VKTexture::Destroy() {
+    if (texture) {
+        // Make sure to unbind the texture before destroying it
+        auto& state = VulkanState::Get();
+        state.UnbindTexture(*this);
+
+        auto deleter = [this]() {
+            auto& device = g_vk_instace->GetDevice();
+            device.destroyImage(texture);
+            device.destroyImageView(view);
+            device.freeMemory(memory);
+        };
+
+        // Schedule deletion of the texture after it's no longer used
+        // by the GPU
+        g_vk_task_scheduler->Schedule(deleter);
+    }
 }
 
 void VKTexture::Transition(vk::ImageLayout new_layout) {
@@ -161,9 +163,8 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
         vk::ImageSubresourceRange(info.aspect, 0, 1, 0, 1)
     };
 
-    std::array<vk::ImageMemoryBarrier, 1> barriers{ barrier };
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    command_buffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barriers);
+    command_buffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
     layout = new_layout;
 }
 
@@ -173,9 +174,8 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
         LOG_ERROR(Render_Vulkan, "Cannot upload pixels without staging buffer!");
     }
 
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-
     // Copy pixels to staging buffer
+    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
     std::memcpy(buffer, pixels.data(), pixels.size());
 
     vk::BufferImageCopy copy_region{
@@ -184,6 +184,10 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
         {region.offset.x, region.offset.y, 0},
         {region.extent.width, region.extent.height, 1}
     };
+
+    // Exit rendering for transfer operations
+    auto& state = VulkanState::Get();
+    state.EndRendering();
 
     // Transition image to transfer format
     auto old_layout = GetLayout();
@@ -213,6 +217,10 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
         {region.extent.width, region.extent.height, 1}
     };
 
+    // Exit rendering for transfer operations
+    auto& state = VulkanState::Get();
+    state.EndRendering();
+
     // Transition image to transfer format
     auto old_layout = GetLayout();
     Transition(vk::ImageLayout::eTransferSrcOptimal);
@@ -223,7 +231,7 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
 
     // Wait for the data to be available
     // NOTE: This is really slow and should be reworked
-    g_vk_task_scheduler->Submit(false, true);
+    g_vk_task_scheduler->Submit(true);
     std::memcpy(memory.data(), buffer, memory.size_bytes());
 
     // Restore layout
