@@ -267,7 +267,10 @@ endif()
 if (ENABLE_VULKAN)
     # Find the VulkanSDK
     find_package(Vulkan REQUIRED)
-    find_library(SHADERC_LIB shaderc shaderc_shared)
+
+    set(SHADERC_SKIP_TESTS ON)
+    add_subdirectory(externals/shaderc)
+    set(SHADERC_DEP shaderc)
 
     # Include Vulkan Memory Allocator
     add_subdirectory(externals/vma)

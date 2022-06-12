@@ -16,30 +16,14 @@ namespace Layout {
 struct FramebufferLayout;
 }
 
-namespace Frontend {
-
-struct Frame {
-    u32 width = 0, height = 0;
-    bool color_reloaded = false;
-    Vulkan::VKTexture* color;
-    vk::UniqueFence render_fence, present_fence;
-};
-} // namespace Frontend
-
 namespace Vulkan {
 
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {
-    vk::Image display_texture;
+    Vulkan::VKTexture* display_texture;
     Common::Rectangle<float> display_texcoords;
     Vulkan::VKTexture texture;
     GPU::Regs::PixelFormat format;
-};
-
-struct DrawInfo {
-    glm::vec4 i_resolution;
-    glm::vec4 o_resolution;
-    int layer;
 };
 
 class RendererVulkan : public RendererBase {
@@ -55,12 +39,15 @@ public:
 
     bool BeginPresent();
     void EndPresent();
+    void SwapBuffers();
+
+    void TryPresent(int timeout_ms) override {}
+    void PrepareVideoDumping() override {}
+    void CleanupVideoDumping() override {}
 
 private:
     void CreateVulkanObjects();
     void ConfigureRenderPipeline();
-    void ReloadSampler();
-    void ReloadShader();
     void PrepareRendertarget();
     void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
 
@@ -83,15 +70,8 @@ private:
 private:
     // Vulkan state
     DrawInfo draw_info{};
-    VulkanState state;
-
-    // Vulkan objects
-    vk::UniqueShaderModule vertex_shader, fragment_shader;
-    vk::UniqueDescriptorSet descriptor_set;
-    vk::UniqueDescriptorSetLayout descriptor_layout;
-    vk::UniquePipelineLayout pipeline_layout;
-    vk::UniquePipeline pipeline;
     VKBuffer vertex_buffer;
+    vk::ClearColorValue clear_color{};
 
     /// Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;

@@ -385,8 +385,6 @@ FormatReinterpreterOpenGL::FormatReinterpreterOpenGL() {
                            std::make_unique<RGBA4toRGB5A1>());
 }
 
-FormatReinterpreterOpenGL::~FormatReinterpreterOpenGL() = default;
-
 std::pair<FormatReinterpreterOpenGL::ReinterpreterMap::iterator,
           FormatReinterpreterOpenGL::ReinterpreterMap::iterator>
 FormatReinterpreterOpenGL::GetPossibleReinterpretations(PixelFormat dst_format) {

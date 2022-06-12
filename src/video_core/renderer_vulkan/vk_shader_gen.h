@@ -17,11 +17,12 @@
 
 namespace Vulkan {
 
-namespace ShaderDecompiler {
-struct ProgramResult {
-    std::string code;
-};
-}
+/**
+ * Returns the vertex and fragment shader sources used for presentation
+ * @returns String of shader source code
+ */
+std::string GetPresentVertexShader();
+std::string GetPresentFragmentShader();
 
 /**
  * Generates the GLSL vertex shader program source code that accepts vertices from software shader
@@ -29,7 +30,7 @@ struct ProgramResult {
  * @param separable_shader generates shader that can be used for separate shader object
  * @returns String of the shader source code
  */
-ShaderDecompiler::ProgramResult GenerateTrivialVertexShader(bool separable_shader);
+std::string GenerateTrivialVertexShader(bool separable_shader);
 
 /**
  * Generates the GLSL fragment shader program source code for the current Pica state
@@ -38,6 +39,11 @@ ShaderDecompiler::ProgramResult GenerateTrivialVertexShader(bool separable_shade
  * @param separable_shader generates shader that can be used for separate shader object
  * @returns String of the shader source code
  */
-ShaderDecompiler::ProgramResult GenerateFragmentShader(const PicaFSConfig& config);
+std::string GenerateFragmentShader(const PicaFSConfig& config);
+
+/**
+ * Generates a SPRI-V shader module from the provided GLSL source code
+ */
+vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage);
 
 } // namespace Vulkan

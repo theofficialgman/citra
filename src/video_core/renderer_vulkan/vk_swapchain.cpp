@@ -17,6 +17,13 @@ VKSwapChain::VKSwapChain(vk::SurfaceKHR surface_) : surface(surface_) {
 
 }
 
+VKSwapChain::~VKSwapChain() {
+    auto device = g_vk_instace->GetDevice();
+    device.waitIdle();
+
+    device.destroySwapchainKHR(swapchain);
+}
+
 bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
     is_outdated = false;
     is_suboptimal = false;
@@ -24,46 +31,39 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
     // Fetch information about the provided surface
     PopulateSwapchainDetails(surface, width, height);
 
-    // Now we can actually create the swapchain
-    vk::SwapchainCreateInfoKHR swapchain_info
-    (
-        {},
-        surface,
-        details.image_count,
-        details.format.format, details.format.colorSpace,
-        details.extent, 1,
-        vk::ImageUsageFlagBits::eColorAttachment,
-        vk::SharingMode::eExclusive,
-        0, nullptr,
-        details.transform,
-        vk::CompositeAlphaFlagBitsKHR::eOpaque,
-        details.present_mode,
-        VK_TRUE,
-        swapchain.get()
-    );
-
-    std::array<u32, 2> indices = {
+    const std::array indices {
         g_vk_instace->GetGraphicsQueueFamilyIndex(),
         g_vk_instace->GetPresentQueueFamilyIndex(),
     };
 
+    // Now we can actually create the swapchain
+    vk::SwapchainCreateInfoKHR swapchain_info{{}, surface, details.image_count, details.format.format,
+                details.format.colorSpace, details.extent, 1, vk::ImageUsageFlagBits::eColorAttachment,
+                vk::SharingMode::eExclusive, 1, indices.data(), details.transform,
+                vk::CompositeAlphaFlagBitsKHR::eOpaque, details.present_mode, true, swapchain};
+
     // For dedicated present queues, select concurrent sharing mode
     if (indices[0] != indices[1]) {
-        swapchain_info.setImageSharingMode(vk::SharingMode::eConcurrent);
-        swapchain_info.setQueueFamilyIndices(indices);
+        swapchain_info.imageSharingMode = vk::SharingMode::eConcurrent;
+        swapchain_info.queueFamilyIndexCount = 2;
     }
 
-    auto new_swapchain = g_vk_instace->GetDevice().createSwapchainKHRUnique(swapchain_info);
+    auto device = g_vk_instace->GetDevice();
+    auto new_swapchain = device.createSwapchainKHR(swapchain_info);
 
     // If an old swapchain exists, destroy it and move the new one to its place.
-    // Synchronization is the responsibility of the caller, not us
-    if (swapchain.get()) {
-        swapchain.swap(new_swapchain);
+    if (swapchain) {
+        device.destroy(swapchain);
     }
+    swapchain = new_swapchain;
 
     // Create sync objects if not already created
-    if (!image_available.get()) {
-        image_available = g_vk_instace->GetDevice().createSemaphoreUnique({});
+    if (!image_available) {
+        image_available = device.createSemaphoreUnique({});
+    }
+
+    if (!render_finished) {
+        render_finished = device.createSemaphoreUnique({});
     }
 
     // Create framebuffer and image views
@@ -76,8 +76,8 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
 // Wait for maximum of 1 second
 constexpr u64 ACQUIRE_TIMEOUT = 1000000000;
 
-vk::Semaphore VKSwapChain::AcquireNextImage() {
-    auto result = g_vk_instace->GetDevice().acquireNextImageKHR(*swapchain, ACQUIRE_TIMEOUT,
+void VKSwapChain::AcquireNextImage() {
+    auto result = g_vk_instace->GetDevice().acquireNextImageKHR(swapchain, ACQUIRE_TIMEOUT,
                                                                 image_available.get(), VK_NULL_HANDLE,
                                                                 &image_index);
     switch (result) {
@@ -93,14 +93,12 @@ vk::Semaphore VKSwapChain::AcquireNextImage() {
         LOG_ERROR(Render_Vulkan, "acquireNextImageKHR returned unknown result");
         break;
     }
-
-    return image_available.get();
 }
 
-void VKSwapChain::Present(vk::Semaphore render_semaphore) {
+void VKSwapChain::Present() {
     const auto present_queue = g_vk_instace->GetPresentQueue();
 
-    vk::PresentInfoKHR present_info(render_semaphore, swapchain.get(), image_index);
+    vk::PresentInfoKHR present_info(render_finished.get(), swapchain, image_index);
     vk::Result result = present_queue.presentKHR(present_info);
 
     switch (result) {
@@ -121,7 +119,7 @@ void VKSwapChain::Present(vk::Semaphore render_semaphore) {
 }
 
 void VKSwapChain::PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height) {
-    auto& gpu = g_vk_instace->GetPhysicalDevice();
+    auto gpu = g_vk_instace->GetPhysicalDevice();
 
     // Choose surface format
     auto formats = gpu.getSurfaceFormatsKHR(surface);
@@ -184,20 +182,22 @@ void VKSwapChain::PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u3
 
 void VKSwapChain::SetupImages() {
     // Get the swap chain images
-    auto& device = g_vk_instace->GetDevice();
-    auto images = device.getSwapchainImagesKHR(swapchain.get());
+    auto device = g_vk_instace->GetDevice();
+    auto images = device.getSwapchainImagesKHR(swapchain);
+
+    VKTexture::Info image_info{
+        .width = details.extent.width,
+        .height = details.extent.height,
+        .format = details.format.format,
+        .type = vk::ImageType::e2D,
+        .view_type = vk::ImageViewType::e2D
+    };
 
     // Create the swapchain buffers containing the image and imageview
     swapchain_images.resize(images.size());
     for (int i = 0; i < swapchain_images.size(); i++) {
-        vk::ImageViewCreateInfo color_attachment_view{
-            {}, images[i], vk::ImageViewType::e2D, details.format.format, {},
-            { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 }
-        };
-
         // Wrap swapchain images with VKTexture
-        swapchain_images[i].image = images[i];
-        swapchain_images[i].image_view = device.createImageViewUnique(color_attachment_view);
+        swapchain_images[i].Adopt(image_info, images[i]);
     }
 }
 

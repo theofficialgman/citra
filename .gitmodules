@@ -58,3 +58,6 @@
 [submodule "externals/vma"]
 	path = externals/vma
 	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+[submodule "externals/shaderc"]
+	path = externals/shaderc
+	url = https://github.com/google/shaderc

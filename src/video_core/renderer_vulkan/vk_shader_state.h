@@ -18,7 +18,7 @@
 
 namespace Vulkan {
 
-/* Vertex attributes */
+/* Render vertex attributes */
 struct VertexBase {
     VertexBase() = default;
     VertexBase(const Pica::Shader::OutputVertex& v, bool flip_quaternion) {
@@ -75,6 +75,34 @@ struct HardwareVertex : public VertexBase {
           vk::VertexInputAttributeDescription(5, 0, vk::Format::eR32Sfloat, offsetof(VertexBase, tex_coord0_w)),
           vk::VertexInputAttributeDescription(6, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(VertexBase, normquat)),
           vk::VertexInputAttributeDescription(7, 0, vk::Format::eR32G32B32Sfloat, offsetof(VertexBase, view)),
+    };
+};
+
+/**
+ * Vertex structure that the drawn screen rectangles are composed of.
+ */
+
+struct ScreenRectVertexBase {
+    ScreenRectVertexBase() = default;
+    ScreenRectVertexBase(float x, float y, float u, float v) {
+        position.x = x;
+        position.y = y;
+        tex_coord.x = u;
+        tex_coord.y = v;
+    }
+
+    glm::vec2 position;
+    glm::vec2 tex_coord;
+};
+
+struct ScreenRectVertex : public ScreenRectVertexBase {
+    ScreenRectVertex() = default;
+    ScreenRectVertex(float x, float y, float u, float v) : ScreenRectVertexBase(x, y, u, v) {};
+    static constexpr auto binding_desc = vk::VertexInputBindingDescription(0, sizeof(ScreenRectVertexBase));
+    static constexpr std::array<vk::VertexInputAttributeDescription, 2> attribute_desc =
+    {
+          vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, position)),
+          vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, tex_coord)),
     };
 };
 
@@ -261,8 +289,12 @@ struct PicaFixedGSConfig : Common::HashableStruct<PicaGSConfigCommonRaw> {
 };
 
 struct PipelineCacheKey {
+    vk::PipelineRenderingCreateInfo color_attachments;
     vk::PipelineColorBlendAttachmentState blend_config;
+    vk::LogicOp blend_logic_op;
     PicaFSConfig fragment_config;
+
+    auto operator <=>(const PipelineCacheKey& other) const = default;
 
     u64 Hash() const {
         const u64 hash = Common::CityHash64(reinterpret_cast<const char*>(this), sizeof(PipelineCacheKey));

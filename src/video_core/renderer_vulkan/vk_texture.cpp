@@ -12,9 +12,13 @@ namespace Vulkan {
 
 static int BytesPerPixel(vk::Format format) {
     switch (format) {
+    case vk::Format::eB8G8R8A8Unorm:
     case vk::Format::eR8G8B8A8Uint:
+    case vk::Format::eR8G8B8A8Srgb:
+    case vk::Format::eD24UnormS8Uint:
         return 4;
     case vk::Format::eR8G8B8Uint:
+    case vk::Format::eR8G8B8Srgb:
         return 3;
     case vk::Format::eR5G6B5UnormPack16:
     case vk::Format::eR5G5B5A1UnormPack16:
@@ -25,16 +29,43 @@ static int BytesPerPixel(vk::Format format) {
     }
 }
 
+vk::ImageAspectFlags GetImageAspect(vk::Format format) {
+    vk::ImageAspectFlags flags;
+    switch (format) {
+    case vk::Format::eD16UnormS8Uint:
+    case vk::Format::eD24UnormS8Uint:
+    case vk::Format::eD32SfloatS8Uint:
+        flags = vk::ImageAspectFlagBits::eStencil | vk::ImageAspectFlagBits::eDepth;
+        break;
+    case vk::Format::eD16Unorm:
+    case vk::Format::eD32Sfloat:
+        flags = vk::ImageAspectFlagBits::eDepth;
+        break;
+    default:
+        flags = vk::ImageAspectFlagBits::eColor;
+    }
+
+    return flags;
+}
+
 VKTexture::~VKTexture() {
     Destroy();
 }
 
-void VKTexture::Create(const VKTexture::Info& create_info) {
-    auto& device = g_vk_instace->GetDevice();
+void VKTexture::Create(const Info& create_info) {
+    auto device = g_vk_instace->GetDevice();
     info = create_info;
+
+    // Emulate RGB8 format with RGBA8
+    is_rgb = false;
+    if (info.format == vk::Format::eR8G8B8Srgb) {
+        is_rgb = true;
+        info.format = vk::Format::eR8G8B8A8Srgb;
+    }
 
     // Create the texture
     image_size = info.width * info.height * BytesPerPixel(info.format);
+    aspect = GetImageAspect(info.format);
 
     vk::ImageCreateFlags flags{};
     if (info.view_type == vk::ImageViewType::eCube) {
@@ -63,20 +94,37 @@ void VKTexture::Create(const VKTexture::Info& create_info) {
     // Create texture view
     vk::ImageViewCreateInfo view_info {
         {}, texture, info.view_type, info.format, {},
-        {info.aspect, 0, info.levels, 0, info.levels}
+        {aspect, 0, info.levels, 0, info.layers}
     };
 
     view = device.createImageView(view_info);
 }
 
+void VKTexture::Adopt(const Info& create_info, vk::Image image) {
+    info = create_info;
+    image_size = info.width * info.height * BytesPerPixel(info.format);
+    aspect = GetImageAspect(info.format);
+    texture = image;
+
+    // Create texture view
+    vk::ImageViewCreateInfo view_info {
+        {}, texture, info.view_type, info.format, {},
+        {aspect, 0, info.levels, 0, info.layers}
+    };
+
+    auto device = g_vk_instace->GetDevice();
+    view = device.createImageView(view_info);
+    adopted = true;
+}
+
 void VKTexture::Destroy() {
-    if (texture) {
+    if (texture && !adopted) {
         // Make sure to unbind the texture before destroying it
         auto& state = VulkanState::Get();
         state.UnbindTexture(*this);
 
         auto deleter = [this]() {
-            auto& device = g_vk_instace->GetDevice();
+            auto device = g_vk_instace->GetDevice();
             device.destroyImage(texture);
             device.destroyImageView(view);
             device.freeMemory(memory);
@@ -85,6 +133,15 @@ void VKTexture::Destroy() {
         // Schedule deletion of the texture after it's no longer used
         // by the GPU
         g_vk_task_scheduler->Schedule(deleter);
+    }
+
+    // If the image was adopted (probably from the swapchain) then only
+    // destroy the view
+    if (adopted) {
+        g_vk_task_scheduler->Schedule([this](){
+            auto device = g_vk_instace->GetDevice();
+            device.destroyImageView(view);
+        });
     }
 }
 
@@ -100,8 +157,8 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
     };
 
     // Get optimal transition settings for every image layout. Settings taken from Dolphin
-    auto layout_info = [&](vk::ImageLayout layout) -> LayoutInfo {
-        LayoutInfo info = { .layout = layout };
+    auto layout_info = [](vk::ImageLayout layout) -> LayoutInfo {
+        LayoutInfo info{ .layout = layout };
         switch (layout) {
         case vk::ImageLayout::eUndefined:
             // Layout undefined therefore contents undefined, and we don't care what happens to it.
@@ -127,6 +184,11 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
             info.stage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
             break;
 
+        case vk::ImageLayout::ePresentSrcKHR:
+            info.access = vk::AccessFlagBits::eNone;
+            info.stage = vk::PipelineStageFlagBits::eBottomOfPipe;
+            break;
+
         case vk::ImageLayout::eShaderReadOnlyOptimal:
             // Image was being used as a shader resource, make sure all reads have finished.
             info.access = vk::AccessFlagBits::eShaderRead;
@@ -146,8 +208,8 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
             break;
 
         default:
-          LOG_CRITICAL(Render_Vulkan, "Unhandled vulkan image layout {}\n", layout);
-          break;
+            LOG_CRITICAL(Render_Vulkan, "Unhandled vulkan image layout {}\n", layout);
+            UNREACHABLE();
         }
 
         return info;
@@ -160,11 +222,15 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
         source.layout, dst.layout,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
         texture,
-        vk::ImageSubresourceRange(info.aspect, 0, 1, 0, 1)
+        vk::ImageSubresourceRange{aspect, 0, 1, 0, 1}
     };
 
     auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
     command_buffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+    layout = new_layout;
+}
+
+void VKTexture::OverrideImageLayout(vk::ImageLayout new_layout) {
     layout = new_layout;
 }
 
@@ -180,7 +246,7 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
 
     vk::BufferImageCopy copy_region{
         offset, row_length, region.extent.height,
-        {info.aspect, level, layer, 1},
+        {aspect, level, layer, 1},
         {region.offset.x, region.offset.y, 0},
         {region.extent.width, region.extent.height, 1}
     };
@@ -190,19 +256,19 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     state.EndRendering();
 
     // Transition image to transfer format
-    auto old_layout = GetLayout();
     Transition(vk::ImageLayout::eTransferDstOptimal);
 
     command_buffer.copyBufferToImage(g_vk_task_scheduler->GetStaging().GetBuffer(),
                                      texture, vk::ImageLayout::eTransferDstOptimal,
                                      copy_region);
 
-    // Restore layout
-    Transition(old_layout);
+    // Prepare image for shader reads
+    Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(memory.size_bytes());
+    u32 request_size = is_rgb ? (memory.size() / 3) * 4 : memory.size();
+    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
     if (!buffer) {
         LOG_ERROR(Render_Vulkan, "Cannot download texture without staging buffer!");
     }
@@ -212,10 +278,19 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
     // Copy pixels to staging buffer
     vk::BufferImageCopy download_region{
         offset, row_length, region.extent.height,
-        {info.aspect, level, layer, 1},
+        {aspect, level, layer, 1},
         {region.offset.x, region.offset.y, 0},
         {region.extent.width, region.extent.height, 1}
     };
+
+    // Automatically convert RGB to RGBA
+    if (is_rgb) {
+        auto data = RGBToRGBA(memory);
+        std::memcpy(buffer, data.data(), data.size());
+    }
+    else {
+        std::memcpy(buffer, memory.data(), memory.size());
+    }
 
     // Exit rendering for transfer operations
     auto& state = VulkanState::Get();
@@ -238,4 +313,20 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
     Transition(old_layout);
 }
 
+std::vector<u8> VKTexture::RGBToRGBA(std::span<u8> data) {
+    ASSERT(data.size() % 3 == 0);
+
+    u32 new_size = (data.size() / 3) * 4;
+    std::vector<u8> rgba(new_size);
+
+    u32 dst_pos{0};
+    for (int i = 0; i < data.size(); i += 3) {
+        std::memcpy(rgba.data() + dst_pos, data.data() + i, 3);
+        rgba[dst_pos + 3] = 255u;
+        dst_pos += 4;
+    }
+
+    return rgba;
 }
+
+} // namespace Vulkan

@@ -11,6 +11,7 @@
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_opengl/gl_vars.h"
 #include "video_core/renderer_opengl/renderer_opengl.h"
+#include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/video_core.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -45,7 +46,8 @@ ResultStatus Init(Frontend::EmuWindow& emu_window, Memory::MemorySystem& memory)
 
     OpenGL::GLES = Settings::values.use_gles;
 
-    g_renderer = std::make_unique<OpenGL::RendererOpenGL>(emu_window);
+    //g_renderer = std::make_unique<OpenGL::RendererOpenGL>(emu_window);
+    g_renderer = std::make_unique<Vulkan::RendererVulkan>(emu_window);
     ResultStatus result = g_renderer->Init();
 
     if (result != ResultStatus::Success) {

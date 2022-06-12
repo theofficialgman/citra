@@ -14,6 +14,11 @@
 
 namespace Settings {
 
+enum class RendererBackend : u32 {
+    OpenGL = 0,
+    Vulkan = 1,
+};
+
 enum class InitClock {
     SystemTime = 0,
     FixedTime = 1,
@@ -164,6 +169,8 @@ struct Values {
     u64 init_time;
 
     // Renderer
+    RendererBackend renderer_backend = RendererBackend::Vulkan;
+    bool renderer_debug = true;
     bool use_gles;
     bool use_hw_renderer;
     bool use_hw_shader;

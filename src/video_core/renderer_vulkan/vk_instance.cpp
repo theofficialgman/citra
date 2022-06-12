@@ -9,6 +9,8 @@
 
 namespace Vulkan {
 
+std::unique_ptr<VKInstance> g_vk_instace;
+
 VKInstance::~VKInstance() {
 
 }
@@ -69,35 +71,26 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
         return false;
     }
 
-    static constexpr float queue_priorities[] = { 1.0f };
+    static constexpr float queue_priorities[] = {1.0f};
 
-    vk::DeviceCreateInfo device_info;
-    device_info.setPEnabledExtensionNames(extensions);
+    std::array<const char*, 1> layers{"VK_LAYER_KHRONOS_validation"};
+    std::array<vk::DeviceQueueCreateInfo, 2> queue_infos{
+        vk::DeviceQueueCreateInfo({}, graphics_queue_family_index, 1, queue_priorities),
+        vk::DeviceQueueCreateInfo({}, present_queue_family_index, 1, queue_priorities)
+    };
+
+    vk::DeviceCreateInfo device_info({}, 1, queue_infos.data(), 0, nullptr,
+                extensions.size(), extensions.data(), nullptr, &features);
 
     // Create queue create info structs
     if (graphics_queue_family_index != present_queue_family_index) {
-        std::array<vk::DeviceQueueCreateInfo, 2> queue_infos = {
-            vk::DeviceQueueCreateInfo({}, graphics_queue_family_index, 1, queue_priorities),
-            vk::DeviceQueueCreateInfo({}, present_queue_family_index, 1, queue_priorities)
-        };
-
-        device_info.setQueueCreateInfos(queue_infos);
+        device_info.queueCreateInfoCount = 2;
     }
-    else {
-        std::array<vk::DeviceQueueCreateInfo, 1> queue_infos = {
-            vk::DeviceQueueCreateInfo({}, graphics_queue_family_index, 1, queue_priorities),
-        };
-
-        device_info.setQueueCreateInfos(queue_infos);
-    }
-
-    // Set device features
-    device_info.setPEnabledFeatures(&vk_features);
 
     // Enable debug layer on debug builds
     if (validation_enabled) {
-        std::array<const char*, 1> layer_names = { "VK_LAYER_KHRONOS_validation" };
-        device_info.setPEnabledLayerNames(layer_names);
+        device_info.enabledLayerCount = layers.size();
+        device_info.ppEnabledLayerNames = layers.data();
     }
 
     // Create logical device
@@ -110,8 +103,7 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     return true;
 }
 
-bool VKInstance::FindFeatures()
-{
+bool VKInstance::FindFeatures() {
     auto available = physical_device.getFeatures();
 
     // Not having geometry shaders or wide lines will cause issues with rendering.
@@ -135,18 +127,17 @@ bool VKInstance::FindFeatures()
 
     // Enable newer Vulkan features
     vk12_features.timelineSemaphore = true;
-    vk13_features.dynamicRendering = true;
-    dynamic_state.extendedDynamicState = true;
-    dynamic_state2.extendedDynamicState2 = true;
-    dynamic_state2.extendedDynamicState2LogicOp = true;
-    dynamic_state2.extendedDynamicState2PatchControlPoints = true;
+    dynamic_rendering_features.dynamicRendering = true;
+    dynamic_state_features.extendedDynamicState = true;
+    dynamic_state2_features.extendedDynamicState2 = true;
+    dynamic_state2_features.extendedDynamicState2LogicOp = true;
+    dynamic_state2_features.extendedDynamicState2PatchControlPoints = true;
 
     // Include features in device creation
-    features.setFeatures(vk_features);
-    features.setPNext(&vk12_features);
-    vk12_features.setPNext(&vk13_features);
-    vk13_features.setPNext(&dynamic_state);
-    dynamic_state.setPNext(&dynamic_state2);
+    vk12_features.pNext = &dynamic_rendering_features;
+    dynamic_rendering_features.pNext = &dynamic_state_features;
+    dynamic_state_features.pNext = &dynamic_state2_features;
+    features = vk::PhysicalDeviceFeatures2{vk_features, &vk12_features};
 
     return true;
 }

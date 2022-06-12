@@ -129,6 +129,7 @@ if (ENABLE_WEB_SERVICE)
     target_link_libraries(httplib INTERFACE ${OPENSSL_LIBRARIES})
 
     # cpp-jwt
+    SET(CPP_JWT_USE_VENDORED_NLOHMANN_JSON ON CACHE BOOL "Use included json-hpp")
     add_library(cpp-jwt INTERFACE)
     target_include_directories(cpp-jwt INTERFACE ./cpp-jwt/include)
 endif()

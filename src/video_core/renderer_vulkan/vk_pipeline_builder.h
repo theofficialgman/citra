@@ -28,7 +28,7 @@ public:
 
 private:
     static constexpr u32 MAX_SETS = 8;
-    static constexpr u32 MAX_PUSH_CONSTANTS = 1;
+    static constexpr u32 MAX_PUSH_CONSTANTS = 5;
 
     vk::PipelineLayoutCreateInfo pipeline_layout_info;
     std::array<vk::DescriptorSetLayout, MAX_SETS> sets;
@@ -62,6 +62,7 @@ public:
 
     void SetBlendConstants(float r, float g, float b, float a);
     void SetNoBlendingState();
+    void SetBlendLogicOp(vk::LogicOp logic_op);
     void SetBlendAttachment(bool blend_enable, vk::BlendFactor src_factor, vk::BlendFactor dst_factor,
                             vk::BlendOp op, vk::BlendFactor alpha_src_factor, vk::BlendFactor alpha_dst_factor,
                             vk::BlendOp alpha_op,vk::ColorComponentFlags write_mask);

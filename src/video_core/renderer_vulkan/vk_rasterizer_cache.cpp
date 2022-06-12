@@ -41,8 +41,8 @@ using SurfaceType = SurfaceParams::SurfaceType;
 using PixelFormat = SurfaceParams::PixelFormat;
 
 static constexpr std::array<vk::Format, 5> fb_format_tuples = {{
-    vk::Format::eR8G8B8A8Uint,     // RGBA8
-    vk::Format::eR8G8B8Uint,       // RGB8
+    vk::Format::eR8G8B8A8Srgb,     // RGBA8
+    vk::Format::eR8G8B8Srgb,       // RGB8
     vk::Format::eR5G5B5A1UnormPack16, // RGB5A1
     vk::Format::eR5G6B5UnormPack16,     // RGB565
     vk::Format::eR4G4B4A4UnormPack16,   // RGBA4
@@ -65,7 +65,7 @@ vk::Format GetFormatTuple(PixelFormat pixel_format) {
         ASSERT(tuple_idx < depth_format_tuples.size());
         return depth_format_tuples[tuple_idx];
     }
-    return vk::Format::eR8G8B8A8Unorm;
+    return vk::Format::eR8G8B8A8Srgb;
 }
 
 template <typename Map, typename Interval>
@@ -313,6 +313,7 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
 
     VKTexture texture;
     texture.Create(texture_info);
+    texture.Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
 
     return texture;
 }
@@ -1170,7 +1171,7 @@ bool RasterizerCacheVulkan::IntervalHasInvalidPixelFormat(SurfaceParams& params,
 bool RasterizerCacheVulkan::ValidateByReinterpretation(const Surface& surface,
                                                        SurfaceParams& params,
                                                        const SurfaceInterval& interval) {
-    auto [cvt_begin, cvt_end] =
+    /*auto [cvt_begin, cvt_end] =
         format_reinterpreter->GetPossibleReinterpretations(surface->pixel_format);
     for (auto reinterpreter = cvt_begin; reinterpreter != cvt_end; ++reinterpreter) {
         PixelFormat format = reinterpreter->first.src_format;
@@ -1187,7 +1188,7 @@ bool RasterizerCacheVulkan::ValidateByReinterpretation(const Surface& surface,
             reinterpreter->second->Reinterpret(reinterpret_surface, src_rect, surface, dest_rect);
             return true;
         }
-    }
+    }*/
     return false;
 }
 

@@ -65,10 +65,6 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
                                                            uniform_buffer_alignment);
     uniform_size_aligned_fs = Common::AlignUp<std::size_t>(sizeof(UniformData),
                                                            uniform_buffer_alignment);
-
-    // Set vertex attributes for software shader path
-    state.SetVertexBuffer(&vertex_buffer, 0);
-
     // Allocate texture buffer LUTs
     VKBuffer::Info texel_buffer_info = {
         .size = TEXTURE_BUFFER_SIZE,
@@ -90,15 +86,14 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     };
 
     uniform_buffer.Create(uniform_info);
-    state.SetUniformBuffer(BindingID::VertexUniform, 0, uniform_size_aligned_vs,
-                           uniform_buffer);
-    state.SetUniformBuffer(BindingID::PicaUniform, uniform_size_aligned_vs, uniform_size_aligned_fs,
-                           uniform_buffer);
+    auto& state = VulkanState::Get();
+    state.SetUniformBuffer(0, 0, uniform_size_aligned_vs, uniform_buffer);
+    state.SetUniformBuffer(1, uniform_size_aligned_vs, uniform_size_aligned_fs, uniform_buffer);
 
     // Bind texel buffers
-    state.SetTexelBuffer(BindingID::LutLF, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut_lf, 0);
-    state.SetTexelBuffer(BindingID::LutRG, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 0);
-    state.SetTexelBuffer(BindingID::LutRGBA, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 1);
+    state.SetTexelBuffer(0, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut_lf, 0);
+    state.SetTexelBuffer(1, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 0);
+    state.SetTexelBuffer(2, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 1);
 
     // Create vertex and index buffers
     VKBuffer::Info vertex_info = {
@@ -116,8 +111,13 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     vertex_buffer.Create(vertex_info);
     index_buffer.Create(index_info);
 
+    // Set clear texture color
+    state.SetPlaceholderColor(0, 0, 0, 255);
+
     SyncEntireState();
 }
+
+RasterizerVulkan::~RasterizerVulkan() = default;
 
 void RasterizerVulkan::SyncEntireState() {
     // Sync fixed function Vulkan state
@@ -231,6 +231,7 @@ void RasterizerVulkan::DrawTriangles() {
 bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     MICROPROFILE_SCOPE(OpenGL_Drawing);
     const auto& regs = Pica::g_state.regs;
+    auto& state = VulkanState::Get();
 
     bool shadow_rendering = regs.framebuffer.output_merger.fragment_operation_mode ==
                             Pica::FramebufferRegs::FragmentOperationMode::Shadow;
@@ -238,7 +239,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     const bool has_stencil =
         regs.framebuffer.framebuffer.depth_format == Pica::FramebufferRegs::DepthFormat::D24S8;
 
-    const bool write_depth_fb = state.DepthTestEnabled() || (has_stencil && state.StencilTestEnabled());
+    const bool write_depth_fb = depth_test_enabled || (has_stencil && stencil_test_enabled);
 
     const bool using_color_fb =
         regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress() != 0;
@@ -282,20 +283,13 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
                                          surfaces_rect.bottom, surfaces_rect.top))}; // Bottom
 
     // Bind the framebuffer surfaces
-    Attachment color = {
-        .image = &color_surface->texture,
-    };
-
-    Attachment depth = {
-        .image = &depth_surface->texture,
-    };
-
-    state.BeginRendering(color, depth);
+    state.BeginRendering(color_surface->texture, depth_surface->texture);
 
     // Sync the viewport
-    vk::Viewport viewport(0, 0, viewport_rect_unscaled.GetWidth() * res_scale,
-                                viewport_rect_unscaled.GetHeight() * res_scale);
-    state.SetViewport(viewport);
+    vk::Viewport viewport{0, 0, static_cast<float>(viewport_rect_unscaled.GetWidth() * res_scale),
+                                static_cast<float>(viewport_rect_unscaled.GetHeight() * res_scale)};
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setViewport(0, viewport);
 
     if (uniform_block_data.data.framebuffer_scale != res_scale) {
         uniform_block_data.data.framebuffer_scale = res_scale;
@@ -336,7 +330,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
             //texture_samplers[texture_index].SyncWithConfig(texture.config);
             Surface surface = res_cache.GetTextureSurface(texture);
             if (surface != nullptr) {
-                state.SetTexture(BindingID::Tex0 + texture_index, surface->texture);
+                state.SetTexture(texture_index, surface->texture);
             } else {
                 // Can occur when texture addr is null or its memory is unmapped/invalid
                 // HACK: In this case, the correct behaviour for the PICA is to use the last
@@ -352,12 +346,6 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         }
     }
 
-    // Sync and bind the shader
-    if (shader_dirty) {
-        SetShader();
-        shader_dirty = false;
-    }
-
     // Sync the LUTs within the texture buffer
     SyncAndUploadLUTs();
     SyncAndUploadLUTsLF();
@@ -369,12 +357,12 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     // dimensions than our framebuffer sub-rect.
     // Enable scissor test to prevent drawing
     // outside of the framebuffer region
-    vk::Rect2D scissor(vk::Offset2D(draw_rect.left, draw_rect.bottom),
-                       vk::Extent2D(draw_rect.GetHeight(), draw_rect.GetHeight()));
-    state.SetScissor(scissor);
+    vk::Rect2D scissor{vk::Offset2D(draw_rect.left, draw_rect.bottom),
+                       vk::Extent2D(draw_rect.GetHeight(), draw_rect.GetHeight())};
+    cmdbuffer.setScissor(0, scissor);
 
     // Apply pending state
-    state.Apply();
+    state.ApplyRenderState(Pica::g_state.regs);
 
     std::size_t max_vertices = 3 * (VERTEX_BUFFER_SIZE / (3 * sizeof(HardwareVertex)));
     for (std::size_t base_vertex = 0; base_vertex < vertex_batch.size(); base_vertex += max_vertices) {
@@ -385,12 +373,11 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         std::memcpy(buffer, vertex_batch.data() + base_vertex, vertex_size);
 
         // Copy the vertex data
-        auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
         auto& staging = g_vk_task_scheduler->GetStaging();
         vk::BufferCopy copy_region(offset, 0, vertex_size);
 
-        command_buffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {offset});
-        command_buffer.copyBuffer(staging.GetBuffer(), vertex_buffer.GetBuffer(), copy_region);
+        state.SetVertexBuffer(vertex_buffer, offset);
+        cmdbuffer.copyBuffer(staging.GetBuffer(), vertex_buffer.GetBuffer(), copy_region);
 
         // Issue a pipeline barrier and draw command
         vk::BufferMemoryBarrier barrier {
@@ -400,12 +387,12 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         };
 
         // Add a pipeline barrier for each region modified
-        command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+        cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
                                        vk::PipelineStageFlagBits::eVertexInput,
                                        vk::DependencyFlagBits::eByRegion,
                                        0, nullptr, 1, &barrier, 0, nullptr);
 
-        command_buffer.draw(vertices, 1, 0, 0);
+        cmdbuffer.draw(vertices, 1, 0, 0);
     }
 
     vertex_batch.clear();
@@ -1130,13 +1117,8 @@ bool RasterizerVulkan::AccelerateDisplay(const GPU::Regs::FramebufferConfig& con
         (float)src_rect.bottom / (float)scaled_height, (float)src_rect.left / (float)scaled_width,
         (float)src_rect.top / (float)scaled_height, (float)src_rect.right / (float)scaled_width);
 
-    screen_info.display_texture = src_surface->texture.GetHandle();
+    screen_info.display_texture = &src_surface->texture;
     return true;
-}
-
-
-void RasterizerVulkan::SetShader() {
-    state.SetFragmentShader(Pica::g_state.regs);
 }
 
 void RasterizerVulkan::SyncClipEnabled() {
@@ -1156,19 +1138,20 @@ void RasterizerVulkan::SyncClipCoef() {
 void RasterizerVulkan::SyncCullMode() {
     const auto& regs = Pica::g_state.regs;
 
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
     switch (regs.rasterizer.cull_mode) {
     case Pica::RasterizerRegs::CullMode::KeepAll:
-        state.SetCullMode(vk::CullModeFlagBits::eNone);
+        cmdbuffer.setCullMode(vk::CullModeFlagBits::eNone);
         break;
 
     case Pica::RasterizerRegs::CullMode::KeepClockWise:
-        state.SetCullMode(vk::CullModeFlagBits::eBack);
-        state.SetFrontFace(vk::FrontFace::eClockwise);
+        cmdbuffer.setCullMode(vk::CullModeFlagBits::eBack);
+        cmdbuffer.setFrontFace(vk::FrontFace::eClockwise);
         break;
 
     case Pica::RasterizerRegs::CullMode::KeepCounterClockWise:
-        state.SetCullMode(vk::CullModeFlagBits::eBack);
-        state.SetFrontFace(vk::FrontFace::eCounterClockwise);
+        cmdbuffer.setCullMode(vk::CullModeFlagBits::eBack);
+        cmdbuffer.setFrontFace(vk::FrontFace::eCounterClockwise);
         break;
 
     default:
@@ -1198,6 +1181,7 @@ void RasterizerVulkan::SyncDepthOffset() {
 }
 
 void RasterizerVulkan::SyncBlendEnabled() {
+    auto& state = VulkanState::Get();
     state.SetBlendEnable(Pica::g_state.regs.framebuffer.output_merger.alphablend_enable);
 }
 
@@ -1210,12 +1194,16 @@ void RasterizerVulkan::SyncBlendFuncs() {
     auto src_alpha = PicaToVK::BlendFunc(regs.framebuffer.output_merger.alpha_blending.factor_source_a);
     auto dst_alpha = PicaToVK::BlendFunc(regs.framebuffer.output_merger.alpha_blending.factor_dest_a);
 
+    auto& state = VulkanState::Get();
     state.SetBlendOp(rgb_op, alpha_op, src_color, dst_color, src_alpha, dst_alpha);
 }
 
 void RasterizerVulkan::SyncBlendColor() {
-    auto blend_color = PicaToVK::ColorRGBA8(Pica::g_state.regs.framebuffer.output_merger.blend_const.raw);
-    state.SetBlendCostants(blend_color.r, blend_color.g, blend_color.b, blend_color.a);
+    auto color = PicaToVK::ColorRGBA8(Pica::g_state.regs.framebuffer.output_merger.blend_const.raw);
+    auto blend_consts = std::array<float, 4>{color.r, color.g, color.b, color.a};
+
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setBlendConstants(blend_consts.data());
 }
 
 void RasterizerVulkan::SyncFogColor() {
@@ -1265,6 +1253,8 @@ void RasterizerVulkan::SyncAlphaTest() {
 
 void RasterizerVulkan::SyncLogicOp() {
     const auto& regs = Pica::g_state.regs;
+
+    auto& state = VulkanState::Get();
     state.SetLogicOp(PicaToVK::LogicOp(regs.framebuffer.output_merger.logic_op));
 }
 
@@ -1275,6 +1265,7 @@ void RasterizerVulkan::SyncColorWriteMask() {
         return regs.framebuffer.framebuffer.allow_color_write != 0 && value != 0;
     };
 
+    auto& state = VulkanState::Get();
     state.SetColorMask(WriteEnabled(regs.framebuffer.output_merger.red_enable),
                        WriteEnabled(regs.framebuffer.output_merger.green_enable),
                        WriteEnabled(regs.framebuffer.output_merger.blue_enable),
@@ -1283,21 +1274,27 @@ void RasterizerVulkan::SyncColorWriteMask() {
 
 void RasterizerVulkan::SyncStencilWriteMask() {
     const auto& regs = Pica::g_state.regs;
-    state.SetStencilWrite((regs.framebuffer.framebuffer.allow_depth_stencil_write != 0)
-                         ? regs.framebuffer.output_merger.stencil_test.write_mask
-                         : 0);
+    auto mask = ((regs.framebuffer.framebuffer.allow_depth_stencil_write != 0)
+               ? static_cast<u32>(regs.framebuffer.output_merger.stencil_test.write_mask)
+               : 0);
+
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, mask);
 }
 
 void RasterizerVulkan::SyncDepthWriteMask() {
     const auto& regs = Pica::g_state.regs;
-    state.SetDepthWrite(regs.framebuffer.framebuffer.allow_depth_stencil_write != 0 &&
-                        regs.framebuffer.output_merger.depth_write_enable);
+    bool enable = (regs.framebuffer.framebuffer.allow_depth_stencil_write != 0 &&
+                   regs.framebuffer.output_merger.depth_write_enable);
+
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setDepthWriteEnable(enable);
 }
 
 void RasterizerVulkan::SyncStencilTest() {
     const auto& regs = Pica::g_state.regs;
 
-    bool enabled = regs.framebuffer.output_merger.stencil_test.enable &&
+    stencil_test_enabled = regs.framebuffer.output_merger.stencil_test.enable &&
                    regs.framebuffer.framebuffer.depth_format == Pica::FramebufferRegs::DepthFormat::D24S8;
     auto func = PicaToVK::CompareFunc(regs.framebuffer.output_merger.stencil_test.func);
     auto ref = regs.framebuffer.output_merger.stencil_test.reference_value;
@@ -1306,19 +1303,24 @@ void RasterizerVulkan::SyncStencilTest() {
     auto depth_fail = PicaToVK::StencilOp(regs.framebuffer.output_merger.stencil_test.action_depth_fail);
     auto depth_pass = PicaToVK::StencilOp(regs.framebuffer.output_merger.stencil_test.action_depth_pass);
 
-    state.SetStencilTest(enabled, stencil_fail, depth_pass, depth_fail, func, ref);
-    state.SetStencilInput(mask);
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setStencilTestEnable(stencil_test_enabled);
+    cmdbuffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, ref);
+    cmdbuffer.setStencilOp(vk::StencilFaceFlagBits::eFrontAndBack, stencil_fail, depth_pass, depth_fail, func);
+    cmdbuffer.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, mask);
 }
 
 void RasterizerVulkan::SyncDepthTest() {
     const auto& regs = Pica::g_state.regs;
-    bool test_enabled = regs.framebuffer.output_merger.depth_test_enable == 1 ||
+    depth_test_enabled = regs.framebuffer.output_merger.depth_test_enable == 1 ||
                         regs.framebuffer.output_merger.depth_write_enable == 1;
     auto test_func = regs.framebuffer.output_merger.depth_test_enable == 1
                    ? PicaToVK::CompareFunc(regs.framebuffer.output_merger.depth_test_func)
                    : vk::CompareOp::eAlways;
 
-    state.SetDepthTest(test_enabled, test_func);
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setDepthTestEnable(depth_test_enabled);
+    cmdbuffer.setDepthCompareOp(test_func);
 }
 
 void RasterizerVulkan::SyncCombinerColor() {
@@ -1449,95 +1451,63 @@ void RasterizerVulkan::SyncShadowTextureBias() {
 }
 
 void RasterizerVulkan::SyncAndUploadLUTsLF() {
-    constexpr u32 sampler_size = sizeof(glm::vec2) * 256;
-    constexpr u32 fog_size = sizeof(glm::vec2) * 128;
-    constexpr u32 max_size = sampler_size * Pica::LightingRegs::NumLightingSampler + fog_size;
+    constexpr std::size_t max_size =
+        sizeof(glm::vec2) * 256 * Pica::LightingRegs::NumLightingSampler + sizeof(glm::vec2) * 128; // fog
 
     if (!uniform_block_data.lighting_lut_dirty_any && !uniform_block_data.fog_lut_dirty) {
         return;
     }
 
-    u32 copy_region_count = 0;
-    std::array<vk::BufferCopy, Pica::LightingRegs::NumLightingSampler + 1> regions{};
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(max_size);
+    std::size_t bytes_used = 0;
+    auto [buffer, offset, invalidate] = texture_buffer_lut_lf.Map(max_size, sizeof(glm::vec4));
 
     // Sync the lighting luts
-    auto copy_func = [](const auto& entry) { return glm::vec2{entry.ToFloat(), entry.DiffToFloat()}; };
-    if (uniform_block_data.lighting_lut_dirty_any) {
-        for (u32 index = 0; index < uniform_block_data.lighting_lut_dirty.size(); index++) {
-            if (uniform_block_data.lighting_lut_dirty[index]) {
-                const auto& source_lut = Pica::g_state.lighting.luts[index];
-
+    if (uniform_block_data.lighting_lut_dirty_any || invalidate) {
+        for (unsigned index = 0; index < uniform_block_data.lighting_lut_dirty.size(); index++) {
+            if (uniform_block_data.lighting_lut_dirty[index] || invalidate) {
                 std::array<glm::vec2, 256> new_data;
-                std::transform(source_lut.begin(), source_lut.end(), new_data.begin(), copy_func);
+                const auto& source_lut = Pica::g_state.lighting.luts[index];
+                std::transform(source_lut.begin(), source_lut.end(), new_data.begin(),
+                               [](const auto& entry) {
+                                   return glm::vec2{entry.ToFloat(), entry.DiffToFloat()};
+                               });
 
-                if (new_data != lighting_lut_data[index]) {
+                if (new_data != lighting_lut_data[index] || invalidate) {
                     lighting_lut_data[index] = new_data;
-
-                    // Copy updated data to staging buffer
-                    u32 byte_offset = sampler_size * index;
-                    std::memcpy(buffer + byte_offset, new_data.data(), new_data.size() * sizeof(glm::vec2));
-
-                    // TODO: Not needed with vulkan barriers, remove in the future when I touch the shaders
+                    std::memcpy(buffer + bytes_used, new_data.data(),
+                                new_data.size() * sizeof(glm::vec2));
                     uniform_block_data.data.lighting_lut_offset[index / 4][index % 4] =
-                            byte_offset / sizeof(glm::vec2);
+                        static_cast<int>((offset + bytes_used) / sizeof(glm::vec2));
                     uniform_block_data.dirty = true;
-
-                    // Queue copy operation
-                    regions[copy_region_count++] = vk::BufferCopy(offset + byte_offset, byte_offset, sampler_size);
+                    bytes_used += new_data.size() * sizeof(glm::vec2);
                 }
                 uniform_block_data.lighting_lut_dirty[index] = false;
             }
         }
-
         uniform_block_data.lighting_lut_dirty_any = false;
     }
 
     // Sync the fog lut
-    if (uniform_block_data.fog_lut_dirty) {
+    if (uniform_block_data.fog_lut_dirty || invalidate) {
         std::array<glm::vec2, 128> new_data;
-        std::transform(Pica::g_state.fog.lut.begin(), Pica::g_state.fog.lut.end(), new_data.begin(), copy_func);
 
-        if (new_data != fog_lut_data) {
+        std::transform(Pica::g_state.fog.lut.begin(), Pica::g_state.fog.lut.end(), new_data.begin(),
+                       [](const auto& entry) {
+                           return glm::vec2{entry.ToFloat(), entry.DiffToFloat()};
+                       });
+
+        if (new_data != fog_lut_data || invalidate) {
             fog_lut_data = new_data;
-
-            // Copy updated fog data to staging buffer
-            auto fog_offset = max_size - fog_size;
-            std::memcpy(buffer + fog_offset, new_data.data(), new_data.size() * sizeof(glm::vec2));
-            uniform_block_data.data.fog_lut_offset = fog_offset / sizeof(glm::vec2);
+            std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(glm::vec2));
+            uniform_block_data.data.fog_lut_offset =
+                static_cast<int>((offset + bytes_used) / sizeof(glm::vec2));
             uniform_block_data.dirty = true;
-
-            // Queue copy operation
-            regions[copy_region_count++] = vk::BufferCopy(offset + fog_offset, fog_offset, fog_size);
+            bytes_used += new_data.size() * sizeof(glm::vec2);
         }
-
         uniform_block_data.fog_lut_dirty = false;
     }
 
-    // Peform copy operation
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    auto& staging = g_vk_task_scheduler->GetStaging();
-    command_buffer.copyBuffer(staging.GetBuffer(), texture_buffer_lut_lf.GetBuffer(),
-                              copy_region_count, regions.data());
-
-    std::array<vk::BufferMemoryBarrier, Pica::LightingRegs::NumLightingSampler + 1> barriers {{{
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        texture_buffer_lut_lf.GetBuffer(), {}, {}
-    }}};
-
-    // Add a pipeline barrier for each region modified
-    for (int i = 0; i < copy_region_count; i++) {
-        auto& region = regions[i];
-        auto& barrier = barriers[i];
-
-        barrier.setOffset(region.dstOffset);
-        barrier.setSize(region.size);
-        command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                       vk::PipelineStageFlagBits::eFragmentShader,
-                                       vk::DependencyFlagBits::eByRegion,
-                                       0, nullptr, 1, &barrier, 0, nullptr);
-    }
+    texture_buffer_lut_lf.Commit(bytes_used);
 }
 
 void RasterizerVulkan::SyncAndUploadLUTs() {
@@ -1552,183 +1522,120 @@ void RasterizerVulkan::SyncAndUploadLUTs() {
         return;
     }
 
-    u32 copy_region_count = 0;
-    std::array<vk::BufferCopy, 5> regions{};
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(max_size);
+    std::size_t bytes_used = 0;
+    auto [buffer, offset, invalidate] = texture_buffer_lut.Map(max_size, sizeof(glm::vec4));
 
     // helper function for SyncProcTexNoiseLUT/ColorMap/AlphaMap
-    auto SyncLUT = [&, &buffer = buffer, &offset = offset](const auto& lut, auto& lut_data, int lut_offset) {
+    auto SyncProcTexValueLUT = [this, buffer, offset, invalidate, &bytes_used](
+                                   const std::array<Pica::State::ProcTex::ValueEntry, 128>& lut,
+                                   std::array<glm::vec2, 128>& lut_data, int& lut_offset) {
         std::array<glm::vec2, 128> new_data;
         std::transform(lut.begin(), lut.end(), new_data.begin(), [](const auto& entry) {
             return glm::vec2{entry.ToFloat(), entry.DiffToFloat()};
         });
 
-        if (new_data != lut_data) {
+        if (new_data != lut_data || invalidate) {
             lut_data = new_data;
-
-            auto data_size = new_data.size() * sizeof(glm::vec2);
-            std::memcpy(buffer + lut_offset, new_data.data(), data_size);
+            std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(glm::vec2));
+            lut_offset = static_cast<int>((offset + bytes_used) / sizeof(glm::vec2));
             uniform_block_data.dirty = true;
-
-            // Queue copy operation
-            regions[copy_region_count++] = vk::BufferCopy(offset + lut_offset, lut_offset, data_size);
+            bytes_used += new_data.size() * sizeof(glm::vec2);
         }
     };
 
     // Sync the proctex noise lut
-    if (uniform_block_data.proctex_noise_lut_dirty) {
-        uniform_block_data.data.proctex_noise_lut_offset = 0;
-        SyncLUT(Pica::g_state.proctex.noise_table, proctex_noise_lut_data,
-                uniform_block_data.data.proctex_noise_lut_offset);
-
+    if (uniform_block_data.proctex_noise_lut_dirty || invalidate) {
+        SyncProcTexValueLUT(Pica::g_state.proctex.noise_table, proctex_noise_lut_data,
+                            uniform_block_data.data.proctex_noise_lut_offset);
         uniform_block_data.proctex_noise_lut_dirty = false;
     }
 
     // Sync the proctex color map
-    if (uniform_block_data.proctex_color_map_dirty) {
-        uniform_block_data.data.proctex_color_map_offset = sizeof(glm::vec2) * 128;
-        SyncLUT(Pica::g_state.proctex.color_map_table, proctex_color_map_data,
+    if (uniform_block_data.proctex_color_map_dirty || invalidate) {
+        SyncProcTexValueLUT(Pica::g_state.proctex.color_map_table, proctex_color_map_data,
                             uniform_block_data.data.proctex_color_map_offset);
-
         uniform_block_data.proctex_color_map_dirty = false;
     }
 
     // Sync the proctex alpha map
-    if (uniform_block_data.proctex_alpha_map_dirty) {
-        uniform_block_data.data.proctex_alpha_map_offset = sizeof(glm::vec2) * 128 * 2;
-        SyncLUT(Pica::g_state.proctex.alpha_map_table, proctex_alpha_map_data,
+    if (uniform_block_data.proctex_alpha_map_dirty || invalidate) {
+        SyncProcTexValueLUT(Pica::g_state.proctex.alpha_map_table, proctex_alpha_map_data,
                             uniform_block_data.data.proctex_alpha_map_offset);
-
         uniform_block_data.proctex_alpha_map_dirty = false;
     }
 
     // Sync the proctex lut
-    auto rgba_func = [](const auto& entry) {
-        auto rgba = entry.ToVector() / 255.0f;
-        return glm::vec4{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
-    };
-
-    if (uniform_block_data.proctex_lut_dirty) {
-        uniform_block_data.data.proctex_lut_offset = sizeof(glm::vec2) * 128 * 3;
-
+    if (uniform_block_data.proctex_lut_dirty || invalidate) {
         std::array<glm::vec4, 256> new_data;
+
         std::transform(Pica::g_state.proctex.color_table.begin(),
                        Pica::g_state.proctex.color_table.end(), new_data.begin(),
-                       rgba_func);
+                       [](const auto& entry) {
+                           auto rgba = entry.ToVector() / 255.0f;
+                           return glm::vec4{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
+                       });
 
-        if (new_data != proctex_lut_data) {
+        if (new_data != proctex_lut_data || invalidate) {
             proctex_lut_data = new_data;
-
-            auto offset = uniform_block_data.data.proctex_lut_offset;
-            auto data_size = new_data.size() * sizeof(glm::vec4);
-            std::memcpy(buffer + offset, new_data.data(), data_size);
-
-            regions[copy_region_count++] = vk::BufferCopy(offset, offset, data_size);
+            std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(glm::vec4));
+            uniform_block_data.data.proctex_lut_offset =
+                static_cast<int>((offset + bytes_used) / sizeof(glm::vec4));
             uniform_block_data.dirty = true;
+            bytes_used += new_data.size() * sizeof(glm::vec4);
         }
-
         uniform_block_data.proctex_lut_dirty = false;
     }
 
     // Sync the proctex difference lut
-    if (uniform_block_data.proctex_diff_lut_dirty) {
-        uniform_block_data.data.proctex_diff_lut_offset = sizeof(glm::vec2) * 128 * 3 + sizeof(glm::vec4) * 256;
-
+    if (uniform_block_data.proctex_diff_lut_dirty || invalidate) {
         std::array<glm::vec4, 256> new_data;
+
         std::transform(Pica::g_state.proctex.color_diff_table.begin(),
                        Pica::g_state.proctex.color_diff_table.end(), new_data.begin(),
-                       rgba_func);
+                       [](const auto& entry) {
+                           auto rgba = entry.ToVector() / 255.0f;
+                           return glm::vec4{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
+                       });
 
-        if (new_data != proctex_diff_lut_data) {
+        if (new_data != proctex_diff_lut_data || invalidate) {
             proctex_diff_lut_data = new_data;
-
-            auto offset = uniform_block_data.data.proctex_diff_lut_offset;
-            auto data_size = new_data.size() * sizeof(glm::vec4);
-            std::memcpy(buffer + offset, new_data.data(), data_size);
-
-            regions[copy_region_count++] = vk::BufferCopy(offset, offset, data_size);
+            std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(glm::vec4));
+            uniform_block_data.data.proctex_diff_lut_offset =
+                static_cast<int>((offset + bytes_used) / sizeof(glm::vec4));
             uniform_block_data.dirty = true;
+            bytes_used += new_data.size() * sizeof(glm::vec4);
         }
-
         uniform_block_data.proctex_diff_lut_dirty = false;
     }
 
-    // Peform copy operation
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    auto& staging = g_vk_task_scheduler->GetStaging();
-    command_buffer.copyBuffer(staging.GetBuffer(), texture_buffer_lut.GetBuffer(),
-                              copy_region_count, regions.data());
-
-    std::array<vk::BufferMemoryBarrier, 5> barriers {{{
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        texture_buffer_lut.GetBuffer(), {}, {}
-    }}};
-
-    // Add a pipeline barrier for each region modified
-    for (int i = 0; i < copy_region_count; i++) {
-        auto& region = regions[i];
-        auto& barrier = barriers[i];
-
-        barrier.setOffset(region.dstOffset);
-        barrier.setSize(region.size);
-        command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                       vk::PipelineStageFlagBits::eFragmentShader,
-                                       vk::DependencyFlagBits::eByRegion,
-                                       0, nullptr, 1, &barrier, 0, nullptr);
-    }
+    texture_buffer_lut.Commit(bytes_used);
 }
 
 void RasterizerVulkan::UploadUniforms(bool accelerate_draw) {
-    u32 uniform_size = uniform_size_aligned_vs + uniform_size_aligned_fs;
-    u32 vs_uniform_size = sizeof(VSUniformData);
     bool sync_vs = accelerate_draw;
     bool sync_fs = uniform_block_data.dirty;
 
-    u32 copy_region_count = 0;
-    std::array<vk::BufferCopy, 5> regions{};
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(uniform_size);
+    if (!sync_vs && !sync_fs)
+        return;
 
-    if (sync_vs) {
-        VSUniformData vs_uniforms;
-        vs_uniforms.uniforms.SetFromRegs(Pica::g_state.regs.vs, Pica::g_state.vs);
+    std::size_t uniform_size = uniform_size_aligned_vs + uniform_size_aligned_fs;
+    std::size_t used_bytes = 0;
+    auto [uniforms, offset, invalidate] = uniform_buffer.Map(uniform_size, uniform_buffer_alignment);
 
-        std::memcpy(buffer, &vs_uniforms, vs_uniform_size);
-        regions[copy_region_count++] = vk::BufferCopy(offset, 0, vs_uniform_size);
-    }
+    auto& state = VulkanState::Get();
 
-    if (sync_fs) {
+    // Reserved when acceleration is implemented
+    std::memset(uniforms + used_bytes, 0, sizeof(VSUniformData));
+    used_bytes += uniform_size_aligned_vs;
+
+    if (sync_fs || invalidate) {
+        std::memcpy(uniforms + used_bytes, &uniform_block_data.data, sizeof(UniformData));
+        state.SetUniformBuffer(0, offset + used_bytes, sizeof(UniformData), uniform_buffer);
         uniform_block_data.dirty = false;
-
-        std::memcpy(buffer + vs_uniform_size, &uniform_block_data.data, sizeof(UniformData));
-        regions[copy_region_count++] = vk::BufferCopy(offset + vs_uniform_size, vs_uniform_size, sizeof(UniformData));
+        used_bytes += uniform_size_aligned_fs;
     }
 
-    // Peform copy operation
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    auto& staging = g_vk_task_scheduler->GetStaging();
-    command_buffer.copyBuffer(staging.GetBuffer(), uniform_buffer.GetBuffer(),
-                              copy_region_count, regions.data());
-
-    std::array<vk::BufferMemoryBarrier, 2> barriers {{{
-        vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eUniformRead,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        uniform_buffer.GetBuffer(), {}, {}
-    }}};
-
-    // Add a pipeline barrier for each region modified
-    for (int i = 0; i < copy_region_count; i++) {
-        auto& region = regions[i];
-        auto& barrier = barriers[i];
-
-        barrier.setOffset(region.dstOffset);
-        barrier.setSize(region.size);
-        command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                       vk::PipelineStageFlagBits::eVertexShader |
-                                       vk::PipelineStageFlagBits::eFragmentShader,
-                                       vk::DependencyFlagBits::eByRegion,
-                                       0, nullptr, 1, &barrier, 0, nullptr);
-    }
+    uniform_buffer.Commit(used_bytes);
 }
 
 } // namespace Vulkan

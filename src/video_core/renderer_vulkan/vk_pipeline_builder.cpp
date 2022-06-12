@@ -20,15 +20,14 @@ void PipelineLayoutBuilder::Clear() {
 }
 
 vk::PipelineLayout PipelineLayoutBuilder::Build() {
-    auto& device = g_vk_instace->GetDevice();
+    auto device = g_vk_instace->GetDevice();
 
     auto result = device.createPipelineLayout(pipeline_layout_info);
-    if (result) {
+    if (!result) {
         LOG_ERROR(Render_Vulkan, "Failed to create pipeline layout");
         return VK_NULL_HANDLE;
     }
 
-    Clear();
     return result;
 }
 
@@ -81,7 +80,7 @@ void PipelineBuilder::Clear() {
 }
 
 vk::Pipeline PipelineBuilder::Build() {
-    auto& device = g_vk_instace->GetDevice();
+    auto device = g_vk_instace->GetDevice();
 
     auto result = device.createGraphicsPipeline({}, pipeline_info);
     if (result.result != vk::Result::eSuccess) {
@@ -89,7 +88,6 @@ vk::Pipeline PipelineBuilder::Build() {
         UNREACHABLE();
     }
 
-    Clear();
     return result.value;
 }
 
@@ -110,12 +108,12 @@ void PipelineBuilder::SetShaderStage(vk::ShaderStageFlagBits stage, vk::ShaderMo
         shader_stages.emplace_back(vk::PipelineShaderStageCreateFlags(), stage, module, "main");
         pipeline_info.stageCount++;
     }
+
+    pipeline_info.pStages = shader_stages.data();
 }
 
 void PipelineBuilder::AddVertexBuffer(u32 binding, u32 stride, vk::VertexInputRate input_rate,
                                       std::span<vk::VertexInputAttributeDescription> attributes) {
-    assert(vertex_input_state.vertexAttributeDescriptionCount + attributes.size() < MAX_VERTEX_BUFFERS);
-
     // Copy attributes to private array
     auto loc = vertex_attributes.begin() + vertex_input_state.vertexAttributeDescriptionCount;
     std::copy(attributes.begin(), attributes.end(), loc);
@@ -173,9 +171,24 @@ void PipelineBuilder::SetStencilState(bool stencil_test, vk::StencilOpState fron
     pipeline_info.pDepthStencilState = &depth_state;
 }
 
+void PipelineBuilder::SetNoStencilState() {
+    depth_state.stencilTestEnable = VK_FALSE;
+    depth_state.front = vk::StencilOpState{};
+    depth_state.back = vk::StencilOpState{};
+}
+
+void PipelineBuilder::SetNoDepthTestState() {
+    SetDepthState(false, false, vk::CompareOp::eAlways);
+}
+
 void PipelineBuilder::SetBlendConstants(float r, float g, float b, float a) {
     blend_state.blendConstants = std::array<float, 4>{r, g, b, a};
     pipeline_info.pColorBlendState = &blend_state;
+}
+
+void PipelineBuilder::SetBlendLogicOp(vk::LogicOp logic_op)  {
+    blend_state.logicOp = logic_op;
+    blend_state.logicOpEnable = true;
 }
 
 void PipelineBuilder::SetBlendAttachment(bool blend_enable, vk::BlendFactor src_factor, vk::BlendFactor dst_factor,

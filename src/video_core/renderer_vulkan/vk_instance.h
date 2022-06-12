@@ -22,14 +22,14 @@ public:
     bool Create(vk::Instance instance, vk::PhysicalDevice gpu,
                 vk::SurfaceKHR surface, bool enable_validation_layer);
 
-    vk::Device& GetDevice() { return device.get(); }
-    vk::PhysicalDevice& GetPhysicalDevice() { return physical_device; }
+    vk::Device GetDevice() const { return device.get(); }
+    vk::PhysicalDevice GetPhysicalDevice() const { return physical_device; }
 
     /// Retrieve queue information
     u32 GetGraphicsQueueFamilyIndex() const { return graphics_queue_family_index; }
     u32 GetPresentQueueFamilyIndex() const { return present_queue_family_index; }
-    vk::Queue GetGraphicsQueue() { return graphics_queue; }
-    vk::Queue GetPresentQueue() { return present_queue; }
+    vk::Queue GetGraphicsQueue() const { return graphics_queue; }
+    vk::Queue GetPresentQueue() const { return present_queue; }
 
     /// Feature support
     bool SupportsAnisotropicFiltering() const;
@@ -58,9 +58,9 @@ public:
     // Features per vulkan version
     vk::PhysicalDeviceFeatures vk_features{};
     vk::PhysicalDeviceVulkan12Features vk12_features{};
-    vk::PhysicalDeviceVulkan13Features vk13_features{};
-    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state{};
-    vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2{};
+    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state_features{};
+    vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2_features{};
+    vk::PhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features{};
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;

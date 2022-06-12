@@ -10,8 +10,8 @@
 #include <deque>
 #include <memory>
 #include <mutex>
-#include <glad/glad.h>
 #include <queue>
+#include <glm/gtc/matrix_transform.hpp>
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/logging/log.h"
@@ -79,14 +79,14 @@ vk::SurfaceKHR CreateSurface(const VkInstance& instance,
     }
 
     if (window_info.type == Frontend::WindowSystemType::Wayland) {
-        const VkWaylandSurfaceCreateInfoKHR wayland_ci{
+        /*const VkWaylandSurfaceCreateInfoKHR wayland_ci{
             VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR, nullptr, 0,
             static_cast<wl_display*>(window_info.display_connection),
             static_cast<wl_surface*>(window_info.render_surface)};
         if (vkCreateWaylandSurfaceKHR(instance, &wayland_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
             LOG_ERROR(Render_Vulkan, "Failed to initialize Wayland surface");
             UNREACHABLE();
-        }
+        }*/
     }
 #endif
     if (!unsafe_surface) {
@@ -130,72 +130,6 @@ std::vector<const char*> RequiredExtensions(Frontend::WindowSystemType window_ty
     return extensions;
 }
 
-static const char vertex_shader_source[] = R"(
-layout (location = 0) in vec2 vert_position;
-layout (location = 1) in vec2 vert_tex_coord;
-layout (location = 0) out vec2 frag_tex_coord;
-
-// This is a truncated 3x3 matrix for 2D transformations:
-// The upper-left 2x2 submatrix performs scaling/rotation/mirroring.
-// The third column performs translation.
-// The third row could be used for projection, which we don't need in 2D. It hence is assumed to
-// implicitly be [0, 0, 1]
-layout (push_constant) uniform mat3x2 modelview_matrix;
-
-void main() {
-    // Multiply input position by the rotscale part of the matrix and then manually translate by
-    // the last column. This is equivalent to using a full 3x3 matrix and expanding the vector
-    // to `vec3(vert_position.xy, 1.0)`
-    gl_Position = vec4(mat2(modelview_matrix) * vert_position + modelview_matrix[2], 0.0, 1.0);
-    frag_tex_coord = vert_tex_coord;
-}
-)";
-
-static const char fragment_shader_source[] = R"(
-layout (location = 0) in vec2 frag_tex_coord;
-layout (location = 0) out vec4 color;
-
-layout (push_constant) uniform DrawInfo {
-    vec4 i_resolution;
-    vec4 o_resolution;
-    int layer;
-};
-
-uniform sampler2D color_texture;
-
-void main() {
-    color = texture(color_texture, frag_tex_coord);
-}
-)";
-
-/**
- * Vertex structure that the drawn screen rectangles are composed of.
- */
-
-struct ScreenRectVertexBase {
-    ScreenRectVertexBase() = default;
-    ScreenRectVertexBase(float x, float y, float u, float v) {
-        position.x = x;
-        position.y = y;
-        tex_coord.x = u;
-        tex_coord.y = v;
-    }
-
-    glm::vec2 position;
-    glm::vec2 tex_coord;
-};
-
-struct ScreenRectVertex : public ScreenRectVertexBase {
-    ScreenRectVertex() = default;
-    ScreenRectVertex(float x, float y, float u, float v) : ScreenRectVertexBase(x, y, u, v) {};
-    static constexpr auto binding_desc = vk::VertexInputBindingDescription(0, sizeof(ScreenRectVertexBase));
-    static constexpr std::array<vk::VertexInputAttributeDescription, 8> attribute_desc =
-    {
-          vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, position)),
-          vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, tex_coord)),
-    };
-};
-
 /**
  * Defines a 1:1 pixel ortographic projection matrix with (0,0) on the top-left
  * corner and (width, height) on the lower-bottom.
@@ -205,21 +139,20 @@ struct ScreenRectVertex : public ScreenRectVertexBase {
  *
  * @param flipped Whether the frame should be flipped upside down.
  */
-static std::array<GLfloat, 3 * 2> MakeOrthographicMatrix(const float width, const float height,
-                                                         bool flipped) {
-
-    std::array<GLfloat, 3 * 2> matrix; // Laid out in column-major order
+static glm::mat3x2 MakeOrthographicMatrix(const float width, const float height, bool flipped) {
+    glm::mat3x2 matrix; // Laid out in column-major order
 
     // Last matrix row is implicitly assumed to be [0, 0, 1].
     if (flipped) {
         // clang-format off
-        matrix[0] = 2.f / width; matrix[2] = 0.f;           matrix[4] = -1.f;
-        matrix[1] = 0.f;         matrix[3] = 2.f / height;  matrix[5] = -1.f;
+        matrix[0][0] = 2.f / width; matrix[1][0] = 0.f;           matrix[2][0] = -1.f;
+        matrix[0][1] = 0.f;         matrix[1][1] = 2.f / height;  matrix[2][1] = -1.f;
         // clang-format on
-    } else {
+    }
+    else {
         // clang-format off
-        matrix[0] = 2.f / width; matrix[2] = 0.f;           matrix[4] = -1.f;
-        matrix[1] = 0.f;         matrix[3] = -2.f / height; matrix[5] = 1.f;
+        matrix[0][0] = 2.f / width; matrix[1][0] = 0.f;           matrix[2][0] = -1.f;
+        matrix[1][1] = 0.f;         matrix[1][1] = -2.f / height; matrix[2][1] = 1.f;
         // clang-format on
     }
 
@@ -230,40 +163,17 @@ RendererVulkan::RendererVulkan(Frontend::EmuWindow& window)
     : RendererBase{window} {
 
     window.mailbox = nullptr;
-    swapchain = std::make_unique<VKSwapChain>(CreateSurface(nullptr, window));
-}
-
-MICROPROFILE_DEFINE(OpenGL_RenderFrame, "OpenGL", "Render Frame", MP_RGB(128, 128, 64));
-MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128, 128, 128));
-
-/// Swap buffers (render frame)
-void RendererVulkan::SwapBuffers() {
-    PrepareRendertarget();
-
-    const auto& layout = render_window.GetFramebufferLayout();
-    DrawScreens(layout, false);
-
-    m_current_frame++;
-
-    Core::System::GetInstance().perf_stats->EndSystemFrame();
-
-    render_window.PollEvents();
-
-    Core::System::GetInstance().frame_limiter.DoFrameLimiting(
-        Core::System::GetInstance().CoreTiming().GetGlobalTimeUs());
-    Core::System::GetInstance().perf_stats->BeginSystemFrame();
-
-    RefreshRasterizerSetting();
-
-    if (Pica::g_debug_context && Pica::g_debug_context->recorder) {
-        Pica::g_debug_context->recorder->FrameFinished();
-    }
 }
 
 void RendererVulkan::PrepareRendertarget() {
     for (int i = 0; i < 3; i++) {
         int fb_id = i == 2 ? 1 : 0;
         const auto& framebuffer = GPU::g_regs.framebuffer_config[fb_id];
+
+        // Create swapchain if needed
+        if (swapchain->NeedsRecreation()) {
+            swapchain->Create(framebuffer.width, framebuffer.height, false);
+        }
 
         // Main LCD (0): 0x1ED02204, Sub LCD (1): 0x1ED02A04
         u32 lcd_color_addr =
@@ -323,8 +233,9 @@ void RendererVulkan::LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& fram
     ASSERT(pixel_stride % 4 == 0);
 
     if (!Rasterizer()->AccelerateDisplay(framebuffer, framebuffer_addr, static_cast<u32>(pixel_stride), screen_info)) {
+        ASSERT(false);
         // Reset the screen info's display texture to its own permanent texture
-        screen_info.display_texture = screen_info.texture.GetHandle();
+        screen_info.display_texture = &screen_info.texture;
         screen_info.display_texcoords = Common::Rectangle<float>(0.f, 0.f, 1.f, 1.f);
 
         Memory::RasterizerFlushRegion(framebuffer_addr, framebuffer.stride * framebuffer.height);
@@ -359,13 +270,10 @@ void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color
  * Initializes the OpenGL state and creates persistent objects.
  */
 void RendererVulkan::CreateVulkanObjects() {
-    glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue,
-                 0.0f);
+    clear_color = vk::ClearColorValue{std::array<float, 4>{Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue, 0.0f}};
 
     //filter_sampler.Create();
     //ReloadSampler();
-
-    ReloadShader();
 
     // Generate VBO handle for drawing
     VKBuffer::Info vertex_info{
@@ -377,64 +285,6 @@ void RendererVulkan::CreateVulkanObjects() {
     vertex_buffer.Create(vertex_info);
 }
 
-void RendererVulkan::ConfigureRenderPipeline() {
-    // Define the descriptor sets we will be using
-    vk::DescriptorSetLayoutBinding color_texture{
-        0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment
-    };
-    vk::DescriptorSetLayoutCreateInfo color_texture_info{{}, color_texture};
-
-    auto& device = g_vk_instace->GetDevice();
-    descriptor_layout = device.createDescriptorSetLayoutUnique(color_texture_info);
-
-    // Build the display pipeline layout
-    PipelineLayoutBuilder lbuilder;
-    lbuilder.AddDescriptorSet(descriptor_layout.get());
-    lbuilder.AddPushConstants(vk::ShaderStageFlagBits::eVertex, 0, sizeof(glm::mat2x3));
-    lbuilder.AddPushConstants(vk::ShaderStageFlagBits::eFragment, 0, sizeof(DrawInfo));
-    pipeline_layout = vk::UniquePipelineLayout{lbuilder.Build()};
-
-    std::array<vk::DynamicState, 3> dynamic_states{
-        vk::DynamicState::eLineWidth, vk::DynamicState::eViewport, vk::DynamicState::eScissor,
-    };
-
-    // Build the display pipeline
-    PipelineBuilder builder;
-    builder.SetNoStencilState();
-    builder.SetNoBlendingState();
-    builder.SetNoDepthTestState();
-    builder.SetNoCullRasterizationState();
-    builder.SetLineWidth(1.0f);
-    builder.SetPrimitiveTopology(vk::PrimitiveTopology::eTriangleList);
-    builder.SetShaderStage(vk::ShaderStageFlagBits::eVertex, vertex_shader.get());
-    builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, fragment_shader.get());
-    builder.SetDynamicStates(dynamic_states);
-    builder.SetPipelineLayout(pipeline_layout.get());
-
-    // Configure vertex buffer
-    auto attributes = ScreenRectVertex::attribute_desc;
-    builder.AddVertexBuffer(0, sizeof(ScreenRectVertex), vk::VertexInputRate::eVertex, attributes);
-
-    pipeline = vk::UniquePipeline{builder.Build()};
-}
-
-void RendererVulkan::ReloadSampler() {
-    /*glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MIN_FILTER,
-                        Settings::values.filter_mode ? GL_LINEAR : GL_NEAREST);
-    glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_MAG_FILTER,
-                        Settings::values.filter_mode ? GL_LINEAR : GL_NEAREST);
-    glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glSamplerParameteri(filter_sampler.handle, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);*/
-}
-
-void RendererVulkan::ReloadShader() {
-    // Link shaders and get variable locations
-    vertex_shader = vk::UniqueShaderModule{VulkanState::CompileShader(vertex_shader_source,
-                                                                      vk::ShaderStageFlagBits::eVertex)};
-    fragment_shader = vk::UniqueShaderModule{VulkanState::CompileShader(fragment_shader_source,
-                                                                        vk::ShaderStageFlagBits::eFragment)};
-}
-
 void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer) {
     GPU::Regs::PixelFormat format = framebuffer.color_format;
 
@@ -444,26 +294,18 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
         .type = vk::ImageType::e2D,
         .view_type = vk::ImageViewType::e2D,
         .usage = vk::ImageUsageFlagBits::eColorAttachment |
-                 vk::ImageUsageFlagBits::eTransferDst,
-        .aspect = vk::ImageAspectFlagBits::eColor,
+                 vk::ImageUsageFlagBits::eTransferDst
     };
 
     switch (format) {
     case GPU::Regs::PixelFormat::RGBA8:
-        texture_info.format = vk::Format::eR8G8B8A8Unorm;
+        texture_info.format = vk::Format::eR8G8B8A8Srgb;
         break;
 
     case GPU::Regs::PixelFormat::RGB8:
-        // This pixel format uses BGR since GL_UNSIGNED_BYTE specifies byte-order, unlike every
-        // specific OpenGL type used in this function using native-endian (that is, little-endian
-        // mostly everywhere) for words or half-words.
-        // TODO: check how those behave on big-endian processors.
-        //internal_format = GL_RGB;
-
-        // GLES Dosen't support BGR , Use RGB instead
-        //texture.gl_format = GLES ? GL_RGB : GL_BGR;
-        //texture.gl_type = GL_UNSIGNED_BYTE;
-        texture_info.format = vk::Format::eR8G8B8Unorm;
+        // Note that the texture will actually give us an RGBA8 image because next to no modern hardware supports RGB formats.
+        // The pixels will be converted automatically by Upload()
+        texture_info.format = vk::Format::eR8G8B8Srgb;
         break;
 
     case GPU::Regs::PixelFormat::RGB565:
@@ -485,6 +327,7 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
     auto& texture = screen.texture;
     texture.Destroy();
     texture.Create(texture_info);
+    texture.Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 /**
@@ -494,6 +337,10 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
 void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y,
                                              float w, float h) {
     const auto& texcoords = screen_info.display_texcoords;
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+
+    auto& state = VulkanState::Get();
+    state.EndRendering();
 
     const std::array<ScreenRectVertex, 4> vertices = {{
         ScreenRectVertex(x, y, texcoords.bottom, texcoords.left),
@@ -501,8 +348,7 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
         ScreenRectVertex(x, y + h, texcoords.top, texcoords.left),
         ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right),
     }};
-
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.updateBuffer(vertex_buffer.GetBuffer(), 0, sizeof(vertices), vertices.data());
 
     // As this is the "DrawSingleScreenRotated" function, the output resolution dimensions have been
     // swapped. If a non-rotated draw-screen function were to be added for book-mode games, those
@@ -510,28 +356,28 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
     const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
     auto [width, height] = screen_info.texture.GetArea().extent;
 
-    draw_info.i_resolution = glm::vec4(width * scale_factor, height * scale_factor,
+    draw_info.i_resolution = glm::vec4{width * scale_factor, height * scale_factor,
                                        1.0f / (width * scale_factor),
-                                       1.0f / (height * scale_factor));
-    draw_info.o_resolution = glm::vec4(h, w, 1.0f / h, 1.0f / w);
-    command_buffer.pushConstants(pipeline_layout.get(), vk::ShaderStageFlagBits::eFragment,
-                                 0, sizeof(DrawInfo), &draw_info);
+                                       1.0f / (height * scale_factor)};
+    draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
 
-    state.texture_units[0].texture_2d = screen_info.display_texture;
-    state.texture_units[0].sampler = filter_sampler.handle;
-    state.Apply();
+    auto& image = swapchain->GetCurrentImage();
+    state.BeginRendering(image, std::nullopt, clear_color, vk::AttachmentLoadOp::eClear);
+    state.SetPresentData(draw_info);
+    state.SetPresentTexture(*screen_info.display_texture);
+    state.ApplyPresentState();
 
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    state.texture_units[0].texture_2d = 0;
-    state.texture_units[0].sampler = 0;
-    state.Apply();
+    cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
+    cmdbuffer.draw(4, 1, 0, 0);
 }
 
 void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w,
                                       float h) {
     const auto& texcoords = screen_info.display_texcoords;
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+
+    auto& state = VulkanState::Get();
+    state.EndRendering();
 
     const std::array<ScreenRectVertex, 4> vertices = {{
         ScreenRectVertex(x, y, texcoords.bottom, texcoords.right),
@@ -539,23 +385,25 @@ void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
         ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.left),
         ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.left),
     }};
+    cmdbuffer.updateBuffer(vertex_buffer.GetBuffer(), 0, sizeof(vertices), vertices.data());
 
     const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
-    glUniform4f(uniform_i_resolution, static_cast<float>(screen_info.texture.width * scale_factor),
-                static_cast<float>(screen_info.texture.height * scale_factor),
-                1.0f / static_cast<float>(screen_info.texture.width * scale_factor),
-                1.0f / static_cast<float>(screen_info.texture.height * scale_factor));
-    glUniform4f(uniform_o_resolution, w, h, 1.0f / w, 1.0f / h);
-    state.texture_units[0].texture_2d = screen_info.display_texture;
-    state.texture_units[0].sampler = filter_sampler.handle;
-    state.Apply();
+    auto [width, height] = screen_info.texture.GetArea().extent;
 
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-    state.texture_units[0].texture_2d = 0;
-    state.texture_units[0].sampler = 0;
-    state.Apply();
+    draw_info.i_resolution = glm::vec4{width * scale_factor, height * scale_factor,
+                                       1.0f / (width * scale_factor),
+                                       1.0f / (height * scale_factor)};
+    draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
+
+    auto& image = swapchain->GetCurrentImage();
+    state.BeginRendering(image, std::nullopt, clear_color, vk::AttachmentLoadOp::eClear);
+    state.SetPresentData(draw_info);
+    state.SetPresentTexture(*screen_info.display_texture);
+    state.ApplyPresentState();
+
+    cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
+    cmdbuffer.draw(4, 1, 0, 0);
 }
 
 /**
@@ -565,7 +413,8 @@ void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
 void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
                                                    const ScreenInfo& screen_info_r, float x,
                                                    float y, float w, float h) {
-    const auto& texcoords = screen_info_l.display_texcoords;
+    DrawSingleScreenRotated(screen_info_l, x, y, w, h);
+    /*const auto& texcoords = screen_info_l.display_texcoords;
 
     const std::array<ScreenRectVertex, 4> vertices = {{
         ScreenRectVertex(x, y, texcoords.bottom, texcoords.left),
@@ -575,12 +424,13 @@ void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info
     }};
 
     const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
-    glUniform4f(uniform_i_resolution,
-                static_cast<float>(screen_info_l.texture.width * scale_factor),
-                static_cast<float>(screen_info_l.texture.height * scale_factor),
-                1.0f / static_cast<float>(screen_info_l.texture.width * scale_factor),
-                1.0f / static_cast<float>(screen_info_l.texture.height * scale_factor));
-    glUniform4f(uniform_o_resolution, h, w, 1.0f / h, 1.0f / w);
+    auto [width_l, height_l] = screen_info_l.texture.GetArea().extent;
+
+    draw_info.i_resolution = glm::vec4{width_l * scale_factor, height_l * scale_factor,
+                                       1.0f / (width_l * scale_factor),
+                                       1.0f / (height_l * scale_factor)};
+    draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
+
     state.texture_units[0].texture_2d = screen_info_l.display_texture;
     state.texture_units[1].texture_2d = screen_info_r.display_texture;
     state.texture_units[0].sampler = filter_sampler.handle;
@@ -594,13 +444,14 @@ void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info
     state.texture_units[1].texture_2d = 0;
     state.texture_units[0].sampler = 0;
     state.texture_units[1].sampler = 0;
-    state.Apply();
+    state.Apply();*/
 }
 
 void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
                                             const ScreenInfo& screen_info_r, float x, float y,
                                             float w, float h) {
-    const auto& texcoords = screen_info_l.display_texcoords;
+    DrawSingleScreen(screen_info_l, x, y, w, h);
+    /*const auto& texcoords = screen_info_l.display_texcoords;
 
     const std::array<ScreenRectVertex, 4> vertices = {{
         ScreenRectVertex(x, y, texcoords.bottom, texcoords.right),
@@ -629,7 +480,7 @@ void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
     state.texture_units[1].texture_2d = 0;
     state.texture_units[0].sampler = 0;
     state.texture_units[1].sampler = 0;
-    state.Apply();
+    state.Apply();*/
 }
 
 /**
@@ -638,46 +489,38 @@ void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
 void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool flipped) {
     if (VideoCore::g_renderer_bg_color_update_requested.exchange(false)) {
         // Update background color before drawing
-        glClearColor(Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue, 0.0f);
+        clear_color = vk::ClearColorValue{std::array<float, 4>{Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue, 0.0f}};
     }
 
     if (VideoCore::g_renderer_sampler_update_requested.exchange(false)) {
         // Set the new filtering mode for the sampler
-        ReloadSampler();
+        //ReloadSampler();
     }
 
-    /*if (VideoCore::g_renderer_shader_update_requested.exchange(false)) {
+    if (VideoCore::g_renderer_shader_update_requested.exchange(false)) {
         // Update fragment shader before drawing
-        shader.Release();
+        //shader.Release();
         // Link shaders and get variable locations
-        ReloadShader();
-    }*/
+        //ReloadShader();
+    }
 
     const auto& top_screen = layout.top_screen;
     const auto& bottom_screen = layout.bottom_screen;
 
-    glViewport(0, 0, layout.width, layout.height);
-    glClear(GL_COLOR_BUFFER_BIT);
-
     // Set projection matrix
-    std::array<GLfloat, 3 * 2> ortho_matrix =
-        MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
-    glUniformMatrix3x2fv(uniform_modelview_matrix, 1, GL_FALSE, ortho_matrix.data());
+    draw_info.modelview = MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
 
-    // Bind texture in Texture Unit 0
-    glUniform1i(uniform_color_texture, 0);
-
-    const bool stereo_single_screen =
-        Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
+    const bool stereo_single_screen = false
+    /*    Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
         Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
-        Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced;
+        Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced*/;
 
     // Bind a second texture for the right eye if in Anaglyph mode
     if (stereo_single_screen) {
-        glUniform1i(uniform_color_texture_r, 1);
+        //glUniform1i(uniform_color_texture_r, 1);
     }
 
-    glUniform1i(uniform_layer, 0);
+    draw_info.layer = 0;
     if (layout.top_screen_enabled) {
         if (layout.is_rotated) {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
@@ -688,7 +531,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                 DrawSingleScreenRotated(screen_infos[0], (float)top_screen.left / 2,
                                         (float)top_screen.top, (float)top_screen.GetWidth() / 2,
                                         (float)top_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreenRotated(screen_infos[1],
                                         ((float)top_screen.left / 2) + ((float)layout.width / 2),
                                         (float)top_screen.top, (float)top_screen.GetWidth() / 2,
@@ -697,7 +540,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                 DrawSingleScreenRotated(screen_infos[0], layout.top_screen.left,
                                         layout.top_screen.top, layout.top_screen.GetWidth(),
                                         layout.top_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreenRotated(screen_infos[1],
                                         layout.cardboard.top_screen_right_eye +
                                             ((float)layout.width / 2),
@@ -715,7 +558,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::SideBySide) {
                 DrawSingleScreen(screen_infos[0], (float)top_screen.left / 2, (float)top_screen.top,
                                  (float)top_screen.GetWidth() / 2, (float)top_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreen(screen_infos[1],
                                  ((float)top_screen.left / 2) + ((float)layout.width / 2),
                                  (float)top_screen.top, (float)top_screen.GetWidth() / 2,
@@ -723,7 +566,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::CardboardVR) {
                 DrawSingleScreen(screen_infos[0], layout.top_screen.left, layout.top_screen.top,
                                  layout.top_screen.GetWidth(), layout.top_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreen(screen_infos[1],
                                  layout.cardboard.top_screen_right_eye + ((float)layout.width / 2),
                                  layout.top_screen.top, layout.top_screen.GetWidth(),
@@ -735,8 +578,8 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             }
         }
     }
-    glUniform1i(uniform_layer, 0);
-    if (layout.bottom_screen_enabled) {
+    draw_info.layer = 0;
+    if (/*layout.bottom_screen_enabled*/false) {
         if (layout.is_rotated) {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
                 DrawSingleScreenRotated(screen_infos[2], (float)bottom_screen.left,
@@ -746,7 +589,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                 DrawSingleScreenRotated(
                     screen_infos[2], (float)bottom_screen.left / 2, (float)bottom_screen.top,
                     (float)bottom_screen.GetWidth() / 2, (float)bottom_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreenRotated(
                     screen_infos[2], ((float)bottom_screen.left / 2) + ((float)layout.width / 2),
                     (float)bottom_screen.top, (float)bottom_screen.GetWidth() / 2,
@@ -755,7 +598,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                 DrawSingleScreenRotated(screen_infos[2], layout.bottom_screen.left,
                                         layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
                                         layout.bottom_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreenRotated(screen_infos[2],
                                         layout.cardboard.bottom_screen_right_eye +
                                             ((float)layout.width / 2),
@@ -776,7 +619,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                 DrawSingleScreen(screen_infos[2], (float)bottom_screen.left / 2,
                                  (float)bottom_screen.top, (float)bottom_screen.GetWidth() / 2,
                                  (float)bottom_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreen(screen_infos[2],
                                  ((float)bottom_screen.left / 2) + ((float)layout.width / 2),
                                  (float)bottom_screen.top, (float)bottom_screen.GetWidth() / 2,
@@ -785,7 +628,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                 DrawSingleScreen(screen_infos[2], layout.bottom_screen.left,
                                  layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
                                  layout.bottom_screen.GetHeight());
-                glUniform1i(uniform_layer, 1);
+                draw_info.layer = 1;
                 DrawSingleScreen(screen_infos[2],
                                  layout.cardboard.bottom_screen_right_eye +
                                      ((float)layout.width / 2),
@@ -800,48 +643,52 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     }
 }
 
-bool RendererVulkan::BeginPresent() {
-    // Previous frame needs to be presented before we can acquire the swap chain.
-    g_vulkan_context->WaitForPresentComplete();
+void RendererVulkan::SwapBuffers() {
+    // Configure current framebuffer and recreate swapchain if necessary
+    PrepareRendertarget();
 
-    auto available = swapchain->AcquireNextImage();
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    if (BeginPresent()) {
+        const auto& layout = render_window.GetFramebufferLayout();
+        DrawScreens(layout, false);
+
+        EndPresent();
+    }
+}
+
+bool RendererVulkan::BeginPresent() {
+    swapchain->AcquireNextImage();
 
     // Swap chain images start in undefined
-    Vulkan::Texture& swap_chain_texture = m_swap_chain->GetCurrentTexture();
-    swap_chain_texture.OverrideImageLayout(VK_IMAGE_LAYOUT_UNDEFINED);
-    swap_chain_texture.TransitionToLayout(cmdbuffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    auto& image = swapchain->GetCurrentImage();
+    image.OverrideImageLayout(vk::ImageLayout::eUndefined);
+    image.Transition(vk::ImageLayout::eColorAttachmentOptimal);
 
-    const VkClearValue clear_value = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
-    const VkRenderPassBeginInfo rp = {VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, nullptr, m_swap_chain->GetClearRenderPass(),
-        m_swap_chain->GetCurrentFramebuffer(), {{0, 0}, {swap_chain_texture.GetWidth(), swap_chain_texture.GetHeight()}}, 1u, &clear_value};
-    vkCmdBeginRenderPass(g_vulkan_context->GetCurrentCommandBuffer(), &rp, VK_SUBPASS_CONTENTS_INLINE);
+    // Update viewport and scissor
+    const auto [width, height] = image.GetArea().extent;
+    const vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
+    const vk::Rect2D scissor{{0, 0}, {width, height}};
 
-    const VkViewport vp{
-        0.0f, 0.0f, static_cast<float>(swap_chain_texture.GetWidth()), static_cast<float>(swap_chain_texture.GetHeight()), 0.0f, 1.0f};
-    const VkRect2D scissor{{0, 0}, {static_cast<u32>(swap_chain_texture.GetWidth()), static_cast<u32>(swap_chain_texture.GetHeight())}};
-    vkCmdSetViewport(g_vulkan_context->GetCurrentCommandBuffer(), 0, 1, &vp);
-    vkCmdSetScissor(g_vulkan_context->GetCurrentCommandBuffer(), 0, 1, &scissor);
+    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    cmdbuffer.setViewport(0, viewport);
+    cmdbuffer.setScissor(0, scissor);
+
     return true;
 }
 
 void RendererVulkan::EndPresent() {
-    ImGui::Render();
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData());
+    auto& state = VulkanState::Get();
+    state.EndRendering();
 
-    VkCommandBuffer cmdbuffer = g_vulkan_context->GetCurrentCommandBuffer();
-    vkCmdEndRenderPass(g_vulkan_context->GetCurrentCommandBuffer());
-    m_swap_chain->GetCurrentTexture().TransitionToLayout(cmdbuffer, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    auto& image = swapchain->GetCurrentImage();
+    image.Transition(vk::ImageLayout::ePresentSrcKHR);
 
-    g_vulkan_context->SubmitCommandBuffer(m_swap_chain->GetImageAvailableSemaphore(), m_swap_chain->GetRenderingFinishedSemaphore(),
-        m_swap_chain->GetSwapChain(), m_swap_chain->GetCurrentImageIndex(), !m_swap_chain->IsPresentModeSynchronizing());
-    g_vulkan_context->MoveToNextCommandBuffer();
+    g_vk_task_scheduler->Submit(false, true, swapchain.get());
 }
 
 /// Initialize the renderer
 VideoCore::ResultStatus RendererVulkan::Init() {
     // Create vulkan instance
-    vk::ApplicationInfo app_info("PS2 Emulator", 1, nullptr, 0, VK_API_VERSION_1_3);
+    vk::ApplicationInfo app_info{"Citra", VK_MAKE_VERSION(1, 0, 0), nullptr, 0, VK_API_VERSION_1_2};
 
     // Get required extensions
     auto extensions = RequiredExtensions(render_window.GetWindowInfo().type, true);
@@ -850,17 +697,25 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     vk::InstanceCreateInfo instance_info{{}, &app_info, layers, extensions};
 
     auto instance = vk::createInstance(instance_info);
-    auto surface = swapchain->GetSurface();
-    auto physical_device = instance.enumeratePhysicalDevices()[0];
+    auto physical_devices = instance.enumeratePhysicalDevices();
+
+    auto props = physical_devices[1].getProperties();
+    std::cout << props.deviceName << '\n';
 
     // Create global instance
+    auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<VKInstance>();
-    g_vk_instace->Create(instance, physical_device, surface, true);
-
-    // Create Vulkan state and task manager
-    VulkanState::Create();
     g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
+    g_vk_instace->Create(instance, physical_devices[1], surface, true);
     g_vk_task_scheduler->Create();
+
+    // Create Vulkan state
+    VulkanState::Create();
+    g_vk_task_scheduler->BeginTask();
+
+    auto& layout = render_window.GetFramebufferLayout();
+    swapchain = std::make_unique<VKSwapChain>(surface);
+    swapchain->Create(layout.width, layout.height, false);
 
     auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
     constexpr auto user_system = Common::Telemetry::FieldType::UserSystem;
@@ -872,7 +727,7 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     CreateVulkanObjects();
     RefreshRasterizerSetting();
 
-    return VideoCore::ResultStatus::Success;
+    return static_cast<VideoCore::ResultStatus>(0);
 }
 
 /// Shutdown the renderer

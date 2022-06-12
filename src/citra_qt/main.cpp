@@ -911,7 +911,9 @@ bool GMainWindow::LoadROM(const QString& filename) {
     if (emu_thread != nullptr)
         ShutdownGame();
 
-    render_window->InitRenderTarget();
+    if (!render_window->InitRenderTarget()) {
+        return false;
+    }
 
     Frontend::ScopeAcquireContext scope(*render_window);
 

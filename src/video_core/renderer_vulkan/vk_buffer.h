@@ -14,9 +14,10 @@
 namespace Vulkan {
 
 constexpr u32 MAX_BUFFER_VIEWS = 5;
+constexpr u32 MAX_COMMIT_CHUNKS = 6;
 
 /// Generic Vulkan buffer object used by almost every resource
-class VKBuffer final : public NonCopyable {
+class VKBuffer : public NonCopyable {
 public:
     struct Info {
         u32 size;
@@ -28,30 +29,51 @@ public:
     VKBuffer() = default;
     ~VKBuffer();
 
+    /// Enable move operations
     VKBuffer(VKBuffer&&) = default;
     VKBuffer& operator=(VKBuffer&&) = default;
 
     /// Create a new Vulkan buffer object
     void Create(const Info& info);
+    void Recreate();
     void Destroy();
 
     /// Global utility functions used by other objects
     static u32 FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties);
-    static void CopyBuffer(VKBuffer* src_buffer, VKBuffer* dst_buffer, vk::BufferCopy region);
+    static void CopyBuffer(const VKBuffer& src_buffer, const VKBuffer& dst_buffer, vk::BufferCopy region,
+                           vk::AccessFlags access_to_block = vk::AccessFlagBits::eUniformRead);
 
     /// Return a pointer to the mapped memory if the buffer is host mapped
-    u8* GetHostPointer() const { return reinterpret_cast<u8*>(memory); }
+    u8* GetHostPointer() const { return reinterpret_cast<u8*>(host_ptr); }
     const vk::BufferView& GetView(u32 i = 0) const { return views[i]; }
     vk::Buffer GetBuffer() const { return buffer; }
     u32 GetSize() const { return buffer_info.size; }
 
-private:
+protected:
     Info buffer_info;
-    void* memory = nullptr;
     vk::Buffer buffer;
     vk::DeviceMemory buffer_memory;
-    u32 view_count = 0;
+    void* host_ptr = nullptr;
     std::array<vk::BufferView, MAX_BUFFER_VIEWS> views;
+    u32 view_count{};
+};
+
+class StreamBuffer : public VKBuffer {
+public:
+    /*
+     * Allocates a linear chunk of memory in the GPU buffer with at least "size" bytes
+     * and the optional alignment requirement.
+     * If the buffer is full, the whole buffer is reallocated which invalidates old chunks.
+     * The return values are the pointer to the new chunk, the offset within the buffer,
+     * and the invalidation flag for previous chunks.
+     * The actual used size must be specified on unmapping the chunk.
+     */
+    std::tuple<u8*, u32, bool> Map(u32 size, u32 alignment = 0);
+    void Commit(u32 size);
+
+private:
+    u32 buffer_pos{};
+    vk::BufferCopy mapped_chunk;
 };
 
 }

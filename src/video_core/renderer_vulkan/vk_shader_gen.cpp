@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <string_view>
 #include <fmt/format.h>
+#include <shaderc/shaderc.hpp>
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/bit_set.h"
@@ -16,6 +17,7 @@
 #include "video_core/regs_rasterizer.h"
 #include "video_core/regs_texturing.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
 #include "video_core/renderer_vulkan/vk_shader_gen.h"
 #include "video_core/renderer_opengl/gl_shader_util.h"
@@ -29,6 +31,62 @@ using TevStageConfig = TexturingRegs::TevStageConfig;
 using VSOutputAttributes = RasterizerRegs::VSOutputAttributes;
 
 namespace Vulkan {
+
+static const char present_vertex_shader_source[] = R"(
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+layout (location = 0) in vec2 vert_position;
+layout (location = 1) in vec2 vert_tex_coord;
+layout (location = 0) out vec2 frag_tex_coord;
+
+// This is a truncated 3x3 matrix for 2D transformations:
+// The upper-left 2x2 submatrix performs scaling/rotation/mirroring.
+// The third column performs translation.
+// The third row could be used for projection, which we don't need in 2D. It hence is assumed to
+// implicitly be [0, 0, 1]
+layout (push_constant) uniform DrawInfo {
+    mat3x2 modelview_matrix;
+    vec4 i_resolution;
+    vec4 o_resolution;
+    int layer;
+};
+
+void main() {
+    // Multiply input position by the rotscale part of the matrix and then manually translate by
+    // the last column. This is equivalent to using a full 3x3 matrix and expanding the vector
+    // to `vec3(vert_position.xy, 1.0)`
+    gl_Position = vec4(mat2(modelview_matrix) * vert_position + modelview_matrix[2], 0.0, 1.0);
+    frag_tex_coord = vert_tex_coord;
+}
+)";
+
+static const char present_fragment_shader_source[] = R"(
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+layout (location = 0) in vec2 frag_tex_coord;
+layout (location = 0) out vec4 color;
+
+layout (push_constant) uniform DrawInfo {
+    mat3x2 modelview_matrix;
+    vec4 i_resolution;
+    vec4 o_resolution;
+    int layer;
+};
+
+layout (set = 0, binding = 0) uniform sampler2D color_texture;
+
+void main() {
+    color = texture(color_texture, frag_tex_coord);
+}
+)";
+
+std::string GetPresentVertexShader() {
+    return present_vertex_shader_source;
+}
+
+std::string GetPresentFragmentShader() {
+    return present_fragment_shader_source;
+}
 
 constexpr std::string_view UniformBlockDef = R"(
 #define NUM_TEV_STAGES 6
@@ -46,7 +104,7 @@ struct LightSrc {
     float dist_atten_scale;
 };
 
-layout (std140) uniform shader_data {
+layout (set = 0, binding = 0) uniform shader_data {
     int framebuffer_scale;
     int alphatest_ref;
     float depth_scale;
@@ -83,7 +141,7 @@ static std::string GetVertexInterfaceDeclaration(bool is_output, bool separable_
 
     const auto append_variable = [&](std::string_view var, int location) {
         if (separable_shader) {
-            out += fmt::format("layout (location={}) ", location);
+            out += fmt::format("layout(location = {}) ", location);
         }
         out += fmt::format("{}{};\n", is_output ? "out " : "in ", var);
     };
@@ -1218,11 +1276,12 @@ float ProcTexNoiseCoef(vec2 x) {
     }
 }
 
-ShaderDecompiler::ProgramResult GenerateFragmentShader(const PicaFSConfig& config) {
+std::string GenerateFragmentShader(const PicaFSConfig& config) {
     const auto& state = config.state;
     std::string out;
 
     out += R"(
+    #version 450
     #extension GL_ARB_shader_image_load_store : enable
     #extension GL_ARB_shader_image_size : enable
     #define ALLOW_SHADOW 0
@@ -1466,7 +1525,7 @@ vec4 secondary_fragment_color = vec4(0.0);
     // Do not do any sort of processing if it's obvious we're not going to pass the alpha test
     if (state.alpha_test_func == FramebufferRegs::CompareFunc::Never) {
         out += "discard; }";
-        return {std::move(out)};
+        return out;
     }
 
     // Append the scissor test
@@ -1532,7 +1591,7 @@ vec4 secondary_fragment_color = vec4(0.0);
             Common::Telemetry::FieldType::Session, "VideoCore_Pica_UseGasMode", true);
         LOG_CRITICAL(Render_OpenGL, "Unimplemented gas mode");
         out += "discard; }";
-        return {std::move(out)};
+        return out;
     }
 
     if (state.shadow_rendering) {
@@ -1570,11 +1629,12 @@ do {
 
     out += '}';
 
-    return {std::move(out)};
+    return out;
 }
 
-ShaderDecompiler::ProgramResult GenerateTrivialVertexShader(bool separable_shader) {
+std::string GenerateTrivialVertexShader(bool separable_shader) {
     std::string out;
+    out += "#version 450\n";
     out += "#extension GL_ARB_separate_shader_objects : enable\n";
     out +=
         fmt::format("layout(location = {}) in vec4 vert_position;\n"
@@ -1610,7 +1670,45 @@ void main() {
 }
 )";
 
-    return {std::move(out)};
+    return out;
+}
+
+vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage) {
+    shaderc::Compiler compiler;
+    shaderc::CompileOptions options;
+    options.SetOptimizationLevel(shaderc_optimization_level_performance);
+    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+    options.SetWarningsAsErrors();
+    options.SetSourceLanguage(shaderc_source_language_glsl);
+
+    shaderc_shader_kind kind{};
+    std::string name{};
+    switch (stage) {
+    case vk::ShaderStageFlagBits::eVertex:
+        kind = shaderc_glsl_vertex_shader;
+        name = "vertex shader";
+        break;
+    case vk::ShaderStageFlagBits::eFragment:
+        kind = shaderc_glsl_fragment_shader;
+        name = "fragment shader";
+        break;
+    default:
+        LOG_CRITICAL(Render_Vulkan, "Unknown shader stage");
+        UNREACHABLE();
+    }
+
+    auto shader_module = compiler.CompileGlslToSpv(source.data(), kind, name.c_str(), options);
+    if (shader_module.GetCompilationStatus() != shaderc_compilation_status_success) {
+        LOG_CRITICAL(Render_Vulkan, shader_module.GetErrorMessage().c_str());
+        std::cout << shader_module.GetErrorMessage() << '\n';
+    }
+
+    auto shader_code = std::vector<u32>{shader_module.cbegin(), shader_module.cend()};
+    vk::ShaderModuleCreateInfo shader_info{{}, shader_code};
+
+    auto device = g_vk_instace->GetDevice();
+    auto shader = device.createShaderModule(shader_info);
+    return shader;
 }
 
 } // namespace Vulkan

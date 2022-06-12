@@ -5,6 +5,7 @@
 #include <memory>
 #include "core/frontend/emu_window.h"
 #include "video_core/renderer_base.h"
+#include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/swrasterizer/swrasterizer.h"
 #include "video_core/video_core.h"
@@ -22,7 +23,7 @@ void RendererBase::RefreshRasterizerSetting() {
         opengl_rasterizer_active = hw_renderer_enabled;
 
         if (hw_renderer_enabled) {
-            rasterizer = std::make_unique<OpenGL::RasterizerOpenGL>(render_window);
+            rasterizer = std::make_unique<Vulkan::RasterizerVulkan>(render_window);
         } else {
             rasterizer = std::make_unique<VideoCore::SWRasterizer>();
         }

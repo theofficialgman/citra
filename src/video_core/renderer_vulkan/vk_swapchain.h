@@ -10,11 +10,6 @@
 
 namespace Vulkan {
 
-struct SwapChainImage {
-    vk::Image image;
-    vk::UniqueImageView image_view;
-};
-
 struct SwapChainDetails {
     vk::SurfaceFormatKHR format;
     vk::PresentModeKHR present_mode;
@@ -26,14 +21,14 @@ struct SwapChainDetails {
 class VKSwapChain {
 public:
     VKSwapChain(vk::SurfaceKHR surface);
-    ~VKSwapChain() = default;
+    ~VKSwapChain();
 
     /// Creates (or recreates) the swapchain with a given size.
     bool Create(u32 width, u32 height, bool vsync_enabled);
 
     /// Acquire the next image in the swapchain.
-    vk::Semaphore AcquireNextImage();
-    void Present(vk::Semaphore render_semaphore);
+    void AcquireNextImage();
+    void Present();
 
     /// Returns true when the swapchain needs to be recreated.
     bool NeedsRecreation() const { return IsSubOptimal() || IsOutDated(); }
@@ -46,8 +41,10 @@ public:
     vk::Extent2D GetSize() const { return details.extent; }
     vk::SurfaceKHR GetSurface() const { return surface; }
     vk::SurfaceFormatKHR GetSurfaceFormat() const { return details.format; }
-    vk::SwapchainKHR GetSwapChain() const { return swapchain.get(); }
-    vk::Image GetCurrentImage() const { return swapchain_images[image_index].image; }
+    vk::SwapchainKHR GetSwapChain() const { return swapchain; }
+    const vk::Semaphore& GetAvailableSemaphore() const { return image_available.get(); }
+    const vk::Semaphore& GetRenderSemaphore() const { return render_finished.get(); }
+    VKTexture& GetCurrentImage() { return swapchain_images[image_index]; }
 
 private:
     void PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height);
@@ -56,13 +53,12 @@ private:
 private:
     SwapChainDetails details{};
     vk::SurfaceKHR surface;
-    vk::UniqueSemaphore image_available;
-    bool vsync_enabled = false;
-    bool is_outdated = false, is_suboptimal = false;
+    vk::UniqueSemaphore image_available, render_finished;
+    bool vsync_enabled{false}, is_outdated{true}, is_suboptimal{true};
 
-    vk::UniqueSwapchainKHR swapchain;
-    std::vector<SwapChainImage> swapchain_images;
-    u32 image_index = 0, frame_index = 0;
+    vk::SwapchainKHR swapchain{VK_NULL_HANDLE};
+    std::vector<VKTexture> swapchain_images;
+    u32 image_index{0}, frame_index{0};
 };
 
 } // namespace Vulkan

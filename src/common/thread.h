@@ -11,61 +11,53 @@
 #include <mutex>
 #include <thread>
 
-#include "common/flag.h"
-
 namespace Common {
 
-class Event final {
+class Event {
 public:
     void Set() {
-        if (flag.TestAndSet()) {
-            // Lock and immediately unlock m_mutex.
-            {
-                // Holding the lock at any time between the change of our flag and notify call
-                // is sufficient to prevent a race where both of these actions
-                // happen between the other thread's predicate test and wait call
-                // which would cause wait to block until the next spurious wakeup or timeout.
-
-                // Unlocking before notification is a micro-optimization to prevent
-                // the notified thread from immediately blocking on the mutex.
-                std::lock_guard<std::mutex> lk(mutex);
-            }
-
+        std::lock_guard lk{mutex};
+        if (!is_set) {
+            is_set = true;
             condvar.notify_one();
         }
     }
 
     void Wait() {
-        if (flag.TestAndClear()) {
-            return;
-        }
-
-        std::unique_lock<std::mutex> lk(mutex);
-        condvar.wait(lk, [&] { return flag.TestAndClear(); });
+        std::unique_lock lk{mutex};
+        condvar.wait(lk, [&] { return is_set.load(); });
+        is_set = false;
     }
 
-    template <class Rep, class Period>
-    bool WaitFor(const std::chrono::duration<Rep, Period>& rel_time) {
-        if (flag.TestAndClear())
-            return true;
+    template <class Duration>
+    bool WaitFor(const std::chrono::duration<Duration>& time) {
+        std::unique_lock lk{mutex};
+        if (!condvar.wait_for(lk, time, [this] { return is_set.load(); }))
+            return false;
+        is_set = false;
+        return true;
+    }
 
-        std::unique_lock<std::mutex> lk(mutex);
-        bool signaled = condvar.wait_for(lk, rel_time, [&] { return flag.TestAndClear(); });
-
-        return signaled;
+    template <class Clock, class Duration>
+    bool WaitUntil(const std::chrono::time_point<Clock, Duration>& time) {
+        std::unique_lock lk{mutex};
+        if (!condvar.wait_until(lk, time, [this] { return is_set.load(); }))
+            return false;
+        is_set = false;
+        return true;
     }
 
     void Reset() {
-        // no other action required, since wait loops on
-        // the predicate and any lingering signal will get
-        // cleared on the first iteration
-        flag.Clear();
+        std::unique_lock lk{mutex};
+        // no other action required, since wait loops on the predicate and any lingering signal will
+        // get cleared on the first iteration
+        is_set = false;
     }
 
 private:
-    Flag flag;
     std::condition_variable condvar;
     std::mutex mutex;
+    std::atomic_bool is_set{false};
 };
 
 class Barrier {

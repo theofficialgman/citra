@@ -14,14 +14,13 @@
 #include <vector>
 
 #include "common/common_types.h"
-#include "common/blocking_loop.h"
 #include "common/threadsafe_queue.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 
 namespace Vulkan {
 
-constexpr u32 CONCURRENT_TASK_COUNT = 2;
+constexpr u32 TASK_COUNT = 3;
 constexpr u32 STAGING_BUFFER_SIZE = 16 * 1024 * 1024;
 
 class VKSwapChain;
@@ -40,47 +39,40 @@ public:
     bool Create();
 
     /// Retrieve either of the current frame's command buffers
-    vk::CommandBuffer GetCommandBuffer() const;
-    vk::DescriptorSet GetDescriptorSet(u32 index) const;
+    vk::CommandBuffer GetCommandBuffer() const { return tasks[current_task].command_buffer; }
+    vk::DescriptorPool GetDescriptorPool() const { return tasks[current_task].pool.get(); }
 
+    /// Access the staging buffer of the current task
     std::tuple<u8*, u32> RequestStaging(u32 size);
     VKBuffer& GetStaging() { return tasks[current_task].staging; }
 
-    /// Returns the task id that the CPU is recording
+    /// Query and/or synchronization CPU and GPU
     u64 GetCPUTick() const { return current_task_id; }
-
-    /// Returns the last known task id to have completed execution in the GPU
     u64 GetGPUTick() const { return g_vk_instace->GetDevice().getSemaphoreCounterValue(timeline.get()); }
-
-    /// Make the host wait for the GPU to complete
     void SyncToGPU();
     void SyncToGPU(u64 task_index);
 
-    /// Schedule a vulkan object for destruction when the GPU no longer uses it
     void Schedule(std::function<void()> func);
+    void Submit(bool wait_completion = false, bool present = false, VKSwapChain* swapchain = nullptr);
 
-    /// Submit the current work batch and move to the next frame
-    void Submit(bool wait_completion = false);
-
-private:
     void BeginTask();
 
 private:
     struct Task {
-        VKBuffer staging;
         u64 current_offset{}, task_id{};
         vk::CommandBuffer command_buffer;
-        std::vector<vk::UniqueDescriptorSet> descriptor_sets;
-        vk::UniqueDescriptorPool desc_pool;
+        vk::UniqueDescriptorPool pool;
         std::vector<std::function<void()>> cleanups;
+        VKBuffer staging;
     };
 
+    vk::UniqueDescriptorPool global_pool;
     vk::UniqueSemaphore timeline;
     vk::UniqueCommandPool command_pool;
     u64 current_task_id = 1;
 
     // Each task contains unique resources
-    std::array<Task, CONCURRENT_TASK_COUNT> tasks;
+    std::array<Task, TASK_COUNT> tasks;
     u64 current_task = 0;
 };
 

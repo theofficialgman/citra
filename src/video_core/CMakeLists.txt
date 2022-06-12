@@ -68,6 +68,8 @@ add_library(video_core STATIC
     renderer_opengl/texture_filters/xbrz/xbrz_freescale.cpp
     renderer_opengl/texture_filters/xbrz/xbrz_freescale.h
     #temporary, move these back in alphabetical order before merging
+    renderer_opengl/gl_format_reinterpreter.cpp
+    renderer_opengl/gl_format_reinterpreter.h
     renderer_vulkan/pica_to_vulkan.h
     renderer_vulkan/renderer_vulkan.cpp
     renderer_vulkan/renderer_vulkan.h
@@ -179,5 +181,5 @@ endif()
 
 if (ENABLE_VULKAN)
     target_include_directories(video_core PRIVATE ${Vulkan_INCLUDE_DIRS})
-    target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_LIB} vma)
+    target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_DEP})
 endif()

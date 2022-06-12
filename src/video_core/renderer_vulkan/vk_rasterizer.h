@@ -114,10 +114,10 @@ struct ScreenInfo;
 class RasterizerVulkan : public VideoCore::RasterizerInterface {
 public:
     explicit RasterizerVulkan(Frontend::EmuWindow& emu_window);
-    ~RasterizerVulkan() override = default;
+    ~RasterizerVulkan() override;
 
     void LoadDiskResources(const std::atomic_bool& stop_loading,
-                           const VideoCore::DiskResourceLoadCallback& callback) override;
+                           const VideoCore::DiskResourceLoadCallback& callback) override {}
 
     void AddTriangle(const Pica::Shader::OutputVertex& v0, const Pica::Shader::OutputVertex& v1,
                      const Pica::Shader::OutputVertex& v2) override;
@@ -133,7 +133,7 @@ public:
     bool AccelerateFill(const GPU::Regs::MemoryFillConfig& config) override;
     bool AccelerateDisplay(const GPU::Regs::FramebufferConfig& config, PAddr framebuffer_addr,
                            u32 pixel_stride, Vulkan::ScreenInfo& screen_info) override;
-    bool AccelerateDrawBatch(bool is_indexed) override;
+    bool AccelerateDrawBatch(bool is_indexed) override { return false; }
 
     /// Syncs entire status to match PICA registers
     void SyncEntireState() override;
@@ -253,12 +253,8 @@ private:
     };
 
 private:
-    VulkanState state;
-
     RasterizerCacheVulkan res_cache;
-
     std::vector<HardwareVertex> vertex_batch;
-
     bool shader_dirty = true;
 
     struct {
@@ -280,8 +276,8 @@ private:
     static constexpr std::size_t UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
     static constexpr std::size_t TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
 
-    VKBuffer vertex_buffer, uniform_buffer, index_buffer;
-    VKBuffer texture_buffer_lut_lf, texture_buffer_lut;
+    VKBuffer vertex_buffer, index_buffer;
+    StreamBuffer uniform_buffer, texture_buffer_lut_lf, texture_buffer_lut;
 
     u32 uniform_buffer_alignment;
     u32 uniform_size_aligned_vs, uniform_size_aligned_fs;
@@ -295,7 +291,8 @@ private:
     std::array<glm::vec4, 256> proctex_lut_data{};
     std::array<glm::vec4, 256> proctex_diff_lut_data{};
 
-    bool allow_shadow;
+    bool allow_shadow{};
+    bool depth_test_enabled{}, stencil_test_enabled{};
 };
 
 } // namespace OpenGL
