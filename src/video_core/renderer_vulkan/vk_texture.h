@@ -55,7 +55,9 @@ public:
     void Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> dst);
 
     /// Used to transition the image to an optimal layout during transfers
-    void Transition(vk::ImageLayout new_layout);
+    void Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout);
+    void Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout, u32 start_level, u32 level_count,
+                    u32 start_layer, u32 layer_count);
     void OverrideImageLayout(vk::ImageLayout new_layout);
 
 private:

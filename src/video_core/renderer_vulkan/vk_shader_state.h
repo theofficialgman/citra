@@ -289,7 +289,7 @@ struct PicaFixedGSConfig : Common::HashableStruct<PicaGSConfigCommonRaw> {
 };
 
 struct PipelineCacheKey {
-    vk::PipelineRenderingCreateInfo color_attachments;
+    vk::Format color, depth_stencil;
     vk::PipelineColorBlendAttachmentState blend_config;
     vk::LogicOp blend_logic_op;
     PicaFSConfig fragment_config;

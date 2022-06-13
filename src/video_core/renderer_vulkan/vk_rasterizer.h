@@ -271,8 +271,8 @@ private:
     } uniform_block_data = {};
 
     // They shall be big enough for about one frame.
-    static constexpr std::size_t VERTEX_BUFFER_SIZE = 16 * 1024 * 1024;
-    static constexpr std::size_t INDEX_BUFFER_SIZE = 1 * 1024 * 1024;
+    static constexpr std::size_t VERTEX_BUFFER_SIZE = 64 * 1024 * 1024;
+    static constexpr std::size_t INDEX_BUFFER_SIZE = 16 * 1024 * 1024;
     static constexpr std::size_t UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
     static constexpr std::size_t TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
 
@@ -292,7 +292,6 @@ private:
     std::array<glm::vec4, 256> proctex_diff_lut_data{};
 
     bool allow_shadow{};
-    bool depth_test_enabled{}, stencil_test_enabled{};
 };
 
 } // namespace OpenGL

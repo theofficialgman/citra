@@ -12,6 +12,15 @@ namespace Vulkan {
 
 VKTaskScheduler::~VKTaskScheduler() {
     SyncToGPU();
+
+    // Destroy Vulkan resources
+    auto device = g_vk_instace->GetDevice();
+    device.destroyCommandPool(command_pool);
+    device.destroySemaphore(timeline);
+
+    for (auto& task : tasks) {
+        device.destroyDescriptorPool(task.pool);
+    }
 }
 
 std::tuple<u8*, u32> VKTaskScheduler::RequestStaging(u32 size) {
@@ -26,9 +35,14 @@ std::tuple<u8*, u32> VKTaskScheduler::RequestStaging(u32 size) {
     }
 
     u8* ptr = task.staging.GetHostPointer() + task.current_offset;
-    task.current_offset += size;
+    std::memset(ptr, 0, size);
 
+    task.current_offset += size;
     return std::make_tuple(ptr, task.current_offset - size);
+}
+
+VKBuffer& VKTaskScheduler::GetStaging() {
+    return tasks[current_task].staging;
 }
 
 bool VKTaskScheduler::Create() {
@@ -37,13 +51,13 @@ bool VKTaskScheduler::Create() {
     // Create command pool
     vk::CommandPoolCreateInfo pool_info(vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
                                         g_vk_instace->GetGraphicsQueueFamilyIndex());
-    command_pool = device.createCommandPoolUnique(pool_info);
+    command_pool = device.createCommandPool(pool_info);
 
     // Create timeline semaphore for syncronization
     vk::SemaphoreTypeCreateInfo timeline_info{vk::SemaphoreType::eTimeline, 0};
     vk::SemaphoreCreateInfo semaphore_info{{}, &timeline_info};
 
-    timeline = device.createSemaphoreUnique(semaphore_info);
+    timeline = device.createSemaphore(semaphore_info);
 
     VKBuffer::Info staging_info{
         .size = STAGING_BUFFER_SIZE,
@@ -56,22 +70,41 @@ bool VKTaskScheduler::Create() {
     const vk::DescriptorPoolSize pool_size{vk::DescriptorType::eCombinedImageSampler, 64};
     vk::DescriptorPoolCreateInfo pool_create_info{{}, 1024, pool_size};
 
-    // Create global descriptor pool
-    global_pool = device.createDescriptorPoolUnique(pool_create_info);
-
     for (auto& task : tasks) {
         // Create command buffers
-        vk::CommandBufferAllocateInfo buffer_info{command_pool.get(), vk::CommandBufferLevel::ePrimary, 1};
-        task.command_buffer = device.allocateCommandBuffers(buffer_info)[0];
+        vk::CommandBufferAllocateInfo buffer_info{command_pool, vk::CommandBufferLevel::ePrimary, 2};
+        auto buffers = device.allocateCommandBuffers(buffer_info);
+        std::ranges::copy_n(buffers.begin(), 2, task.command_buffers.begin());
 
         // Create staging buffer
         task.staging.Create(staging_info);
 
         // Create descriptor pool
-        task.pool = device.createDescriptorPoolUnique(pool_create_info);
+        task.pool = device.createDescriptorPool(pool_create_info);
     }
 
     return true;
+}
+
+vk::CommandBuffer VKTaskScheduler::GetRenderCommandBuffer() const {
+    const auto& task = tasks[current_task];
+    return task.command_buffers[1];
+}
+
+vk::CommandBuffer VKTaskScheduler::GetUploadCommandBuffer() {
+    auto& task = tasks[current_task];
+    if (!task.use_upload_buffer) {
+        auto& cmdbuffer = task.command_buffers[0];
+        cmdbuffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+        task.use_upload_buffer = true;
+    }
+
+    return task.command_buffers[0];
+}
+
+vk::DescriptorPool VKTaskScheduler::GetDescriptorPool() const {
+    const auto& task = tasks[current_task];
+    return task.pool;
 }
 
 void VKTaskScheduler::SyncToGPU(u64 task_index) {
@@ -83,7 +116,7 @@ void VKTaskScheduler::SyncToGPU(u64 task_index) {
     auto last_completed_task_id = GetGPUTick();
 
     // Wait for the task to complete
-    vk::SemaphoreWaitInfo wait_info({}, timeline.get(), tasks[task_index].task_id);
+    vk::SemaphoreWaitInfo wait_info{{}, timeline, tasks[task_index].task_id};
     auto result = g_vk_instace->GetDevice().waitSemaphores(wait_info, UINT64_MAX);
 
     if (result != vk::Result::eSuccess) {
@@ -106,18 +139,32 @@ void VKTaskScheduler::SyncToGPU() {
     SyncToGPU(current_task);
 }
 
+u64 VKTaskScheduler::GetCPUTick() const {
+    return current_task_id;
+}
+
+u64 VKTaskScheduler::GetGPUTick() const {
+    auto device = g_vk_instace->GetDevice();
+    return device.getSemaphoreCounterValue(timeline);
+}
+
 void VKTaskScheduler::Submit(bool wait_completion, bool present, VKSwapChain* swapchain) {
     // End the current task recording.
     auto& task = tasks[current_task];
-    task.command_buffer.end();
+
+    // End command buffers
+    task.command_buffers[1].end();
+    if (task.use_upload_buffer) {
+        task.command_buffers[0].end();
+    }
 
     const u32 num_signal_semaphores = present ? 2U : 1U;
     const std::array signal_values{task.task_id, u64(0)};
-    std::array signal_semaphores{timeline.get(), vk::Semaphore{}};
+    std::array signal_semaphores{timeline, vk::Semaphore{}};
 
     const u32 num_wait_semaphores = present ? 2U : 1U;
     const std::array wait_values{task.task_id - 1, u64(1)};
-    std::array wait_semaphores{timeline.get(), vk::Semaphore{}};
+    std::array wait_semaphores{timeline, vk::Semaphore{}};
 
     // When the task completes the timeline will increment to the task id
     const vk::TimelineSemaphoreSubmitInfoKHR timeline_si{num_wait_semaphores, wait_values.data(),
@@ -128,9 +175,11 @@ void VKTaskScheduler::Submit(bool wait_completion, bool present, VKSwapChain* sw
         vk::PipelineStageFlagBits::eColorAttachmentOutput,
     };
 
-    const vk::SubmitInfo submit_info{num_wait_semaphores, wait_semaphores.data(), wait_stage_masks.data(), 1,
-                                     &task.command_buffer, num_signal_semaphores, signal_semaphores.data(),
+    const u32 cmdbuffer_count = task.use_upload_buffer ? 2u : 1u;
+    const vk::SubmitInfo submit_info{num_wait_semaphores, wait_semaphores.data(), wait_stage_masks.data(), cmdbuffer_count,
+                                     &task.command_buffers[2 - cmdbuffer_count], num_signal_semaphores, signal_semaphores.data(),
                                      &timeline_si};
+
     // Wait for new swapchain image
     if (present) {
         signal_semaphores[1] = swapchain->GetRenderSemaphore();
@@ -167,13 +216,14 @@ void VKTaskScheduler::BeginTask() {
 
     // Wait for the GPU to finish with all resources for this task.
     SyncToGPU(next_task_index);
-    device.resetDescriptorPool(task.pool.get());
-    task.command_buffer.begin({vk::CommandBufferUsageFlagBits::eSimultaneousUse});
+    device.resetDescriptorPool(task.pool);
+    task.command_buffers[1].begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
     // Move to the next command buffer.
     current_task = next_task_index;
     task.task_id = current_task_id++;
     task.current_offset = 0;
+    task.use_upload_buffer = false;
 
     auto& state = VulkanState::Get();
     state.InitDescriptorSets();

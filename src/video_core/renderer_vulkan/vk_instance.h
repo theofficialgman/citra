@@ -57,10 +57,10 @@ public:
 
     // Features per vulkan version
     vk::PhysicalDeviceFeatures vk_features{};
+    vk::PhysicalDeviceVulkan13Features vk13_features{};
     vk::PhysicalDeviceVulkan12Features vk12_features{};
     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state_features{};
     vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2_features{};
-    vk::PhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features{};
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;

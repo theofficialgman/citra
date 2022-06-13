@@ -40,14 +40,16 @@ public:
 
     /// Global utility functions used by other objects
     static u32 FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties);
-    static void CopyBuffer(const VKBuffer& src_buffer, const VKBuffer& dst_buffer, vk::BufferCopy region,
-                           vk::AccessFlags access_to_block = vk::AccessFlagBits::eUniformRead);
 
     /// Return a pointer to the mapped memory if the buffer is host mapped
     u8* GetHostPointer() const { return reinterpret_cast<u8*>(host_ptr); }
     const vk::BufferView& GetView(u32 i = 0) const { return views[i]; }
     vk::Buffer GetBuffer() const { return buffer; }
     u32 GetSize() const { return buffer_info.size; }
+
+    void Upload(std::span<const std::byte> data, u32 offset,
+                vk::AccessFlags access_to_block = vk::AccessFlagBits::eVertexAttributeRead,
+                vk::PipelineStageFlags stage_to_block = vk::PipelineStageFlagBits::eVertexInput);
 
 protected:
     Info buffer_info;
@@ -69,7 +71,9 @@ public:
      * The actual used size must be specified on unmapping the chunk.
      */
     std::tuple<u8*, u32, bool> Map(u32 size, u32 alignment = 0);
-    void Commit(u32 size);
+    void Commit(u32 size, vk::AccessFlags access_to_block = vk::AccessFlagBits::eUniformRead,
+                vk::PipelineStageFlags stage_to_block = vk::PipelineStageFlagBits::eVertexShader |
+                                                        vk::PipelineStageFlagBits::eFragmentShader);
 
 private:
     u32 buffer_pos{};

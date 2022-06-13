@@ -1295,7 +1295,7 @@ std::string GenerateFragmentShader(const PicaFSConfig& config) {
     in vec4 gl_FragCoord;
     #endif // CITRA_GLES
 
-    out vec4 color;
+    layout (location = 0) out vec4 color;
 
     layout(set = 1, binding = 0) uniform sampler2D tex0;
     layout(set = 1, binding = 1) uniform sampler2D tex1;

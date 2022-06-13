@@ -39,16 +39,17 @@ public:
     bool Create();
 
     /// Retrieve either of the current frame's command buffers
-    vk::CommandBuffer GetCommandBuffer() const { return tasks[current_task].command_buffer; }
-    vk::DescriptorPool GetDescriptorPool() const { return tasks[current_task].pool.get(); }
+    vk::CommandBuffer GetRenderCommandBuffer() const;
+    vk::CommandBuffer GetUploadCommandBuffer();
+    vk::DescriptorPool GetDescriptorPool() const;
 
     /// Access the staging buffer of the current task
     std::tuple<u8*, u32> RequestStaging(u32 size);
-    VKBuffer& GetStaging() { return tasks[current_task].staging; }
+    VKBuffer& GetStaging();
 
     /// Query and/or synchronization CPU and GPU
-    u64 GetCPUTick() const { return current_task_id; }
-    u64 GetGPUTick() const { return g_vk_instace->GetDevice().getSemaphoreCounterValue(timeline.get()); }
+    u64 GetCPUTick() const;
+    u64 GetGPUTick() const;
     void SyncToGPU();
     void SyncToGPU(u64 task_index);
 
@@ -59,16 +60,16 @@ public:
 
 private:
     struct Task {
+        bool use_upload_buffer{false};
         u64 current_offset{}, task_id{};
-        vk::CommandBuffer command_buffer;
-        vk::UniqueDescriptorPool pool;
+        std::array<vk::CommandBuffer, 2> command_buffers;
         std::vector<std::function<void()>> cleanups;
+        vk::DescriptorPool pool;
         VKBuffer staging;
     };
 
-    vk::UniqueDescriptorPool global_pool;
-    vk::UniqueSemaphore timeline;
-    vk::UniqueCommandPool command_pool;
+    vk::Semaphore timeline;
+    vk::CommandPool command_pool;
     u64 current_task_id = 1;
 
     // Each task contains unique resources

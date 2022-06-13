@@ -59,31 +59,13 @@ void VKBuffer::Destroy() {
             device.destroyBuffer(buffer);
             device.freeMemory(buffer_memory);
 
-            for (int i = 0; i < view_count; i++) {
+            for (u32 i = 0; i < view_count; i++) {
                 device.destroyBufferView(views[i]);
             }
         };
 
         g_vk_task_scheduler->Schedule(deleter);
     }
-}
-
-void VKBuffer::CopyBuffer(const VKBuffer& src_buffer, const VKBuffer& dst_buffer, vk::BufferCopy region, vk::AccessFlags access_to_block) {
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    command_buffer.copyBuffer(src_buffer.buffer, dst_buffer.buffer, region);
-
-    vk::BufferMemoryBarrier barrier{
-        vk::AccessFlagBits::eTransferWrite, access_to_block,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        dst_buffer.buffer, region.dstOffset, region.size
-    };
-
-    // Add a pipeline barrier for the region modified
-    command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                   vk::PipelineStageFlagBits::eVertexShader |
-                                   vk::PipelineStageFlagBits::eFragmentShader,
-                                   vk::DependencyFlagBits::eByRegion,
-                                   0, nullptr, 1, &barrier, 0, nullptr);
 }
 
 u32 VKBuffer::FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties) {
@@ -98,6 +80,40 @@ u32 VKBuffer::FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties
 
     LOG_CRITICAL(Render_Vulkan, "Failed to find suitable memory type.");
     UNREACHABLE();
+}
+
+void VKBuffer::Upload(std::span<const std::byte> data, u32 offset,
+                      vk::AccessFlags access_to_block,
+                      vk::PipelineStageFlags stage_to_block) {
+    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
+    // For small data uploads use vkCmdUpdateBuffer
+    if (data.size_bytes() < 1024) {
+        cmdbuffer.updateBuffer(buffer, 0, data.size_bytes(), data.data());
+    }
+    else {
+        auto [ptr, staging_offset] = g_vk_task_scheduler->RequestStaging(data.size());
+        if (!ptr) {
+            LOG_ERROR(Render_Vulkan, "Cannot upload data without staging buffer!");
+        }
+
+        // Copy pixels to staging buffer
+        std::memcpy(ptr, data.data(), data.size_bytes());
+
+        auto region = vk::BufferCopy{staging_offset, offset, data.size_bytes()};
+        auto& staging = g_vk_task_scheduler->GetStaging();
+        cmdbuffer.copyBuffer(staging.GetBuffer(), buffer, region);
+    }
+
+    vk::BufferMemoryBarrier barrier{
+        vk::AccessFlagBits::eTransferWrite, access_to_block,
+        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+        buffer, offset, data.size_bytes()
+    };
+
+    // Add a pipeline barrier for the region modified
+    cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_to_block,
+                              vk::DependencyFlagBits::eByRegion,
+                              0, nullptr, 1, &barrier, 0, nullptr);
 }
 
 std::tuple<u8*, u32, bool> StreamBuffer::Map(u32 size, u32 alignment) {
@@ -120,11 +136,25 @@ std::tuple<u8*, u32, bool> StreamBuffer::Map(u32 size, u32 alignment) {
     return std::make_tuple(staging_ptr + buffer_pos, buffer_pos, invalidate);
 }
 
-void StreamBuffer::Commit(u32 size) {
-    auto& staging = g_vk_task_scheduler->GetStaging();
+void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
+                          vk::PipelineStageFlags stage_to_block) {
     mapped_chunk.size = size;
 
-    VKBuffer::CopyBuffer(staging, *this, mapped_chunk);
+    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
+    auto& staging = g_vk_task_scheduler->GetStaging();
+    cmdbuffer.copyBuffer(staging.GetBuffer(), buffer, mapped_chunk);
+
+    vk::BufferMemoryBarrier barrier{
+        vk::AccessFlagBits::eTransferWrite, access_to_block,
+        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+        buffer, mapped_chunk.srcOffset, mapped_chunk.size
+    };
+
+    // Add a pipeline barrier for the region modified
+    cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_to_block,
+                              vk::DependencyFlagBits::eByRegion,
+                              0, nullptr, 1, &barrier, 0, nullptr);
+
     buffer_pos += size;
 }
 

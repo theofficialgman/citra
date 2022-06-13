@@ -52,14 +52,16 @@ void DescriptorUpdater::PushBufferUpdate(vk::DescriptorSet set, u32 binding,
     };
 }
 
-VulkanState::VulkanState() {
+VulkanState::VulkanState(const std::shared_ptr<VKSwapChain>& swapchain) : swapchain(swapchain) {
     // Create a placeholder texture which can be used in place of a real binding.
-    VKTexture::Info info = {
+    VKTexture::Info info{
         .width = 1,
         .height = 1,
         .format = vk::Format::eR8G8B8A8Srgb,
         .type = vk::ImageType::e2D,
-        .view_type = vk::ImageViewType::e2D
+        .view_type = vk::ImageViewType::e2D,
+        .usage = vk::ImageUsageFlagBits::eSampled |
+                 vk::ImageUsageFlagBits::eTransferDst
     };
 
     placeholder.Create(info);
@@ -115,9 +117,9 @@ VulkanState::~VulkanState() {
     device.destroySampler(present_sampler);
 }
 
-void VulkanState::Create() {
+void VulkanState::Create(const std::shared_ptr<VKSwapChain>& swapchain) {
     if (!s_vulkan_state) {
-        s_vulkan_state = std::make_unique<VulkanState>();
+        s_vulkan_state = std::make_unique<VulkanState>(swapchain);
     }
 }
 
@@ -127,7 +129,7 @@ VulkanState& VulkanState::Get() {
 }
 
 void VulkanState::SetVertexBuffer(const VKBuffer& buffer, vk::DeviceSize offset) {
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindVertexBuffers(0, buffer.GetBuffer(), offset);
 }
 
@@ -190,7 +192,7 @@ void VulkanState::UnbindTexture(u32 unit) {
     descriptors_dirty = true;
 }
 
-void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> depth,
+void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> depth, bool update_pipeline_formats,
                     vk::ClearColorValue color_clear, vk::AttachmentLoadOp color_load_op,
                     vk::AttachmentStoreOp color_store_op, vk::ClearDepthStencilValue depth_clear,
                     vk::AttachmentLoadOp depth_load_op, vk::AttachmentStoreOp depth_store_op,
@@ -202,9 +204,10 @@ void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> dept
     vk::RenderingInfo render_info{{}, color->get().GetArea(), 1, {}};
     std::array<vk::RenderingAttachmentInfo, 3> infos{};
 
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     if (color.has_value()) {
         auto& image = color->get();
-        image.Transition(vk::ImageLayout::eColorAttachmentOptimal);
+        image.Transition(cmdbuffer, vk::ImageLayout::eColorAttachmentOptimal);
 
         infos[0] = vk::RenderingAttachmentInfo{
             image.GetView(), image.GetLayout(), {}, {}, {},
@@ -217,7 +220,7 @@ void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> dept
 
     if (depth.has_value()) {
         auto& image = depth->get();
-        image.Transition(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        image.Transition(cmdbuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
         infos[1] = vk::RenderingAttachmentInfo{
             image.GetView(), image.GetLayout(), {}, {}, {},
@@ -233,8 +236,12 @@ void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> dept
         render_info.pStencilAttachment = &infos[2];
     }
 
+    if (update_pipeline_formats) {
+        render_pipeline_key.color = color.has_value() ? color->get().GetFormat() : vk::Format::eUndefined;
+        render_pipeline_key.depth_stencil = depth.has_value() ? depth->get().GetFormat() : vk::Format::eUndefined;
+    }
+
     // Begin rendering
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
     cmdbuffer.beginRendering(render_info);
     rendering = true;
 }
@@ -244,9 +251,37 @@ void VulkanState::EndRendering() {
         return;
     }
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.endRendering();
     rendering = false;
+}
+
+void VulkanState::SetViewport(vk::Viewport new_viewport) {
+    if (new_viewport != viewport) {
+        viewport = new_viewport;
+        dirty_flags.set(DynamicStateFlags::Viewport);
+    }
+}
+
+void VulkanState::SetScissor(vk::Rect2D new_scissor) {
+    if (new_scissor != scissor) {
+        scissor = new_scissor;
+        dirty_flags.set(DynamicStateFlags::Scissor);
+    }
+}
+
+void VulkanState::SetCullMode(vk::CullModeFlags flags) {
+    if (cull_mode != flags) {
+        cull_mode = flags;
+        dirty_flags.set(DynamicStateFlags::CullMode);
+    }
+}
+
+void VulkanState::SetFrontFace(vk::FrontFace face) {
+    if (front_face != face) {
+        front_face = face;
+        dirty_flags.set(DynamicStateFlags::FrontFace);
+    }
 }
 
 void VulkanState::SetColorMask(bool red, bool green, bool blue, bool alpha) {
@@ -262,6 +297,14 @@ void VulkanState::SetBlendEnable(bool enable) {
     render_pipeline_key.blend_config.blendEnable = enable;
 }
 
+void VulkanState::SetBlendCostants(float red, float green, float blue, float alpha) {
+    std::array<float, 4> color{red, green, blue, alpha};
+    if (color != blend_constants) {
+        blend_constants = color;
+        dirty_flags.set(DynamicStateFlags::BlendConstants);
+    }
+}
+
 void VulkanState::SetBlendOp(vk::BlendOp rgb_op, vk::BlendOp alpha_op, vk::BlendFactor src_color,
                              vk::BlendFactor dst_color, vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha) {
     auto& blend = render_pipeline_key.blend_config;
@@ -272,6 +315,45 @@ void VulkanState::SetBlendOp(vk::BlendOp rgb_op, vk::BlendOp alpha_op, vk::Blend
     blend.srcAlphaBlendFactor = src_alpha;
     blend.dstAlphaBlendFactor = dst_alpha;
 }
+
+void VulkanState::SetStencilWrite(u32 mask) {
+    if (mask != stencil_write_mask) {
+        stencil_write_mask = mask;
+        dirty_flags.set(DynamicStateFlags::StencilMask);
+    }
+}
+
+void VulkanState::SetStencilInput(u32 mask) {
+    if (mask != stencil_input_mask) {
+        stencil_input_mask = mask;
+        dirty_flags.set(DynamicStateFlags::StencilMask);
+    }
+}
+
+void VulkanState::SetStencilTest(bool enable, vk::StencilOp fail, vk::StencilOp pass, vk::StencilOp depth_fail,
+                               vk::CompareOp compare, u32 ref) {
+    stencil_enabled = enable;
+    stencil_ref = ref;
+    fail_op = fail;
+    pass_op = pass;
+    depth_fail_op = depth_fail;
+    stencil_op = compare;
+    dirty_flags.set(DynamicStateFlags::StencilTest);
+}
+
+void VulkanState::SetDepthWrite(bool enable) {
+    if (enable != depth_writes) {
+        depth_writes = enable;
+        dirty_flags.set(DynamicStateFlags::DepthWrite);
+    }
+}
+
+void VulkanState::SetDepthTest(bool enable, vk::CompareOp compare) {
+    depth_enabled = enable;
+    depth_op = compare;
+    dirty_flags.set(DynamicStateFlags::DepthTest);
+}
+
 
 void VulkanState::InitDescriptorSets() {
     auto pool = g_vk_task_scheduler->GetDescriptorPool();
@@ -312,12 +394,12 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
 
     // Bind an appropriate render pipeline
     render_pipeline_key.fragment_config = PicaFSConfig::BuildFromRegs(regs);
-    auto it1 = render_pipelines.find(render_pipeline_key);
+    auto result = render_pipelines.find(render_pipeline_key);
 
     // Try to use an already complete pipeline
     vk::Pipeline pipeline;
-    if (it1 != render_pipelines.end()) {
-        pipeline = it1->second.get();
+    if (result != render_pipelines.end()) {
+        pipeline = result->second.get();
     }
     else {
         // Maybe the shader has been compiled but the pipeline state changed?
@@ -330,15 +412,16 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
             auto code = GenerateFragmentShader(render_pipeline_key.fragment_config);
             auto module = CompileShader(code, vk::ShaderStageFlagBits::eFragment);
             render_fragment_shaders.emplace(render_pipeline_key.fragment_config, vk::UniqueShaderModule{module});
-
             render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, shader->second.get());
         }
 
         // Update pipeline builder
         auto& att = render_pipeline_key.blend_config;
+        render_pipeline_builder.SetRenderingFormats(render_pipeline_key.color, render_pipeline_key.depth_stencil);
         render_pipeline_builder.SetBlendLogicOp(render_pipeline_key.blend_logic_op);
-        render_pipeline_builder.SetBlendAttachment(att.blendEnable, att.srcColorBlendFactor, att.dstColorBlendFactor, att.colorBlendOp,
-                                                   att.srcAlphaBlendFactor, att.dstAlphaBlendFactor, att.alphaBlendOp, att.colorWriteMask);
+        render_pipeline_builder.SetBlendAttachment(att.blendEnable, att.srcColorBlendFactor, att.dstColorBlendFactor,
+                                                   att.colorBlendOp, att.srcAlphaBlendFactor, att.dstAlphaBlendFactor,
+                                                   att.alphaBlendOp, att.colorWriteMask);
 
         // Cache the resulted pipeline
         pipeline = render_pipeline_builder.Build();
@@ -346,8 +429,10 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
     }
 
     // Bind the render pipeline
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+    ApplyCommonState(true);
 
     // Bind render descriptor sets
     if (descriptor_sets[1]) {
@@ -368,10 +453,12 @@ void VulkanState::ApplyPresentState() {
     }
 
     // Bind present pipeline and descriptors
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, present_pipeline.get());
     cmdbuffer.pushConstants(present_pipeline_layout, vk::ShaderStageFlagBits::eFragment |
                             vk::ShaderStageFlagBits::eVertex, 0, sizeof(present_data), &present_data);
+
+    ApplyCommonState(false);
 
     if (descriptor_sets[3]) {
         cmdbuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, present_pipeline_layout,
@@ -381,6 +468,53 @@ void VulkanState::ApplyPresentState() {
 
     LOG_CRITICAL(Render_Vulkan, "Present descriptor set unallocated!");
     UNREACHABLE();
+}
+
+void VulkanState::ApplyCommonState(bool extended) {
+    // Re-apply dynamic parts of the pipeline
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+    if (dirty_flags.test(DynamicStateFlags::Viewport)) {
+        cmdbuffer.setViewport(0, viewport);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::Scissor)) {
+        cmdbuffer.setScissor(0, scissor);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::DepthTest) && extended) {
+        cmdbuffer.setDepthTestEnable(depth_enabled);
+        cmdbuffer.setDepthCompareOp(depth_op);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::StencilTest) && extended) {
+        cmdbuffer.setStencilTestEnable(stencil_enabled);
+        cmdbuffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, stencil_ref);
+        cmdbuffer.setStencilOp(vk::StencilFaceFlagBits::eFrontAndBack, fail_op, pass_op,
+                                    depth_fail_op, stencil_op);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::CullMode) && extended) {
+        cmdbuffer.setCullMode(cull_mode);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::FrontFace) && extended) {
+        cmdbuffer.setFrontFace(front_face);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::BlendConstants) && extended) {
+        cmdbuffer.setBlendConstants(blend_constants.data());
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::StencilMask) && extended) {
+        cmdbuffer.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, stencil_write_mask);
+        cmdbuffer.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, stencil_input_mask);
+    }
+
+    if (dirty_flags.test(DynamicStateFlags::DepthWrite) && extended) {
+        cmdbuffer.setDepthWriteEnable(depth_writes);
+    }
+
+    dirty_flags.reset();
 }
 
 void VulkanState::BuildDescriptorLayouts() {
@@ -430,6 +564,7 @@ void VulkanState::ConfigureRenderPipeline() {
     render_pipeline_builder.SetPrimitiveTopology(vk::PrimitiveTopology::eTriangleList);
     render_pipeline_builder.SetLineWidth(1.0f);
     render_pipeline_builder.SetNoCullRasterizationState();
+    render_pipeline_builder.SetRenderingFormats(render_pipeline_key.color, render_pipeline_key.depth_stencil);
 
     // Set depth, stencil tests and blending
     render_pipeline_builder.SetNoDepthTestState();
@@ -441,7 +576,7 @@ void VulkanState::ConfigureRenderPipeline() {
                                vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
 
     // Enable every required dynamic state
-    std::array<vk::DynamicState, 14> dynamic_states{
+    std::array dynamic_states{
         vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth,
         vk::DynamicState::eDepthTestEnable, vk::DynamicState::eColorWriteEnableEXT,
         vk::DynamicState::eStencilTestEnable, vk::DynamicState::eStencilOp,
@@ -459,7 +594,6 @@ void VulkanState::ConfigureRenderPipeline() {
 
     // Add trivial vertex shader
     auto code = GenerateTrivialVertexShader(true);
-    std::cout << code << '\n';
     render_vertex_shader = CompileShader(code, vk::ShaderStageFlagBits::eVertex);
     render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eVertex, render_vertex_shader);
 }
@@ -475,8 +609,9 @@ void VulkanState::ConfigurePresentPipeline() {
     present_pipeline_builder.Clear();
     present_pipeline_builder.SetPipelineLayout(present_pipeline_layout);
     present_pipeline_builder.SetPrimitiveTopology(vk::PrimitiveTopology::eTriangleStrip);
-    render_pipeline_builder.SetLineWidth(1.0f);
-    render_pipeline_builder.SetNoCullRasterizationState();
+    present_pipeline_builder.SetLineWidth(1.0f);
+    present_pipeline_builder.SetNoCullRasterizationState();
+    present_pipeline_builder.SetRenderingFormats(swapchain->GetCurrentImage().GetFormat());
 
     // Set depth, stencil tests and blending
     present_pipeline_builder.SetNoDepthTestState();
@@ -484,7 +619,7 @@ void VulkanState::ConfigurePresentPipeline() {
     present_pipeline_builder.SetNoBlendingState();
 
     // Enable every required dynamic state
-    std::array<vk::DynamicState, 3> dynamic_states{
+    std::array dynamic_states{
         vk::DynamicState::eLineWidth,
         vk::DynamicState::eViewport,
         vk::DynamicState::eScissor,

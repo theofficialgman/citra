@@ -215,7 +215,7 @@ void PipelineBuilder::SetNoBlendingState() {
         vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA);
 }
 
-void PipelineBuilder::SetDynamicStates(std::span<vk::DynamicState> states) {
+void PipelineBuilder::SetDynamicStates(const std::span<vk::DynamicState> states) {
     if (states.size() > MAX_DYNAMIC_STATES) {
         LOG_ERROR(Render_Vulkan, "Cannot include more dynamic states!");
         UNREACHABLE();
@@ -230,8 +230,29 @@ void PipelineBuilder::SetDynamicStates(std::span<vk::DynamicState> states) {
     return;
 }
 
+void PipelineBuilder::SetRenderingFormats(vk::Format color, vk::Format depth_stencil) {
+    color_format = color;
+    depth_stencil_format = depth_stencil;
+
+    auto IsStencil = [](vk::Format format) -> bool {
+        switch (format) {
+        case vk::Format::eD16UnormS8Uint:
+        case vk::Format::eD24UnormS8Uint:
+        case vk::Format::eD32SfloatS8Uint:
+            return true;
+        default:
+            return false;
+        };
+    };
+
+    const u32 color_attachment_count = color == vk::Format::eUndefined ? 0 : 1;
+    rendering_info = vk::PipelineRenderingCreateInfoKHR{0, color_attachment_count, &color_format, depth_stencil_format,
+                        IsStencil(depth_stencil) ? depth_stencil : vk::Format::eUndefined};
+    pipeline_info.pNext = &rendering_info;
+}
+
 void PipelineBuilder::SetViewport(float x, float y, float width, float height, float min_depth, float max_depth) {
-    viewport = vk::Viewport{ x, y, width, height, min_depth, max_depth };
+    viewport = vk::Viewport{x, y, width, height, min_depth, max_depth};
     viewport_state.pViewports = &viewport;
     viewport_state.viewportCount = 1;
     pipeline_info.pViewportState = &viewport_state;

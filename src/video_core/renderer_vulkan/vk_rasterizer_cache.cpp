@@ -239,7 +239,7 @@ inline vk::ImageSubresourceRange SubResourceLayersToRange(const vk::ImageSubreso
 
 static bool BlitTextures(const Surface& src_surface, const Common::Rectangle<u32>& src_rect,
                          const Surface& dst_surface, const Common::Rectangle<u32>& dst_rect, SurfaceType type) {
-    vk::ImageSubresourceLayers image_range({}, {}, 0, 1);
+    vk::ImageSubresourceLayers image_range{{}, {}, 0, 1};
     switch (src_surface->type) {
     case SurfaceParams::SurfaceType::Color:
     case SurfaceParams::SurfaceType::Texture:
@@ -257,28 +257,32 @@ static bool BlitTextures(const Surface& src_surface, const Common::Rectangle<u32
     }
 
     // Prepare images for transfer
-    auto old_src_layout = src_surface->texture.GetLayout();
-    auto old_dst_layout = dst_surface->texture.GetLayout();
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
 
-    src_surface->texture.Transition(vk::ImageLayout::eTransferSrcOptimal);
-    dst_surface->texture.Transition(vk::ImageLayout::eTransferDstOptimal);
+    auto& src_texture = src_surface->texture;
+    src_texture.Transition(cmdbuffer, vk::ImageLayout::eTransferSrcOptimal);
 
-    vk::ImageBlit blit_area;
-    blit_area.srcSubresource = image_range;
-    blit_area.srcOffsets[0] = vk::Offset3D(src_rect.left, src_rect.bottom, 0);
-    blit_area.srcOffsets[1] = vk::Offset3D(src_rect.right, src_rect.top, 1);
-    blit_area.dstSubresource = image_range;
-    blit_area.dstOffsets[0] = vk::Offset3D(dst_rect.left, dst_rect.bottom, 0);
-    blit_area.dstOffsets[1] = vk::Offset3D(dst_rect.right, dst_rect.top, 1);
+    auto& dst_texture = dst_surface->texture;
+    dst_texture.Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
 
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    command_buffer.blitImage(src_surface->texture.GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
-                             dst_surface->texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
-                             {blit_area}, vk::Filter::eNearest);
+    const std::array src_offsets{
+        vk::Offset3D{static_cast<s32>(src_rect.left), static_cast<s32>(src_rect.bottom), 0},
+        vk::Offset3D{static_cast<s32>(src_rect.right), static_cast<s32>(src_rect.top), 1}
+    };
+
+    const std::array dst_offsets{
+        vk::Offset3D{static_cast<s32>(dst_rect.left), static_cast<s32>(dst_rect.bottom), 0},
+        vk::Offset3D{static_cast<s32>(dst_rect.right), static_cast<s32>(dst_rect.top), 1}
+    };
+
+    vk::ImageBlit blit_area{image_range, src_offsets, image_range, dst_offsets};
+    cmdbuffer.blitImage(src_texture.GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
+                        dst_texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
+                        {blit_area}, vk::Filter::eNearest);
 
     // Revert changes to the layout
-    src_surface->texture.Transition(old_src_layout);
-    dst_surface->texture.Transition(old_dst_layout);
+    src_texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+    dst_texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 
     return true;
 }
@@ -290,8 +294,7 @@ static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
 }
 
 // Allocate an uninitialized texture of appropriate size and format for the surface
-VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 width, u32 height)
-{
+VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 width, u32 height) {
     // First check if the texture can be recycled
     auto recycled_tex = host_texture_recycler.find({format, width, height});
     if (recycled_tex != host_texture_recycler.end()) {
@@ -308,12 +311,16 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
         .format = format,
         .type = vk::ImageType::e2D,
         .view_type = vk::ImageViewType::e2D,
+        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
+                 vk::ImageUsageFlagBits::eTransferSrc,
         .levels = levels
     };
 
     VKTexture texture;
     texture.Create(texture_info);
-    texture.Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
+    texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 
     return texture;
 }
@@ -383,7 +390,7 @@ void RasterizerCacheVulkan::CopySurface(const Surface& src_surface, const Surfac
     // This is only called when CanCopy is true, no need to run checks here
     if (src_surface->type == SurfaceType::Fill) {
         // NO-OP Vulkan does not allow easy clearing for arbitary textures with rectangle
-        printf("bad!");
+        return;
     }
     if (src_surface->CanSubRect(subrect_params)) {
         auto srect = src_surface->GetScaledSubRect(subrect_params);
@@ -452,7 +459,7 @@ void CachedSurface::LoadGPUBuffer(PAddr load_start, PAddr load_end) {
     }
 }
 
-MICROPROFILE_DEFINE(OpenGL_SurfaceFlush, "OpenGL", "Surface Flush", MP_RGB(128, 192, 64));
+MICROPROFILE_DEFINE(Vulkan_SurfaceFlush, "Vulkan", "Surface Flush", MP_RGB(128, 192, 64));
 void CachedSurface::FlushGPUBuffer(PAddr flush_start, PAddr flush_end) {
     u8* const dst_buffer = VideoCore::g_memory->GetPhysicalPointer(addr);
     if (dst_buffer == nullptr)
@@ -468,7 +475,7 @@ void CachedSurface::FlushGPUBuffer(PAddr flush_start, PAddr flush_end) {
     if (flush_start < Memory::VRAM_VADDR && flush_end > Memory::VRAM_VADDR)
         flush_start = Memory::VRAM_VADDR;
 
-    MICROPROFILE_SCOPE(OpenGL_SurfaceFlush);
+    MICROPROFILE_SCOPE(Vulkan_SurfaceFlush);
 
     ASSERT(flush_start >= addr && flush_end <= end);
     const u32 start_offset = flush_start - addr;

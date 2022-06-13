@@ -7,6 +7,7 @@
 #include <array>
 #include <variant>
 #include <optional>
+#include <bitset>
 #include "video_core/regs.h"
 #include "video_core/renderer_vulkan/vk_shader_state.h"
 #include "video_core/renderer_vulkan/vk_pipeline_builder.h"
@@ -53,26 +54,43 @@ private:
     u32 update_count{};
 };
 
+class VKSwapChain;
+
 /// Tracks global Vulkan state
 class VulkanState {
 public:
-    VulkanState();
+    VulkanState(const std::shared_ptr<VKSwapChain>& swapchain);
     ~VulkanState();
 
     /// Initialize object to its initial state
-    static void Create();
+    static void Create(const std::shared_ptr<VKSwapChain>& swapchain);
     static VulkanState& Get();
+
+    /// Query state
+    bool DepthTestEnabled() const { return depth_enabled && depth_writes; }
+    bool StencilTestEnabled() const { return stencil_enabled && stencil_writes; }
 
     /// Configure drawing state
     void SetVertexBuffer(const VKBuffer& buffer, vk::DeviceSize offset);
-    void SetColorMask(bool red, bool green, bool blue, bool alpha);
+    void SetViewport(vk::Viewport viewport);
+    void SetScissor(vk::Rect2D scissor);
+    void SetCullMode(vk::CullModeFlags flags);
+    void SetFrontFace(vk::FrontFace face);
     void SetLogicOp(vk::LogicOp logic_op);
+    void SetStencilWrite(u32 mask);
+    void SetStencilInput(u32 mask);
+    void SetStencilTest(bool enable, vk::StencilOp fail, vk::StencilOp pass, vk::StencilOp depth_fail,
+                        vk::CompareOp compare, u32 ref);
+    void SetDepthWrite(bool enable);
+    void SetDepthTest(bool enable, vk::CompareOp compare);
+    void SetColorMask(bool red, bool green, bool blue, bool alpha);
     void SetBlendEnable(bool enable);
+    void SetBlendCostants(float red, float green, float blue, float alpha);
     void SetBlendOp(vk::BlendOp rgb_op, vk::BlendOp alpha_op, vk::BlendFactor src_color, vk::BlendFactor dst_color,
                     vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha);
 
     /// Rendering
-    void BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> depth,
+    void BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> depth, bool update_pipeline_formats = false,
                         vk::ClearColorValue color_clear = {},
                         vk::AttachmentLoadOp color_load_op = vk::AttachmentLoadOp::eLoad,
                         vk::AttachmentStoreOp color_store_op = vk::AttachmentStoreOp::eStore,
@@ -97,6 +115,7 @@ public:
     void InitDescriptorSets();
     void ApplyRenderState(const Pica::Regs& config);
     void ApplyPresentState();
+    void ApplyCommonState(bool extended);
 
 private:
     void BuildDescriptorLayouts();
@@ -105,6 +124,7 @@ private:
 
 private:
     // Render targets
+    std::shared_ptr<VKSwapChain> swapchain;
     bool rendering{};
     VKTexture* color_render_target{}, *depth_render_target{};
     vk::ImageView present_view;
@@ -120,7 +140,7 @@ private:
     std::array<vk::DescriptorSet, DESCRIPTOR_SET_COUNT> descriptor_sets;
 
     // Pipeline caches
-    PipelineCacheKey render_pipeline_key;
+    PipelineCacheKey render_pipeline_key{};
     PipelineBuilder render_pipeline_builder, present_pipeline_builder;
     vk::PipelineLayout render_pipeline_layout, present_pipeline_layout;
     std::unordered_map<PipelineCacheKey, vk::UniquePipeline> render_pipelines;
@@ -129,6 +149,34 @@ private:
     // Shader caches
     vk::ShaderModule render_vertex_shader, present_vertex_shader, present_fragment_shader;
     std::unordered_map<PicaFSConfig, vk::UniqueShaderModule> render_fragment_shaders;
+
+    // Dynamic state
+    enum DynamicStateFlags : u32 {
+        Viewport,
+        Scissor,
+        LineWidth,
+        DepthTest,
+        DepthWrite,
+        StencilTest,
+        StencilMask,
+        ColorWrite,
+        CullMode,
+        BlendConstants,
+        FrontFace
+    };
+
+    std::bitset<16> dirty_flags;
+    u32 stencil_write_mask{}, stencil_input_mask{}, stencil_ref{};
+    bool depth_enabled{}, depth_writes{}, stencil_enabled{}, stencil_writes{};
+    vk::StencilOp fail_op, pass_op, depth_fail_op;
+    vk::CompareOp depth_op, stencil_op;
+
+    vk::Viewport viewport{0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+    vk::CullModeFlags cull_mode{};
+    vk::FrontFace front_face{};
+    vk::Rect2D scissor{};
+    vk::LogicOp logic_op{};
+    std::array<float, 4> blend_constants{};
 };
 
 } // namespace Vulkan

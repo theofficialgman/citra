@@ -75,7 +75,7 @@ private:
 
     /// Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;
-    std::unique_ptr<VKSwapChain> swapchain;
+    std::shared_ptr<VKSwapChain> swapchain;
 };
 
 } // namespace OpenGL

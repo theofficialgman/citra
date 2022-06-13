@@ -294,7 +294,8 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
         .type = vk::ImageType::e2D,
         .view_type = vk::ImageViewType::e2D,
         .usage = vk::ImageUsageFlagBits::eColorAttachment |
-                 vk::ImageUsageFlagBits::eTransferDst
+                 vk::ImageUsageFlagBits::eTransferDst |
+                 vk::ImageUsageFlagBits::eSampled
     };
 
     switch (format) {
@@ -327,7 +328,9 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
     auto& texture = screen.texture;
     texture.Destroy();
     texture.Create(texture_info);
-    texture.Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
+    texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 /**
@@ -337,18 +340,16 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
 void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y,
                                              float w, float h) {
     const auto& texcoords = screen_info.display_texcoords;
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
 
-    auto& state = VulkanState::Get();
-    state.EndRendering();
-
-    const std::array<ScreenRectVertex, 4> vertices = {{
+    const std::array vertices{
         ScreenRectVertex(x, y, texcoords.bottom, texcoords.left),
         ScreenRectVertex(x + w, y, texcoords.bottom, texcoords.right),
         ScreenRectVertex(x, y + h, texcoords.top, texcoords.left),
         ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right),
-    }};
-    cmdbuffer.updateBuffer(vertex_buffer.GetBuffer(), 0, sizeof(vertices), vertices.data());
+    };
+
+    auto data = std::as_bytes(std::span(vertices));
+    vertex_buffer.Upload(data, 0);
 
     // As this is the "DrawSingleScreenRotated" function, the output resolution dimensions have been
     // swapped. If a non-rotated draw-screen function were to be added for book-mode games, those
@@ -362,11 +363,14 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
     draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
 
     auto& image = swapchain->GetCurrentImage();
-    state.BeginRendering(image, std::nullopt, clear_color, vk::AttachmentLoadOp::eClear);
+    auto& state = VulkanState::Get();
+
+    state.BeginRendering(image, std::nullopt, false, clear_color, vk::AttachmentLoadOp::eClear);
     state.SetPresentData(draw_info);
     state.SetPresentTexture(*screen_info.display_texture);
     state.ApplyPresentState();
 
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
     cmdbuffer.draw(4, 1, 0, 0);
 }
@@ -374,18 +378,16 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
 void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w,
                                       float h) {
     const auto& texcoords = screen_info.display_texcoords;
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
 
-    auto& state = VulkanState::Get();
-    state.EndRendering();
-
-    const std::array<ScreenRectVertex, 4> vertices = {{
+    const std::array vertices{
         ScreenRectVertex(x, y, texcoords.bottom, texcoords.right),
         ScreenRectVertex(x + w, y, texcoords.top, texcoords.right),
         ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.left),
         ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.left),
-    }};
-    cmdbuffer.updateBuffer(vertex_buffer.GetBuffer(), 0, sizeof(vertices), vertices.data());
+    };
+
+    auto data = std::as_bytes(std::span(vertices));
+    vertex_buffer.Upload(data, 0);
 
     const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
     auto [width, height] = screen_info.texture.GetArea().extent;
@@ -397,11 +399,14 @@ void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
     draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
 
     auto& image = swapchain->GetCurrentImage();
-    state.BeginRendering(image, std::nullopt, clear_color, vk::AttachmentLoadOp::eClear);
+    auto& state = VulkanState::Get();
+
+    state.BeginRendering(image, std::nullopt, false, clear_color, vk::AttachmentLoadOp::eClear);
     state.SetPresentData(draw_info);
     state.SetPresentTexture(*screen_info.display_texture);
     state.ApplyPresentState();
 
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
     cmdbuffer.draw(4, 1, 0, 0);
 }
@@ -658,17 +663,18 @@ void RendererVulkan::SwapBuffers() {
 bool RendererVulkan::BeginPresent() {
     swapchain->AcquireNextImage();
 
-    // Swap chain images start in undefined
     auto& image = swapchain->GetCurrentImage();
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+
+    // Swap chain images start in undefined
     image.OverrideImageLayout(vk::ImageLayout::eUndefined);
-    image.Transition(vk::ImageLayout::eColorAttachmentOptimal);
+    image.Transition(cmdbuffer, vk::ImageLayout::eColorAttachmentOptimal);
 
     // Update viewport and scissor
     const auto [width, height] = image.GetArea().extent;
     const vk::Viewport viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
     const vk::Rect2D scissor{{0, 0}, {width, height}};
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
     cmdbuffer.setViewport(0, viewport);
     cmdbuffer.setScissor(0, scissor);
 
@@ -680,7 +686,8 @@ void RendererVulkan::EndPresent() {
     state.EndRendering();
 
     auto& image = swapchain->GetCurrentImage();
-    image.Transition(vk::ImageLayout::ePresentSrcKHR);
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+    image.Transition(cmdbuffer, vk::ImageLayout::ePresentSrcKHR);
 
     g_vk_task_scheduler->Submit(false, true, swapchain.get());
 }
@@ -688,7 +695,7 @@ void RendererVulkan::EndPresent() {
 /// Initialize the renderer
 VideoCore::ResultStatus RendererVulkan::Init() {
     // Create vulkan instance
-    vk::ApplicationInfo app_info{"Citra", VK_MAKE_VERSION(1, 0, 0), nullptr, 0, VK_API_VERSION_1_2};
+    vk::ApplicationInfo app_info{"Citra", VK_MAKE_VERSION(1, 0, 0), nullptr, 0, VK_API_VERSION_1_3};
 
     // Get required extensions
     auto extensions = RequiredExtensions(render_window.GetWindowInfo().type, true);
@@ -706,16 +713,16 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<VKInstance>();
     g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
-    g_vk_instace->Create(instance, physical_devices[1], surface, true);
+    g_vk_instace->Create(instance, physical_devices[0], surface, true);
     g_vk_task_scheduler->Create();
 
-    // Create Vulkan state
-    VulkanState::Create();
-    g_vk_task_scheduler->BeginTask();
-
     auto& layout = render_window.GetFramebufferLayout();
-    swapchain = std::make_unique<VKSwapChain>(surface);
+    swapchain = std::make_shared<VKSwapChain>(surface);
     swapchain->Create(layout.width, layout.height, false);
+
+    // Create Vulkan state
+    VulkanState::Create(swapchain);
+    g_vk_task_scheduler->BeginTask();
 
     auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
     constexpr auto user_system = Common::Telemetry::FieldType::UserSystem;

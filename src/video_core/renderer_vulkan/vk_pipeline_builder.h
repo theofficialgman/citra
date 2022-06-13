@@ -69,7 +69,8 @@ public:
 
     void SetViewport(float x, float y, float width, float height, float min_depth, float max_depth);
     void SetScissorRect(s32 x, s32 y, u32 width, u32 height);
-    void SetDynamicStates(std::span<vk::DynamicState> states);
+    void SetDynamicStates(const std::span<vk::DynamicState> states);
+    void SetRenderingFormats(vk::Format color, vk::Format depth_stencil = vk::Format::eUndefined);
 
 private:
     static constexpr u32 MAX_DYNAMIC_STATES = 14;
@@ -100,6 +101,8 @@ private:
 
     // Multisampling
     vk::PipelineMultisampleStateCreateInfo multisample_info;
+    vk::PipelineRenderingCreateInfo rendering_info;
+    vk::Format color_format, depth_stencil_format;
 };
 
 }  // namespace Vulkan

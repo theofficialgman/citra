@@ -11,7 +11,6 @@
 #include <QFutureWatcher>
 #include <QLabel>
 #include <QMessageBox>
-#include <QOpenGLFunctions_3_3_Core>
 #include <QSysInfo>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtGui>
@@ -917,15 +916,6 @@ bool GMainWindow::LoadROM(const QString& filename) {
 
     Frontend::ScopeAcquireContext scope(*render_window);
 
-    const QString below_gl33_title = tr("OpenGL 3.3 Unsupported");
-    const QString below_gl33_message = tr("Your GPU may not support OpenGL 3.3, or you do not "
-                                          "have the latest graphics driver.");
-
-    if (!QOpenGLContext::globalShareContext()->versionFunctions<QOpenGLFunctions_3_3_Core>()) {
-        QMessageBox::critical(this, below_gl33_title, below_gl33_message);
-        return false;
-    }
-
     Core::System& system{Core::System::GetInstance()};
 
     const Core::System::ResultStatus result{system.Load(*render_window, filename.toStdString())};
@@ -990,10 +980,6 @@ bool GMainWindow::LoadROM(const QString& filename) {
                 tr("You are running default Windows drivers "
                    "for your GPU. You need to install the "
                    "proper drivers for your graphics card from the manufacturer's website."));
-            break;
-
-        case Core::System::ResultStatus::ErrorVideoCore_ErrorBelowGL33:
-            QMessageBox::critical(this, below_gl33_title, below_gl33_message);
             break;
 
         default:
@@ -2448,8 +2434,6 @@ int main(int argc, char* argv[]) {
     std::string bin_path = FileUtil::GetBundleDirectory() + DIR_SEP + "..";
     chdir(bin_path.c_str());
 #endif
-    QCoreApplication::setAttribute(Qt::AA_DontCheckOpenGLContextThreadAffinity);
-    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication app(argc, argv);
 
     // Qt changes the locale and causes issues in float conversion using std::to_string() when

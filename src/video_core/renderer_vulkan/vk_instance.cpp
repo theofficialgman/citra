@@ -73,10 +73,10 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
 
     static constexpr float queue_priorities[] = {1.0f};
 
-    std::array<const char*, 1> layers{"VK_LAYER_KHRONOS_validation"};
-    std::array<vk::DeviceQueueCreateInfo, 2> queue_infos{
-        vk::DeviceQueueCreateInfo({}, graphics_queue_family_index, 1, queue_priorities),
-        vk::DeviceQueueCreateInfo({}, present_queue_family_index, 1, queue_priorities)
+    const std::array layers{"VK_LAYER_KHRONOS_validation"};
+    const std::array queue_infos{
+        vk::DeviceQueueCreateInfo{{}, graphics_queue_family_index, 1, queue_priorities},
+        vk::DeviceQueueCreateInfo{{}, present_queue_family_index, 1, queue_priorities}
     };
 
     vk::DeviceCreateInfo device_info({}, 1, queue_infos.data(), 0, nullptr,
@@ -127,15 +127,14 @@ bool VKInstance::FindFeatures() {
 
     // Enable newer Vulkan features
     vk12_features.timelineSemaphore = true;
-    dynamic_rendering_features.dynamicRendering = true;
+    vk13_features.dynamicRendering = true;
     dynamic_state_features.extendedDynamicState = true;
     dynamic_state2_features.extendedDynamicState2 = true;
     dynamic_state2_features.extendedDynamicState2LogicOp = true;
-    dynamic_state2_features.extendedDynamicState2PatchControlPoints = true;
 
     // Include features in device creation
-    vk12_features.pNext = &dynamic_rendering_features;
-    dynamic_rendering_features.pNext = &dynamic_state_features;
+    vk12_features.pNext = &vk13_features;
+    vk13_features.pNext = &dynamic_state_features;
     dynamic_state_features.pNext = &dynamic_state2_features;
     features = vk::PhysicalDeviceFeatures2{vk_features, &vk12_features};
 

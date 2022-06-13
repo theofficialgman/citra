@@ -239,7 +239,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     const bool has_stencil =
         regs.framebuffer.framebuffer.depth_format == Pica::FramebufferRegs::DepthFormat::D24S8;
 
-    const bool write_depth_fb = depth_test_enabled || (has_stencil && stencil_test_enabled);
+    const bool write_depth_fb = state.DepthTestEnabled() || (has_stencil && state.StencilTestEnabled());
 
     const bool using_color_fb =
         regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress() != 0;
@@ -282,14 +282,10 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
                                              viewport_rect_unscaled.bottom * res_scale,
                                          surfaces_rect.bottom, surfaces_rect.top))}; // Bottom
 
-    // Bind the framebuffer surfaces
-    state.BeginRendering(color_surface->texture, depth_surface->texture);
-
     // Sync the viewport
     vk::Viewport viewport{0, 0, static_cast<float>(viewport_rect_unscaled.GetWidth() * res_scale),
                                 static_cast<float>(viewport_rect_unscaled.GetHeight() * res_scale)};
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
-    cmdbuffer.setViewport(0, viewport);
+    state.SetViewport(viewport);
 
     if (uniform_block_data.data.framebuffer_scale != res_scale) {
         uniform_block_data.data.framebuffer_scale = res_scale;
@@ -359,41 +355,21 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     // outside of the framebuffer region
     vk::Rect2D scissor{vk::Offset2D(draw_rect.left, draw_rect.bottom),
                        vk::Extent2D(draw_rect.GetHeight(), draw_rect.GetHeight())};
-    cmdbuffer.setScissor(0, scissor);
+    state.SetScissor(scissor);
 
-    // Apply pending state
+    // Bind the framebuffer surfaces
+    state.BeginRendering(color_surface->texture, depth_surface->texture, true);
     state.ApplyRenderState(Pica::g_state.regs);
+    state.SetVertexBuffer(vertex_buffer, 0);
 
-    std::size_t max_vertices = 3 * (VERTEX_BUFFER_SIZE / (3 * sizeof(HardwareVertex)));
-    for (std::size_t base_vertex = 0; base_vertex < vertex_batch.size(); base_vertex += max_vertices) {
-        const std::size_t vertices = std::min(max_vertices, vertex_batch.size() - base_vertex);
-        const std::size_t vertex_size = vertices * sizeof(HardwareVertex);
+    ASSERT(vertex_batch.size() <= VERTEX_BUFFER_SIZE);
 
-        auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(vertex_size);
-        std::memcpy(buffer, vertex_batch.data() + base_vertex, vertex_size);
+    std::size_t vertices = vertex_batch.size();
+    auto data = std::as_bytes(std::span(vertex_batch.data(), vertex_batch.size()));
+    vertex_buffer.Upload(data, 0);
 
-        // Copy the vertex data
-        auto& staging = g_vk_task_scheduler->GetStaging();
-        vk::BufferCopy copy_region(offset, 0, vertex_size);
-
-        state.SetVertexBuffer(vertex_buffer, offset);
-        cmdbuffer.copyBuffer(staging.GetBuffer(), vertex_buffer.GetBuffer(), copy_region);
-
-        // Issue a pipeline barrier and draw command
-        vk::BufferMemoryBarrier barrier {
-            vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eVertexAttributeRead,
-            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-            vertex_buffer.GetBuffer(), 0, vertex_size
-        };
-
-        // Add a pipeline barrier for each region modified
-        cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                       vk::PipelineStageFlagBits::eVertexInput,
-                                       vk::DependencyFlagBits::eByRegion,
-                                       0, nullptr, 1, &barrier, 0, nullptr);
-
-        cmdbuffer.draw(vertices, 1, 0, 0);
-    }
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+    cmdbuffer.draw(vertices, 1, 0, 0);
 
     vertex_batch.clear();
 
@@ -1138,20 +1114,20 @@ void RasterizerVulkan::SyncClipCoef() {
 void RasterizerVulkan::SyncCullMode() {
     const auto& regs = Pica::g_state.regs;
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
+    auto& state = VulkanState::Get();
     switch (regs.rasterizer.cull_mode) {
     case Pica::RasterizerRegs::CullMode::KeepAll:
-        cmdbuffer.setCullMode(vk::CullModeFlagBits::eNone);
+        state.SetCullMode(vk::CullModeFlagBits::eNone);
         break;
 
     case Pica::RasterizerRegs::CullMode::KeepClockWise:
-        cmdbuffer.setCullMode(vk::CullModeFlagBits::eBack);
-        cmdbuffer.setFrontFace(vk::FrontFace::eClockwise);
+        state.SetCullMode(vk::CullModeFlagBits::eBack);
+        state.SetFrontFace(vk::FrontFace::eClockwise);
         break;
 
     case Pica::RasterizerRegs::CullMode::KeepCounterClockWise:
-        cmdbuffer.setCullMode(vk::CullModeFlagBits::eBack);
-        cmdbuffer.setFrontFace(vk::FrontFace::eCounterClockwise);
+        state.SetCullMode(vk::CullModeFlagBits::eBack);
+        state.SetFrontFace(vk::FrontFace::eCounterClockwise);
         break;
 
     default:
@@ -1200,10 +1176,9 @@ void RasterizerVulkan::SyncBlendFuncs() {
 
 void RasterizerVulkan::SyncBlendColor() {
     auto color = PicaToVK::ColorRGBA8(Pica::g_state.regs.framebuffer.output_merger.blend_const.raw);
-    auto blend_consts = std::array<float, 4>{color.r, color.g, color.b, color.a};
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
-    cmdbuffer.setBlendConstants(blend_consts.data());
+    auto& state = VulkanState::Get();
+    state.SetBlendCostants(color.r, color.g, color.b, color.a);
 }
 
 void RasterizerVulkan::SyncFogColor() {
@@ -1274,27 +1249,25 @@ void RasterizerVulkan::SyncColorWriteMask() {
 
 void RasterizerVulkan::SyncStencilWriteMask() {
     const auto& regs = Pica::g_state.regs;
-    auto mask = ((regs.framebuffer.framebuffer.allow_depth_stencil_write != 0)
-               ? static_cast<u32>(regs.framebuffer.output_merger.stencil_test.write_mask)
-               : 0);
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
-    cmdbuffer.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, mask);
+    auto& state = VulkanState::Get();
+    state.SetStencilWrite((regs.framebuffer.framebuffer.allow_depth_stencil_write != 0)
+                         ? static_cast<u32>(regs.framebuffer.output_merger.stencil_test.write_mask)
+                         : 0);
 }
 
 void RasterizerVulkan::SyncDepthWriteMask() {
     const auto& regs = Pica::g_state.regs;
-    bool enable = (regs.framebuffer.framebuffer.allow_depth_stencil_write != 0 &&
-                   regs.framebuffer.output_merger.depth_write_enable);
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
-    cmdbuffer.setDepthWriteEnable(enable);
+    auto& state = VulkanState::Get();
+    state.SetDepthWrite(regs.framebuffer.framebuffer.allow_depth_stencil_write != 0 &&
+                         regs.framebuffer.output_merger.depth_write_enable);
 }
 
 void RasterizerVulkan::SyncStencilTest() {
     const auto& regs = Pica::g_state.regs;
 
-    stencil_test_enabled = regs.framebuffer.output_merger.stencil_test.enable &&
+    bool enabled = regs.framebuffer.output_merger.stencil_test.enable &&
                    regs.framebuffer.framebuffer.depth_format == Pica::FramebufferRegs::DepthFormat::D24S8;
     auto func = PicaToVK::CompareFunc(regs.framebuffer.output_merger.stencil_test.func);
     auto ref = regs.framebuffer.output_merger.stencil_test.reference_value;
@@ -1303,24 +1276,21 @@ void RasterizerVulkan::SyncStencilTest() {
     auto depth_fail = PicaToVK::StencilOp(regs.framebuffer.output_merger.stencil_test.action_depth_fail);
     auto depth_pass = PicaToVK::StencilOp(regs.framebuffer.output_merger.stencil_test.action_depth_pass);
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
-    cmdbuffer.setStencilTestEnable(stencil_test_enabled);
-    cmdbuffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, ref);
-    cmdbuffer.setStencilOp(vk::StencilFaceFlagBits::eFrontAndBack, stencil_fail, depth_pass, depth_fail, func);
-    cmdbuffer.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, mask);
+    auto& state = VulkanState::Get();
+    state.SetStencilTest(enabled, stencil_fail, depth_pass, depth_fail, func, ref);
+    state.SetStencilInput(mask);
 }
 
 void RasterizerVulkan::SyncDepthTest() {
     const auto& regs = Pica::g_state.regs;
-    depth_test_enabled = regs.framebuffer.output_merger.depth_test_enable == 1 ||
+    bool test_enabled = regs.framebuffer.output_merger.depth_test_enable == 1 ||
                         regs.framebuffer.output_merger.depth_write_enable == 1;
     auto test_func = regs.framebuffer.output_merger.depth_test_enable == 1
                    ? PicaToVK::CompareFunc(regs.framebuffer.output_merger.depth_test_func)
                    : vk::CompareOp::eAlways;
 
-    auto cmdbuffer = g_vk_task_scheduler->GetCommandBuffer();
-    cmdbuffer.setDepthTestEnable(depth_test_enabled);
-    cmdbuffer.setDepthCompareOp(test_func);
+    auto& state = VulkanState::Get();
+    state.SetDepthTest(test_enabled, test_func);
 }
 
 void RasterizerVulkan::SyncCombinerColor() {
@@ -1459,7 +1429,8 @@ void RasterizerVulkan::SyncAndUploadLUTsLF() {
     }
 
     std::size_t bytes_used = 0;
-    auto [buffer, offset, invalidate] = texture_buffer_lut_lf.Map(max_size, sizeof(glm::vec4));
+    u8* buffer = nullptr; u32 offset = 0; bool invalidate = false;
+    std::tie(buffer, offset, invalidate) = texture_buffer_lut_lf.Map(max_size, sizeof(glm::vec4));
 
     // Sync the lighting luts
     if (uniform_block_data.lighting_lut_dirty_any || invalidate) {
@@ -1523,7 +1494,8 @@ void RasterizerVulkan::SyncAndUploadLUTs() {
     }
 
     std::size_t bytes_used = 0;
-    auto [buffer, offset, invalidate] = texture_buffer_lut.Map(max_size, sizeof(glm::vec4));
+    u8* buffer = nullptr; u32 offset = 0; bool invalidate = false;
+    std::tie(buffer, offset, invalidate) = texture_buffer_lut.Map(max_size, sizeof(glm::vec4));
 
     // helper function for SyncProcTexNoiseLUT/ColorMap/AlphaMap
     auto SyncProcTexValueLUT = [this, buffer, offset, invalidate, &bytes_used](
@@ -1619,8 +1591,10 @@ void RasterizerVulkan::UploadUniforms(bool accelerate_draw) {
         return;
 
     std::size_t uniform_size = uniform_size_aligned_vs + uniform_size_aligned_fs;
+
     std::size_t used_bytes = 0;
-    auto [uniforms, offset, invalidate] = uniform_buffer.Map(uniform_size, uniform_buffer_alignment);
+    u8* uniforms = nullptr; u32 offset = 0; bool invalidate = false;
+    std::tie(uniforms, offset, invalidate) = uniform_buffer.Map(uniform_size, uniform_buffer_alignment);
 
     auto& state = VulkanState::Get();
 

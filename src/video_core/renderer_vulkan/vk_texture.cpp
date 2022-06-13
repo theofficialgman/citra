@@ -76,8 +76,7 @@ void VKTexture::Create(const Info& create_info) {
         flags, info.type, info.format,
         { info.width, info.height, 1 }, info.levels, info.layers,
         static_cast<vk::SampleCountFlagBits>(info.multisamples),
-        vk::ImageTiling::eOptimal,
-        vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled
+        vk::ImageTiling::eOptimal, info.usage
     };
 
     texture = device.createImage(image_info);
@@ -145,7 +144,12 @@ void VKTexture::Destroy() {
     }
 }
 
-void VKTexture::Transition(vk::ImageLayout new_layout) {
+void VKTexture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout) {
+    Transition(cmdbuffer, new_layout, 0, info.levels, 0, info.layers);
+}
+
+void VKTexture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout,
+                           u32 start_level, u32 level_count, u32 start_layer, u32 layer_count) {
     if (new_layout == layout) {
         return;
     }
@@ -222,11 +226,10 @@ void VKTexture::Transition(vk::ImageLayout new_layout) {
         source.layout, dst.layout,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
         texture,
-        vk::ImageSubresourceRange{aspect, 0, 1, 0, 1}
+        vk::ImageSubresourceRange{aspect, start_level, level_count, start_layer, layer_count}
     };
 
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
-    command_buffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+    cmdbuffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
     layout = new_layout;
 }
 
@@ -241,7 +244,7 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     }
 
     // Copy pixels to staging buffer
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
     std::memcpy(buffer, pixels.data(), pixels.size());
 
     vk::BufferImageCopy copy_region{
@@ -251,19 +254,15 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
         {region.extent.width, region.extent.height, 1}
     };
 
-    // Exit rendering for transfer operations
-    auto& state = VulkanState::Get();
-    state.EndRendering();
-
     // Transition image to transfer format
-    Transition(vk::ImageLayout::eTransferDstOptimal);
+    Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
 
-    command_buffer.copyBufferToImage(g_vk_task_scheduler->GetStaging().GetBuffer(),
+    cmdbuffer.copyBufferToImage(g_vk_task_scheduler->GetStaging().GetBuffer(),
                                      texture, vk::ImageLayout::eTransferDstOptimal,
                                      copy_region);
 
     // Prepare image for shader reads
-    Transition(vk::ImageLayout::eShaderReadOnlyOptimal);
+    Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
@@ -273,7 +272,13 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
         LOG_ERROR(Render_Vulkan, "Cannot download texture without staging buffer!");
     }
 
-    auto command_buffer = g_vk_task_scheduler->GetCommandBuffer();
+    // Downloads can happen after the image has been rendered to or changed by blitting
+    // so we must perform it in the render command buffer. However there is no guarantee
+    // of the rendering context so terminate the current renderpass to be sure
+    auto& state = VulkanState::Get();
+    state.EndRendering();
+
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
 
     // Copy pixels to staging buffer
     vk::BufferImageCopy download_region{
@@ -292,15 +297,11 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
         std::memcpy(buffer, memory.data(), memory.size());
     }
 
-    // Exit rendering for transfer operations
-    auto& state = VulkanState::Get();
-    state.EndRendering();
-
     // Transition image to transfer format
     auto old_layout = GetLayout();
-    Transition(vk::ImageLayout::eTransferSrcOptimal);
+    Transition(cmdbuffer, vk::ImageLayout::eTransferSrcOptimal);
 
-    command_buffer.copyImageToBuffer(texture, vk::ImageLayout::eTransferSrcOptimal,
+    cmdbuffer.copyImageToBuffer(texture, vk::ImageLayout::eTransferSrcOptimal,
                                      g_vk_task_scheduler->GetStaging().GetBuffer(),
                                      download_region);
 
@@ -310,7 +311,7 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
     std::memcpy(memory.data(), buffer, memory.size_bytes());
 
     // Restore layout
-    Transition(old_layout);
+    Transition(cmdbuffer, old_layout);
 }
 
 std::vector<u8> VKTexture::RGBToRGBA(std::span<u8> data) {
