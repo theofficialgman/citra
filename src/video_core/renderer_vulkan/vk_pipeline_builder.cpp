@@ -224,7 +224,6 @@ void PipelineBuilder::SetDynamicStates(const std::span<vk::DynamicState> states)
     // Copy the state data
     std::copy(states.begin(), states.end(), dynamic_states.begin());
     dynamic_info.dynamicStateCount = states.size();
-
     dynamic_info.pDynamicStates = dynamic_states.data();
     pipeline_info.pDynamicState = &dynamic_info;
     return;

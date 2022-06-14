@@ -713,7 +713,7 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<VKInstance>();
     g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
-    g_vk_instace->Create(instance, physical_devices[0], surface, true);
+    g_vk_instace->Create(instance, physical_devices[1], surface, true);
     g_vk_task_scheduler->Create();
 
     auto& layout = render_window.GetFramebufferLayout();

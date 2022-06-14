@@ -294,7 +294,8 @@ static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
 }
 
 // Allocate an uninitialized texture of appropriate size and format for the surface
-VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 width, u32 height) {
+VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(SurfaceType type, vk::Format format,
+                                                        u32 width, u32 height) {
     // First check if the texture can be recycled
     auto recycled_tex = host_texture_recycler.find({format, width, height});
     if (recycled_tex != host_texture_recycler.end()) {
@@ -302,6 +303,28 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
         host_texture_recycler.erase(recycled_tex);
         return texture;
     }
+
+    auto GetUsage = [](SurfaceType type) {
+        auto usage = vk::ImageUsageFlagBits::eSampled |
+                vk::ImageUsageFlagBits::eTransferDst |
+                vk::ImageUsageFlagBits::eTransferSrc;
+
+        switch (type) {
+        case SurfaceType::Color:
+        case SurfaceType::Fill:
+        case SurfaceType::Texture:
+            usage |= vk::ImageUsageFlagBits::eColorAttachment;
+            break;
+        case SurfaceType::Depth:
+        case SurfaceType::DepthStencil:
+            usage |= vk::ImageUsageFlagBits::eDepthStencilAttachment;
+            break;
+        default:
+            break;
+        }
+
+        return usage;
+    };
 
     // Otherwise create a brand new texture
     u32 levels = std::log2(std::max(width, height)) + 1;
@@ -311,8 +334,7 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(vk::Format format, u32 w
         .format = format,
         .type = vk::ImageType::e2D,
         .view_type = vk::ImageViewType::e2D,
-        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
-                 vk::ImageUsageFlagBits::eTransferSrc,
+        .usage = GetUsage(type),
         .levels = levels
     };
 
@@ -1330,7 +1352,7 @@ Surface RasterizerCacheVulkan::CreateSurface(const SurfaceParams& params) {
     static_cast<SurfaceParams&>(*surface) = params;
 
     surface->invalid_regions.insert(surface->GetInterval());
-    surface->texture = AllocateSurfaceTexture(GetFormatTuple(surface->pixel_format),
+    surface->texture = AllocateSurfaceTexture(params.type, GetFormatTuple(surface->pixel_format),
                                               surface->GetScaledWidth(), surface->GetScaledHeight());
     return surface;
 }

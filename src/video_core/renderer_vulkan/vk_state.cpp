@@ -284,8 +284,7 @@ void VulkanState::SetFrontFace(vk::FrontFace face) {
     }
 }
 
-void VulkanState::SetColorMask(bool red, bool green, bool blue, bool alpha) {
-    auto mask = static_cast<vk::ColorComponentFlags>(red | (green << 1) | (blue << 2) | (alpha << 3));
+void VulkanState::SetColorMask(vk::ColorComponentFlags mask) {
     render_pipeline_key.blend_config.colorWriteMask = mask;
 }
 
@@ -412,7 +411,7 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
             auto code = GenerateFragmentShader(render_pipeline_key.fragment_config);
             auto module = CompileShader(code, vk::ShaderStageFlagBits::eFragment);
             render_fragment_shaders.emplace(render_pipeline_key.fragment_config, vk::UniqueShaderModule{module});
-            render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, shader->second.get());
+            render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, module);
         }
 
         // Update pipeline builder
@@ -431,6 +430,9 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
     // Bind the render pipeline
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
+
+    // Force set all dynamic state for new pipeline
+    dirty_flags.set();
 
     ApplyCommonState(true);
 
@@ -578,12 +580,13 @@ void VulkanState::ConfigureRenderPipeline() {
     // Enable every required dynamic state
     std::array dynamic_states{
         vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth,
-        vk::DynamicState::eDepthTestEnable, vk::DynamicState::eColorWriteEnableEXT,
-        vk::DynamicState::eStencilTestEnable, vk::DynamicState::eStencilOp,
+        vk::DynamicState::eDepthTestEnable, vk::DynamicState::eStencilTestEnable,
+        vk::DynamicState::eStencilOp,
         vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
+        vk::DynamicState::eStencilReference, vk::DynamicState::eDepthWriteEnable,
         vk::DynamicState::eCullMode, vk::DynamicState::eBlendConstants,
         vk::DynamicState::eViewport, vk::DynamicState::eScissor,
-        vk::DynamicState::eLogicOpEXT, vk::DynamicState::eFrontFace
+        vk::DynamicState::eFrontFace
     };
 
     render_pipeline_builder.SetDynamicStates(dynamic_states);

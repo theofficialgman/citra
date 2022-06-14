@@ -61,8 +61,13 @@ public:
     vk::PhysicalDeviceVulkan12Features vk12_features{};
     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT dynamic_state_features{};
     vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT dynamic_state2_features{};
+    vk::PhysicalDeviceColorWriteEnableFeaturesEXT color_write_features{};
 };
 
 extern std::unique_ptr<VKInstance> g_vk_instace;
 
 } // namespace Vulkan
+
+#if defined(VK_EXT_color_write_enable)
+extern PFN_vkCmdSetColorWriteEnableEXT ptr_vkCmdSetColorWriteEnableEXT;
+#endif /* defined(VK_EXT_color_write_enable) */

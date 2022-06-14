@@ -12,6 +12,9 @@ namespace Vulkan {
 
 static int BytesPerPixel(vk::Format format) {
     switch (format) {
+    case vk::Format::eD32SfloatS8Uint:
+        return 5;
+    case vk::Format::eD32Sfloat:
     case vk::Format::eB8G8R8A8Unorm:
     case vk::Format::eR8G8B8A8Uint:
     case vk::Format::eR8G8B8A8Srgb:
@@ -61,6 +64,12 @@ void VKTexture::Create(const Info& create_info) {
     if (info.format == vk::Format::eR8G8B8Srgb) {
         is_rgb = true;
         info.format = vk::Format::eR8G8B8A8Srgb;
+    }
+
+    is_d24s8 = false;
+    if (info.format == vk::Format::eD24UnormS8Uint) {
+        is_d24s8 = true;
+        info.format = vk::Format::eD32SfloatS8Uint;
     }
 
     // Create the texture
@@ -244,7 +253,24 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     }
 
     // Copy pixels to staging buffer
-    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
+    auto& state = VulkanState::Get();
+    state.EndRendering();
+
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+
+    // Automatically convert RGB to RGBA
+    if (is_rgb) {
+        auto data = RGBToRGBA(pixels);
+        std::memcpy(buffer, data.data(), data.size());
+    }
+    else if (is_d24s8) {
+        auto data = D24S8ToD32S8(pixels);
+        std::memcpy(buffer, data.data(), data.size());
+    }
+    else {
+        std::memcpy(buffer, pixels.data(), pixels.size());
+    }
+
     std::memcpy(buffer, pixels.data(), pixels.size());
 
     vk::BufferImageCopy copy_region{
@@ -266,15 +292,13 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
 }
 
 void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
-    u32 request_size = is_rgb ? (memory.size() / 3) * 4 : memory.size();
+    u32 request_size = is_rgb ? (memory.size() / 3) * 4 :
+                       (is_d24s8 ? (memory.size() / 4) * 5 : memory.size());
     auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
     if (!buffer) {
         LOG_ERROR(Render_Vulkan, "Cannot download texture without staging buffer!");
     }
 
-    // Downloads can happen after the image has been rendered to or changed by blitting
-    // so we must perform it in the render command buffer. However there is no guarantee
-    // of the rendering context so terminate the current renderpass to be sure
     auto& state = VulkanState::Get();
     state.EndRendering();
 
@@ -290,7 +314,11 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
 
     // Automatically convert RGB to RGBA
     if (is_rgb) {
-        auto data = RGBToRGBA(memory);
+        auto data = RGBAToRGB(memory);
+        std::memcpy(buffer, data.data(), data.size());
+    }
+    else if (is_d24s8) {
+        auto data = D32S8ToD24S8(memory);
         std::memcpy(buffer, data.data(), data.size());
     }
     else {
@@ -318,16 +346,62 @@ std::vector<u8> VKTexture::RGBToRGBA(std::span<u8> data) {
     ASSERT(data.size() % 3 == 0);
 
     u32 new_size = (data.size() / 3) * 4;
-    std::vector<u8> rgba(new_size);
+    std::vector<u8> rgba(new_size, 255);
 
-    u32 dst_pos{0};
-    for (int i = 0; i < data.size(); i += 3) {
+    u32 dst_pos = 0;
+    for (u32 i = 0; i < data.size(); i += 3) {
         std::memcpy(rgba.data() + dst_pos, data.data() + i, 3);
-        rgba[dst_pos + 3] = 255u;
         dst_pos += 4;
     }
 
     return rgba;
+}
+
+std::vector<u8> VKTexture::D24S8ToD32S8(std::span<u8> data) {
+    ASSERT(data.size() % 4 == 0);
+
+    u32 new_size = (data.size() / 4) * 8;
+    std::vector<u8> d32s8(new_size, 0);
+
+    u32 dst_pos = 0;
+    for (u32 i = 0; i < data.size(); i += 4) {
+        std::memcpy(d32s8.data() + dst_pos, data.data() + i, 3);
+        d32s8[dst_pos + 4] = data[i + 3];
+        dst_pos += 8;
+    }
+
+    return d32s8;
+}
+
+std::vector<u8> VKTexture::RGBAToRGB(std::span<u8> data) {
+    ASSERT(data.size() % 4 == 0);
+
+    u32 new_size = (data.size() / 4) * 3;
+    std::vector<u8> rgb(new_size);
+
+    u32 dst_pos = 0;
+    for (u32 i = 0; i < data.size(); i += 4) {
+        std::memcpy(rgb.data() + dst_pos, data.data() + i, 3);
+        dst_pos += 3;
+    }
+
+    return rgb;
+}
+
+std::vector<u8> VKTexture::D32S8ToD24S8(std::span<u8> data) {
+    ASSERT(data.size() % 8 == 0);
+
+    u32 new_size = (data.size() / 8) * 4;
+    std::vector<u8> d24s8(new_size);
+
+    u32 dst_pos = 0;
+    for (u32 i = 0; i < data.size(); i += 5) {
+        std::memcpy(d24s8.data() + dst_pos, data.data() + i, 3);
+        d24s8[dst_pos + 3] = data[i + 4];
+        dst_pos += 4;
+    }
+
+    return d24s8;
 }
 
 } // namespace Vulkan

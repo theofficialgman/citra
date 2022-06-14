@@ -48,14 +48,14 @@ void EmuThread::run() {
     MicroProfileOnThreadCreate("EmuThread");
     Frontend::ScopeAcquireContext scope(core_context);
 
-    emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
+    /*emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
 
     Core::System::GetInstance().Renderer().Rasterizer()->LoadDiskResources(
         stop_run, [this](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
             emit LoadProgress(stage, value, total);
         });
 
-    emit LoadProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);
+    emit LoadProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);*/
 
     if (Core::System::GetInstance().frame_limiter.IsFrameAdvancing()) {
         // Usually the loading screen is hidden after the first frame is drawn. In this case
@@ -488,15 +488,15 @@ bool GRenderWindow::InitRenderTarget() {
         break;
     }
 
-    // Update the Window System information with the new render target
-    window_info = GetWindowSystemInfo(child_widget->windowHandle());
-
     child_widget->resize(Core::kScreenTopWidth, Core::kScreenTopHeight + Core::kScreenBottomHeight);
     layout()->addWidget(child_widget);
     // Reset minimum required size to avoid resizing issues on the main window after restarting.
     setMinimumSize(1, 1);
 
     resize(Core::kScreenTopWidth, Core::kScreenTopHeight + Core::kScreenBottomHeight);
+
+    // Update the Window System information with the new render target
+    window_info = GetWindowSystemInfo(child_widget->windowHandle());
 
     OnMinimalClientAreaChangeRequest(GetActiveConfig().min_client_area_size);
     OnFramebufferSizeChanged();

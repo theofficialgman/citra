@@ -7,6 +7,10 @@
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 
+#if defined(VK_EXT_color_write_enable)
+PFN_vkCmdSetColorWriteEnableEXT ptr_vkCmdSetColorWriteEnableEXT;
+#endif /* defined(VK_EXT_color_write_enable) */
+
 namespace Vulkan {
 
 std::unique_ptr<VKInstance> g_vk_instace;
@@ -96,6 +100,10 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     // Create logical device
     device = physical_device.createDeviceUnique(device_info);
 
+#if defined(VK_EXT_color_write_enable)
+    ptr_vkCmdSetColorWriteEnableEXT = reinterpret_cast<PFN_vkCmdSetColorWriteEnableEXT>(device->getProcAddr("vkCmdSetColorWriteEnableEXT"));
+#endif /* defined(VK_EXT_color_write_enable) */
+
     // Grab the graphics and present queues.
     graphics_queue = device->getQueue(graphics_queue_family_index, 0);
     present_queue = device->getQueue(present_queue_family_index, 0);
@@ -131,18 +139,19 @@ bool VKInstance::FindFeatures() {
     dynamic_state_features.extendedDynamicState = true;
     dynamic_state2_features.extendedDynamicState2 = true;
     dynamic_state2_features.extendedDynamicState2LogicOp = true;
+    color_write_features.colorWriteEnable = true;
 
     // Include features in device creation
     vk12_features.pNext = &vk13_features;
     vk13_features.pNext = &dynamic_state_features;
     dynamic_state_features.pNext = &dynamic_state2_features;
+    dynamic_state2_features.pNext = &color_write_features;
     features = vk::PhysicalDeviceFeatures2{vk_features, &vk12_features};
 
     return true;
 }
 
-bool VKInstance::FindExtensions()
-{
+bool VKInstance::FindExtensions() {
     auto available = physical_device.enumerateDeviceExtensionProperties();
     if (available.empty()) {
         LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
@@ -177,7 +186,8 @@ bool VKInstance::FindExtensions()
     if (!AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true) ||
         !AddExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, true) ||
         !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, true) ||
-        !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, true)) {
+        !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, true) ||
+        !AddExtension(VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME, true)) {
         return false;
     }
 
@@ -185,3 +195,7 @@ bool VKInstance::FindExtensions()
 }
 
 } // namespace Vulkan
+
+void vkCmdSetColorWriteEnableEXT(VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkBool32* pColorWriteEnables) {
+    ptr_vkCmdSetColorWriteEnableEXT(commandBuffer, attachmentCount, pColorWriteEnables);
+}

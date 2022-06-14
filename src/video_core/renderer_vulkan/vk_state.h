@@ -83,7 +83,7 @@ public:
                         vk::CompareOp compare, u32 ref);
     void SetDepthWrite(bool enable);
     void SetDepthTest(bool enable, vk::CompareOp compare);
-    void SetColorMask(bool red, bool green, bool blue, bool alpha);
+    void SetColorMask(vk::ColorComponentFlags mask);
     void SetBlendEnable(bool enable);
     void SetBlendCostants(float red, float green, float blue, float alpha);
     void SetBlendOp(vk::BlendOp rgb_op, vk::BlendOp alpha_op, vk::BlendFactor src_color, vk::BlendFactor dst_color,
@@ -162,7 +162,7 @@ private:
         ColorWrite,
         CullMode,
         BlendConstants,
-        FrontFace
+        FrontFace,
     };
 
     std::bitset<16> dirty_flags;

@@ -62,6 +62,10 @@ public:
 
 private:
     std::vector<u8> RGBToRGBA(std::span<u8> data);
+    std::vector<u8> D24S8ToD32S8(std::span<u8> data);
+
+    std::vector<u8> RGBAToRGB(std::span<u8> data);
+    std::vector<u8> D32S8ToD24S8(std::span<u8> data);
 
 private:
     VKTexture::Info info{};
@@ -72,7 +76,7 @@ private:
     vk::DeviceMemory memory;
     u32 image_size{};
     bool adopted{false};
-    bool is_rgb{false};
+    bool is_rgb{false}, is_d24s8{false};
 };
 
 } // namespace Vulkan

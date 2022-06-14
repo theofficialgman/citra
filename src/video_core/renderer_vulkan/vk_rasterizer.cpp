@@ -69,7 +69,8 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     VKBuffer::Info texel_buffer_info = {
         .size = TEXTURE_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eStorageTexelBuffer,
+        .usage = vk::BufferUsageFlagBits::eStorageTexelBuffer |
+        vk::BufferUsageFlagBits::eTransferDst,
     };
 
     texel_buffer_info.view_formats[0] = vk::Format::eR32G32Sfloat;
@@ -82,7 +83,8 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     VKBuffer::Info uniform_info = {
         .size = UNIFORM_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eUniformBuffer
+        .usage = vk::BufferUsageFlagBits::eUniformBuffer |
+        vk::BufferUsageFlagBits::eTransferDst
     };
 
     uniform_buffer.Create(uniform_info);
@@ -99,13 +101,15 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     VKBuffer::Info vertex_info = {
         .size = VERTEX_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eVertexBuffer
+        .usage = vk::BufferUsageFlagBits::eVertexBuffer |
+                 vk::BufferUsageFlagBits::eTransferDst
     };
 
     VKBuffer::Info index_info = {
         .size = INDEX_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eIndexBuffer
+        .usage = vk::BufferUsageFlagBits::eIndexBuffer |
+        vk::BufferUsageFlagBits::eTransferDst
     };
 
     vertex_buffer.Create(vertex_info);
@@ -388,6 +392,9 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         res_cache.InvalidateRegion(boost::icl::first(interval), boost::icl::length(interval),
                                    depth_surface);
     }
+
+    state.EndRendering();
+    g_vk_task_scheduler->Submit();
 
     return true;
 }
@@ -1240,11 +1247,18 @@ void RasterizerVulkan::SyncColorWriteMask() {
         return regs.framebuffer.framebuffer.allow_color_write != 0 && value != 0;
     };
 
+    vk::ColorComponentFlags mask;
+    if (WriteEnabled(regs.framebuffer.output_merger.red_enable))
+        mask |= vk::ColorComponentFlagBits::eR;
+    if (WriteEnabled(regs.framebuffer.output_merger.green_enable))
+        mask |= vk::ColorComponentFlagBits::eG;
+    if (WriteEnabled(regs.framebuffer.output_merger.blue_enable))
+        mask |= vk::ColorComponentFlagBits::eB;
+    if (WriteEnabled(regs.framebuffer.output_merger.alpha_enable))
+        mask |= vk::ColorComponentFlagBits::eA;
+
     auto& state = VulkanState::Get();
-    state.SetColorMask(WriteEnabled(regs.framebuffer.output_merger.red_enable),
-                       WriteEnabled(regs.framebuffer.output_merger.green_enable),
-                       WriteEnabled(regs.framebuffer.output_merger.blue_enable),
-                       WriteEnabled(regs.framebuffer.output_merger.alpha_enable));
+    state.SetColorMask(mask);
 }
 
 void RasterizerVulkan::SyncStencilWriteMask() {

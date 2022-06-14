@@ -73,7 +73,7 @@ public:
     void SetRenderingFormats(vk::Format color, vk::Format depth_stencil = vk::Format::eUndefined);
 
 private:
-    static constexpr u32 MAX_DYNAMIC_STATES = 14;
+    static constexpr u32 MAX_DYNAMIC_STATES = 20;
     static constexpr u32 MAX_SHADER_STAGES = 3;
     static constexpr u32 MAX_VERTEX_BUFFERS = 8;
     static constexpr u32 MAX_VERTEX_ATTRIBUTES = 16;

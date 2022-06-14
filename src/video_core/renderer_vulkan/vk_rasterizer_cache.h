@@ -342,7 +342,8 @@ private:
     std::recursive_mutex mutex;
 
 public:
-    VKTexture AllocateSurfaceTexture(vk::Format format, u32 width, u32 height);
+    VKTexture AllocateSurfaceTexture(SurfaceParams::SurfaceType type, vk::Format format,
+                                     u32 width, u32 height);
     std::unique_ptr<FormatReinterpreterVulkan> format_reinterpreter;
 };
 

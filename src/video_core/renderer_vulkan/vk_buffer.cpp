@@ -138,24 +138,26 @@ std::tuple<u8*, u32, bool> StreamBuffer::Map(u32 size, u32 alignment) {
 
 void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
                           vk::PipelineStageFlags stage_to_block) {
-    mapped_chunk.size = size;
+    if (size > 0) {
+        mapped_chunk.size = size;
 
-    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
-    auto& staging = g_vk_task_scheduler->GetStaging();
-    cmdbuffer.copyBuffer(staging.GetBuffer(), buffer, mapped_chunk);
+        auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
+        auto& staging = g_vk_task_scheduler->GetStaging();
+        cmdbuffer.copyBuffer(staging.GetBuffer(), buffer, mapped_chunk);
 
-    vk::BufferMemoryBarrier barrier{
-        vk::AccessFlagBits::eTransferWrite, access_to_block,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        buffer, mapped_chunk.srcOffset, mapped_chunk.size
-    };
+        vk::BufferMemoryBarrier barrier{
+            vk::AccessFlagBits::eTransferWrite, access_to_block,
+            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+            buffer, mapped_chunk.srcOffset, mapped_chunk.size
+        };
 
-    // Add a pipeline barrier for the region modified
-    cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_to_block,
-                              vk::DependencyFlagBits::eByRegion,
-                              0, nullptr, 1, &barrier, 0, nullptr);
+        // Add a pipeline barrier for the region modified
+        cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_to_block,
+                                vk::DependencyFlagBits::eByRegion,
+                                0, nullptr, 1, &barrier, 0, nullptr);
 
-    buffer_pos += size;
+        buffer_pos += size;
+    }
 }
 
 }
