@@ -44,7 +44,7 @@ public:
     /// Return a pointer to the mapped memory if the buffer is host mapped
     u8* GetHostPointer() const { return reinterpret_cast<u8*>(host_ptr); }
     const vk::BufferView& GetView(u32 i = 0) const { return views[i]; }
-    vk::Buffer GetBuffer() const { return buffer; }
+    const vk::Buffer& GetBuffer() const { return buffer; }
     u32 GetSize() const { return buffer_info.size; }
 
     void Upload(std::span<const std::byte> data, u32 offset,

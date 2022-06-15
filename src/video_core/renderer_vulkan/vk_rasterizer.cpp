@@ -69,7 +69,7 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     VKBuffer::Info texel_buffer_info = {
         .size = TEXTURE_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eStorageTexelBuffer |
+        .usage = vk::BufferUsageFlagBits::eUniformTexelBuffer |
         vk::BufferUsageFlagBits::eTransferDst,
     };
 
@@ -116,12 +116,17 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     index_buffer.Create(index_info);
 
     // Set clear texture color
-    state.SetPlaceholderColor(0, 0, 0, 255);
+    state.SetPlaceholderColor(255, 0, 0, 255);
 
     SyncEntireState();
 }
 
 RasterizerVulkan::~RasterizerVulkan() = default;
+
+void RasterizerVulkan::LoadDiskResources(const std::atomic_bool& stop_loading,
+                       const VideoCore::DiskResourceLoadCallback& callback) {
+
+}
 
 void RasterizerVulkan::SyncEntireState() {
     // Sync fixed function Vulkan state
@@ -394,7 +399,13 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     }
 
     state.EndRendering();
+    color_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+    depth_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+
     g_vk_task_scheduler->Submit();
+
+    auto gpu_tick = g_vk_task_scheduler->GetGPUTick();
+    auto cpu_tick = g_vk_task_scheduler->GetCPUTick();
 
     return true;
 }

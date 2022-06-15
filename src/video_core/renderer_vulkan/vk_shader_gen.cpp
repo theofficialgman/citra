@@ -1677,7 +1677,7 @@ vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBit
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
     options.SetOptimizationLevel(shaderc_optimization_level_performance);
-    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
+    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
     options.SetWarningsAsErrors();
     options.SetSourceLanguage(shaderc_source_language_glsl);
 

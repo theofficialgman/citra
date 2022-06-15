@@ -245,7 +245,7 @@ void PipelineBuilder::SetRenderingFormats(vk::Format color, vk::Format depth_ste
     };
 
     const u32 color_attachment_count = color == vk::Format::eUndefined ? 0 : 1;
-    rendering_info = vk::PipelineRenderingCreateInfoKHR{0, color_attachment_count, &color_format, depth_stencil_format,
+    rendering_info = vk::PipelineRenderingCreateInfo{0, color_attachment_count, &color_format, depth_stencil_format,
                         IsStencil(depth_stencil) ? depth_stencil : vk::Format::eUndefined};
     pipeline_info.pNext = &rendering_info;
 }

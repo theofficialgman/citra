@@ -185,10 +185,12 @@ void RendererVulkan::PrepareRendertarget() {
         if (color_fill.is_enabled) {
             LoadColorToActiveGLTexture(color_fill.color_r, color_fill.color_g, color_fill.color_b, screen_infos[i]);
         } else {
-            auto extent = screen_infos[i].texture.GetArea().extent;
-            auto format = screen_infos[i].format;
-            if (extent.width != framebuffer.width || extent.height != framebuffer.height ||
-                format != framebuffer.color_format) {
+            auto [width, height] = screen_infos[i].texture.GetArea().extent;
+            u32 fwidth = framebuffer.width;
+            u32 fheight = framebuffer.height;
+
+            if (width != fwidth || height != fheight ||
+                    screen_infos[i].format != framebuffer.color_format) {
                 // Reallocate texture if the framebuffer size has changed.
                 // This is expected to not happen very often and hence should not be a
                 // performance problem.
@@ -271,6 +273,7 @@ void RendererVulkan::LoadColorToActiveGLTexture(u8 color_r, u8 color_g, u8 color
  */
 void RendererVulkan::CreateVulkanObjects() {
     clear_color = vk::ClearColorValue{std::array<float, 4>{Settings::values.bg_red, Settings::values.bg_green, Settings::values.bg_blue, 0.0f}};
+    clear_color = vk::ClearColorValue(std::array<float, 4>{1.0f, 0.0f, 0.0, 1.0f});
 
     //filter_sampler.Create();
     //ReloadSampler();
@@ -286,7 +289,7 @@ void RendererVulkan::CreateVulkanObjects() {
 }
 
 void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer) {
-    GPU::Regs::PixelFormat format = framebuffer.color_format;
+    screen.format = framebuffer.color_format;
 
     VKTexture::Info texture_info{
         .width = framebuffer.width,
@@ -298,7 +301,7 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
                  vk::ImageUsageFlagBits::eSampled
     };
 
-    switch (format) {
+    switch (screen.format) {
     case GPU::Regs::PixelFormat::RGBA8:
         texture_info.format = vk::Format::eR8G8B8A8Srgb;
         break;
@@ -371,7 +374,9 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
     state.ApplyPresentState();
 
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-    cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
+    vk::DeviceSize offset = 0;
+
+    cmdbuffer.bindVertexBuffers(0, 1, &vertex_buffer.GetBuffer(), &offset);
     cmdbuffer.draw(4, 1, 0, 0);
 }
 
@@ -716,9 +721,9 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     g_vk_instace->Create(instance, physical_devices[1], surface, true);
     g_vk_task_scheduler->Create();
 
-    auto& layout = render_window.GetFramebufferLayout();
+    //auto& layout = render_window.GetFramebufferLayout();
     swapchain = std::make_shared<VKSwapChain>(surface);
-    swapchain->Create(layout.width, layout.height, false);
+    //swapchain->Create(layout.width, layout.height, false);
 
     // Create Vulkan state
     VulkanState::Create(swapchain);

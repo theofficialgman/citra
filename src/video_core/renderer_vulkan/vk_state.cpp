@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <algorithm>
 #include <span>
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
@@ -12,6 +13,17 @@
 namespace Vulkan {
 
 std::unique_ptr<VulkanState> s_vulkan_state{};
+
+auto IsStencil = [](vk::Format format) -> bool {
+    switch (format) {
+    case vk::Format::eD16UnormS8Uint:
+    case vk::Format::eD24UnormS8Uint:
+    case vk::Format::eD32SfloatS8Uint:
+        return true;
+    default:
+        return false;
+    };
+};
 
 void DescriptorUpdater::Update() {
     assert(update_count > 0);
@@ -151,7 +163,7 @@ void VulkanState::SetTexture(u32 binding, const VKTexture& image) {
 void VulkanState::SetTexelBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer, u32 view_index) {
     auto& set = descriptor_sets[2];
     updater.PushBufferUpdate(set, binding,
-            vk::DescriptorType::eStorageTexelBuffer,
+            vk::DescriptorType::eUniformTexelBuffer,
             offset, size, buffer.GetBuffer(),
             buffer.GetView(view_index));
     descriptors_dirty = true;
@@ -177,18 +189,24 @@ void VulkanState::UnbindTexture(const VKTexture& image) {
     for (int i = 0; i < 4; i++) {
         if (render_views[i] == image.GetView()) {
             render_views[i] = placeholder.GetView();
+            updater.PushCombinedImageSamplerUpdate(descriptor_sets[1], i,
+                    render_sampler, render_views[i]);
             descriptors_dirty = true;
         }
     }
 
     if (present_view == image.GetView()) {
         present_view = placeholder.GetView();
+        updater.PushCombinedImageSamplerUpdate(descriptor_sets[3], 0,
+                render_sampler, present_view);
         descriptors_dirty = true;
     }
 }
 
 void VulkanState::UnbindTexture(u32 unit) {
     render_views[unit] = placeholder.GetView();
+    updater.PushCombinedImageSamplerUpdate(descriptor_sets[1], unit,
+            render_sampler, render_views[unit]);
     descriptors_dirty = true;
 }
 
@@ -227,13 +245,17 @@ void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> dept
             depth_load_op, depth_store_op, depth_clear
         };
 
-        infos[2] = vk::RenderingAttachmentInfo{
-            image.GetView(), image.GetLayout(), {}, {}, {},
-            stencil_load_op, stencil_store_op, depth_clear
-        };
-
         render_info.pDepthAttachment = &infos[1];
-        render_info.pStencilAttachment = &infos[2];
+
+
+        if (IsStencil(image.GetFormat())) {
+            infos[2] = vk::RenderingAttachmentInfo{
+                image.GetView(), image.GetLayout(), {}, {}, {},
+                stencil_load_op, stencil_store_op, depth_clear
+            };
+
+            render_info.pStencilAttachment = &infos[2];
+        }
     }
 
     if (update_pipeline_formats) {
@@ -363,25 +385,26 @@ void VulkanState::InitDescriptorSets() {
     auto sets = device.allocateDescriptorSets(allocate_info);
 
     // Update them if the previous sets are valid
-    auto result = std::ranges::find_if(descriptor_sets, [](vk::DescriptorSet set) { return bool(set); });
-    if (result != descriptor_sets.end()) {
-        std::array<vk::CopyDescriptorSet, 10> copies{{
-            {descriptor_sets[0], 0, 0, sets[0], 0, 0}, // shader_data
-            {descriptor_sets[0], 1, 0, sets[0], 1, 0}, // pica_uniforms
-            {descriptor_sets[1], 0, 0, sets[1], 0, 0}, // tex0
-            {descriptor_sets[1], 1, 0, sets[1], 1, 0}, // tex1
-            {descriptor_sets[1], 2, 0, sets[1], 2, 0}, // tex2
-            {descriptor_sets[1], 3, 0, sets[1], 3, 0}, // tex_cube
-            {descriptor_sets[2], 0, 0, sets[2], 0, 0}, // texture_buffer_lut_lf
-            {descriptor_sets[2], 1, 0, sets[2], 1, 0}, // texture_buffer_lut_rg
-            {descriptor_sets[2], 2, 0, sets[2], 2, 0}, // texture_buffer_lut_rgba
-            {descriptor_sets[3], 0, 0, sets[3], 0, 0}
-        }};
+    u32 copy_count = 0;
+    std::array<vk::CopyDescriptorSet, 10> copies;
 
-        device.updateDescriptorSets({}, copies);
+    // Copy only valid descriptors
+    std::array<u32, 4> binding_count{2, 4, 3, 1};
+    for (int i = 0; i < descriptor_sets.size(); i++) {
+        if (descriptor_sets[i]) {
+            for (u32 binding = 0; binding < binding_count[i]; binding++) {
+                copies[copy_count++] = {descriptor_sets[i], binding, 0, sets[i], binding, 0, 1};
+            }
+        }
     }
 
-    std::copy_n(sets.begin(), 4, descriptor_sets.begin());
+    if (copy_count < 10) {
+        // Some descriptors weren't copied and thus need manual updating
+        descriptors_dirty = true;
+    }
+
+    device.updateDescriptorSets(0, nullptr, copy_count, copies.data());
+    std::copy_n(sets.begin(), descriptor_sets.size(), descriptor_sets.begin());
 }
 
 void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
@@ -533,9 +556,9 @@ void VulkanState::BuildDescriptorLayouts() {
         {3, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}, // tex_cube
     }};
     std::array<vk::DescriptorSetLayoutBinding, 3> lut_set{{
-        {0, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment}, // texture_buffer_lut_lf
-        {1, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment}, // texture_buffer_lut_rg
-        {2, vk::DescriptorType::eStorageTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment} // texture_buffer_lut_rgba
+        {0, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment}, // texture_buffer_lut_lf
+        {1, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment}, // texture_buffer_lut_rg
+        {2, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment} // texture_buffer_lut_rgba
     }};
     std::array<vk::DescriptorSetLayoutBinding, 1> present_set{{
        {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}
@@ -579,7 +602,7 @@ void VulkanState::ConfigureRenderPipeline() {
 
     // Enable every required dynamic state
     std::array dynamic_states{
-        vk::DynamicState::eDepthCompareOp, vk::DynamicState::eLineWidth,
+        vk::DynamicState::eDepthCompareOp,
         vk::DynamicState::eDepthTestEnable, vk::DynamicState::eStencilTestEnable,
         vk::DynamicState::eStencilOp,
         vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
@@ -614,7 +637,7 @@ void VulkanState::ConfigurePresentPipeline() {
     present_pipeline_builder.SetPrimitiveTopology(vk::PrimitiveTopology::eTriangleStrip);
     present_pipeline_builder.SetLineWidth(1.0f);
     present_pipeline_builder.SetNoCullRasterizationState();
-    present_pipeline_builder.SetRenderingFormats(swapchain->GetCurrentImage().GetFormat());
+    present_pipeline_builder.SetRenderingFormats(vk::Format::eB8G8R8A8Unorm);
 
     // Set depth, stencil tests and blending
     present_pipeline_builder.SetNoDepthTestState();
@@ -623,7 +646,6 @@ void VulkanState::ConfigurePresentPipeline() {
 
     // Enable every required dynamic state
     std::array dynamic_states{
-        vk::DynamicState::eLineWidth,
         vk::DynamicState::eViewport,
         vk::DynamicState::eScissor,
     };

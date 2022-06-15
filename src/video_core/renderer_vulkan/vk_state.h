@@ -125,8 +125,7 @@ private:
 private:
     // Render targets
     std::shared_ptr<VKSwapChain> swapchain;
-    bool rendering{};
-    VKTexture* color_render_target{}, *depth_render_target{};
+    bool rendering{false};
     vk::ImageView present_view;
     std::array<vk::ImageView, 4> render_views;
     DrawInfo present_data;

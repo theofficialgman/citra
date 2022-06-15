@@ -158,6 +158,9 @@ void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
 
         buffer_pos += size;
     }
+    else {
+        printf("f");
+    }
 }
 
 }

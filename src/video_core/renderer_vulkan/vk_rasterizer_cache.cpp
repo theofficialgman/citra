@@ -7,6 +7,7 @@
 #include <bitset>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <iterator>
 #include <optional>
 #include <unordered_set>
@@ -428,6 +429,7 @@ void RasterizerCacheVulkan::CopySurface(const Surface& src_surface, const Surfac
 MICROPROFILE_DEFINE(Vulkan_SurfaceLoad, "Vulkan", "Surface Load", MP_RGB(128, 192, 64));
 void CachedSurface::LoadGPUBuffer(PAddr load_start, PAddr load_end) {
     ASSERT(type != SurfaceType::Fill);
+    const bool need_swap = (pixel_format == PixelFormat::RGBA8 || pixel_format == PixelFormat::RGB8);
 
     const u8* const texture_src_data = VideoCore::g_memory->GetPhysicalPointer(addr);
     if (texture_src_data == nullptr)
@@ -451,8 +453,27 @@ void CachedSurface::LoadGPUBuffer(PAddr load_start, PAddr load_end) {
 
     if (!is_tiled) {
         ASSERT(type == SurfaceType::Color);
-        std::memcpy(&vk_buffer[start_offset], texture_src_data + start_offset,
+        if (need_swap) {
+            // TODO(liushuyu): check if the byteswap here is 100% correct
+            // cannot fully test this
+            if (pixel_format == PixelFormat::RGBA8) {
+                for (std::size_t i = start_offset; i < load_end - addr; i += 4) {
+                    vk_buffer[i] = texture_src_data[i + 3];
+                    vk_buffer[i + 1] = texture_src_data[i + 2];
+                    vk_buffer[i + 2] = texture_src_data[i + 1];
+                    vk_buffer[i + 3] = texture_src_data[i];
+                }
+            } else if (pixel_format == PixelFormat::RGB8) {
+                for (std::size_t i = start_offset; i < load_end - addr; i += 3) {
+                    vk_buffer[i] = texture_src_data[i + 2];
+                    vk_buffer[i + 1] = texture_src_data[i + 1];
+                    vk_buffer[i + 2] = texture_src_data[i];
+                }
+            }
+        } else {
+            std::memcpy(&vk_buffer[start_offset], texture_src_data + start_offset,
                         load_end - load_start);
+        }
     } else {
         if (type == SurfaceType::Texture) {
             Pica::Texture::TextureInfo tex_info{};

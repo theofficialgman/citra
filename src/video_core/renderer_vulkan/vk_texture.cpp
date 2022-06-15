@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <fstream>
+#include <iostream>
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
@@ -26,6 +28,7 @@ static int BytesPerPixel(vk::Format format) {
     case vk::Format::eR5G6B5UnormPack16:
     case vk::Format::eR5G5B5A1UnormPack16:
     case vk::Format::eR4G4B4A4UnormPack16:
+    case vk::Format::eD16Unorm:
         return 2;
     default:
         UNREACHABLE();
@@ -247,7 +250,9 @@ void VKTexture::OverrideImageLayout(vk::ImageLayout new_layout) {
 }
 
 void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels) {
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(pixels.size_bytes());
+    u32 request_size = is_rgb ? (pixels.size() / 3) * 4 :
+                       (is_d24s8 ? (pixels.size() / 4) * 5 : pixels.size());
+    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
     if (!buffer) {
         LOG_ERROR(Render_Vulkan, "Cannot upload pixels without staging buffer!");
     }
@@ -270,8 +275,6 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     else {
         std::memcpy(buffer, pixels.data(), pixels.size());
     }
-
-    std::memcpy(buffer, pixels.data(), pixels.size());
 
     vk::BufferImageCopy copy_region{
         offset, row_length, region.extent.height,
@@ -342,33 +345,44 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
     Transition(cmdbuffer, old_layout);
 }
 
+template <typename Out, typename In>
+std::span<Out> SpanCast(std::span<In> span) {
+    return std::span(reinterpret_cast<Out*>(span.data()), span.size_bytes() / sizeof(Out));
+}
+
 std::vector<u8> VKTexture::RGBToRGBA(std::span<u8> data) {
     ASSERT(data.size() % 3 == 0);
 
     u32 new_size = (data.size() / 3) * 4;
-    std::vector<u8> rgba(new_size, 255);
+    std::vector<u8> rgba(new_size);
 
     u32 dst_pos = 0;
     for (u32 i = 0; i < data.size(); i += 3) {
         std::memcpy(rgba.data() + dst_pos, data.data() + i, 3);
+        rgba[dst_pos + 3] = 255u;
         dst_pos += 4;
     }
 
     return rgba;
 }
 
-std::vector<u8> VKTexture::D24S8ToD32S8(std::span<u8> data) {
+std::vector<u64> VKTexture::D24S8ToD32S8(std::span<u8> data) {
     ASSERT(data.size() % 4 == 0);
 
-    u32 new_size = (data.size() / 4) * 8;
-    std::vector<u8> d32s8(new_size, 0);
+    std::vector<u64> d32s8;
+    std::span<u32> d24s8 = SpanCast<u32>(data);
 
-    u32 dst_pos = 0;
-    for (u32 i = 0; i < data.size(); i += 4) {
-        std::memcpy(d32s8.data() + dst_pos, data.data() + i, 3);
-        d32s8[dst_pos + 4] = data[i + 3];
-        dst_pos += 8;
-    }
+    d32s8.reserve(data.size() * 2);
+    std::ranges::transform(d24s8, std::back_inserter(d32s8), [](u32 comp) -> u64 {
+        // Convert normalized 24bit depth component to floating point
+        float fdepth = static_cast<float>(comp & 0xFFFFFF) / 0xFFFFFF;
+        u64 result = static_cast<u64>(comp) << 8;
+
+        // Use std::memcpy to avoid the unsafe casting required to preserve the floating
+        // point bits
+        std::memcpy(&result, &fdepth, 4);
+        return result;
+    });
 
     return d32s8;
 }
@@ -388,18 +402,23 @@ std::vector<u8> VKTexture::RGBAToRGB(std::span<u8> data) {
     return rgb;
 }
 
-std::vector<u8> VKTexture::D32S8ToD24S8(std::span<u8> data) {
+std::vector<u32> VKTexture::D32S8ToD24S8(std::span<u8> data) {
     ASSERT(data.size() % 8 == 0);
 
-    u32 new_size = (data.size() / 8) * 4;
-    std::vector<u8> d24s8(new_size);
+    std::vector<u32> d24s8;
+    std::span<u64> d32s8 = SpanCast<u64>(data);
 
-    u32 dst_pos = 0;
-    for (u32 i = 0; i < data.size(); i += 5) {
-        std::memcpy(d24s8.data() + dst_pos, data.data() + i, 3);
-        d24s8[dst_pos + 3] = data[i + 4];
-        dst_pos += 4;
-    }
+    d24s8.reserve(data.size() / 2);
+    std::ranges::transform(d32s8, std::back_inserter(d24s8), [](u64 comp) -> u32 {
+        // Convert floating point to 24bit normalized depth
+        float fdepth = 0.f;
+        u32 depth = comp & 0xFFFFFFFF;
+        std::memcpy(&fdepth, &depth, 4);
+
+        u32 stencil = (comp >> 32) & 0xFF;
+        u64 result = static_cast<u32>(fdepth * 0xFFFFFF) | (stencil << 24);
+        return result;
+    });
 
     return d24s8;
 }

@@ -48,14 +48,15 @@ void EmuThread::run() {
     MicroProfileOnThreadCreate("EmuThread");
     Frontend::ScopeAcquireContext scope(core_context);
 
-    /*emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
+    emit LoadProgress(VideoCore::LoadCallbackStage::Prepare, 0, 0);
 
     Core::System::GetInstance().Renderer().Rasterizer()->LoadDiskResources(
         stop_run, [this](VideoCore::LoadCallbackStage stage, std::size_t value, std::size_t total) {
             emit LoadProgress(stage, value, total);
         });
 
-    emit LoadProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);*/
+    emit LoadProgress(VideoCore::LoadCallbackStage::Complete, 0, 0);
+    emit HideLoadingScreen();
 
     if (Core::System::GetInstance().frame_limiter.IsFrameAdvancing()) {
         // Usually the loading screen is hidden after the first frame is drawn. In this case

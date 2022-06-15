@@ -62,10 +62,10 @@ public:
 
 private:
     std::vector<u8> RGBToRGBA(std::span<u8> data);
-    std::vector<u8> D24S8ToD32S8(std::span<u8> data);
+    std::vector<u64> D24S8ToD32S8(std::span<u8> data);
 
     std::vector<u8> RGBAToRGB(std::span<u8> data);
-    std::vector<u8> D32S8ToD24S8(std::span<u8> data);
+    std::vector<u32> D32S8ToD24S8(std::span<u8> data);
 
 private:
     VKTexture::Info info{};
