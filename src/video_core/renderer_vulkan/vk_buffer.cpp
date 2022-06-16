@@ -133,7 +133,7 @@ std::tuple<u8*, u32, bool> StreamBuffer::Map(u32 size, u32 alignment) {
     auto [staging_ptr, staging_offset] = g_vk_task_scheduler->RequestStaging(size);
     mapped_chunk = vk::BufferCopy{staging_offset, buffer_pos, size};
 
-    return std::make_tuple(staging_ptr + buffer_pos, buffer_pos, invalidate);
+    return std::make_tuple(staging_ptr, buffer_pos, invalidate);
 }
 
 void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
@@ -148,7 +148,7 @@ void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
         vk::BufferMemoryBarrier barrier{
             vk::AccessFlagBits::eTransferWrite, access_to_block,
             VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-            buffer, mapped_chunk.srcOffset, mapped_chunk.size
+            buffer, mapped_chunk.dstOffset, mapped_chunk.size
         };
 
         // Add a pipeline barrier for the region modified
@@ -157,9 +157,6 @@ void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
                                 0, nullptr, 1, &barrier, 0, nullptr);
 
         buffer_pos += size;
-    }
-    else {
-        printf("f");
     }
 }
 

@@ -21,7 +21,7 @@ template <typename T>
 using OptRef = std::optional<std::reference_wrapper<T>>;
 
 struct DrawInfo {
-    glm::mat2x3 modelview;
+    glm::mat4 modelview;
     glm::vec4 i_resolution;
     glm::vec4 o_resolution;
     int layer;
@@ -32,9 +32,11 @@ public:
     DescriptorUpdater() { Reset(); }
     ~DescriptorUpdater() = default;
 
-    void Reset() { update_count = 0; }
+    void Reset();
     void Update();
 
+    void PushTextureArrayUpdate(vk::DescriptorSet, u32 biding, vk::Sampler sampler,
+                                std::span<vk::ImageView> views);
     void PushCombinedImageSamplerUpdate(vk::DescriptorSet set, u32 binding,
                                         vk::Sampler sampler, vk::ImageView view);
     void PushBufferUpdate(vk::DescriptorSet set, u32 binding,
@@ -43,15 +45,16 @@ public:
 
 private:
     static constexpr u32 MAX_DESCRIPTORS = 10;
+    static constexpr u32 MAX_UPDATES = 20;
     struct Descriptor {
         vk::DescriptorImageInfo image_info;
         vk::DescriptorBufferInfo buffer_info;
-        vk::BufferView buffer_view;
     };
 
     std::array<vk::WriteDescriptorSet, MAX_DESCRIPTORS> writes;
-    std::array<Descriptor, MAX_DESCRIPTORS> update_queue;
-    u32 update_count{};
+    std::array<vk::DescriptorImageInfo, MAX_UPDATES> image_infos;
+    std::array<vk::DescriptorBufferInfo, MAX_UPDATES> buffer_infos;
+    u32 image_count{0}, buffer_count{0}, write_count{0};
 };
 
 class VKSwapChain;
@@ -105,7 +108,7 @@ public:
     void SetUniformBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer);
     void SetTexture(u32 binding,  const VKTexture& texture);
     void SetTexelBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer, u32 view_index);
-    void SetPresentTexture(const VKTexture& image);
+    void SetPresentTextures(vk::ImageView view0, vk::ImageView view1, vk::ImageView view2);
     void SetPresentData(DrawInfo data);
     void SetPlaceholderColor(u8 red, u8 green, u8 blue, u8 alpha);
     void UnbindTexture(const VKTexture& image);
@@ -128,7 +131,6 @@ private:
     bool rendering{false};
     vk::ImageView present_view;
     std::array<vk::ImageView, 4> render_views;
-    DrawInfo present_data;
     vk::Sampler render_sampler, present_sampler;
     VKTexture placeholder;
 

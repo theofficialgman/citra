@@ -288,6 +288,55 @@ static bool BlitTextures(const Surface& src_surface, const Common::Rectangle<u32
     return true;
 }
 
+static bool FillSurface(const Surface& surface, std::array<u8, 4> fill_buffer,
+                        Common::Rectangle<u32> rect) {
+    if (surface->GetScaledRect() != rect) {
+        // TODO: use vkCmdClearAttachments to clear subrects
+        LOG_ERROR(Render_Vulkan, "Partial surface fills not implemented");
+    }
+
+    vk::ImageSubresourceRange image_range{{}, 0, 1, 0, 1};
+    switch (surface->type) {
+    case SurfaceParams::SurfaceType::Color:
+    case SurfaceParams::SurfaceType::Texture:
+        image_range.aspectMask = vk::ImageAspectFlagBits::eColor;
+        break;
+    case SurfaceParams::SurfaceType::Depth:
+        image_range.aspectMask = vk::ImageAspectFlagBits::eDepth;
+        break;
+    case SurfaceParams::SurfaceType::DepthStencil:
+        image_range.aspectMask =
+            vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+        break;
+    default:
+        UNIMPLEMENTED();
+    }
+
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+    switch (surface->type) {
+    case SurfaceParams::SurfaceType::Color:
+    case SurfaceParams::SurfaceType::Texture: {
+        Pica::Texture::TextureInfo tex_info{};
+        tex_info.format = static_cast<Pica::TexturingRegs::TextureFormat>(surface->pixel_format);
+
+        auto color_vec = Pica::Texture::LookupTexture(fill_buffer.data(), 0, 0, tex_info) / 255.0f;
+        const std::array color{color_vec.x, color_vec.y, color_vec.z, color_vec.w};
+
+        auto& texture = surface->texture;
+        texture.Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
+
+        cmdbuffer.clearColorImage(texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
+                                              color, image_range);
+
+        texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+        return true;
+    }
+    default:
+        LOG_ERROR(Render_Vulkan, "non-color fills not implemented");
+        return false;
+    }
+}
+
 static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
     vk::Offset2D offset{static_cast<s32>(rect.left), static_cast<s32>(rect.bottom)};
     vk::Extent2D extent{rect.GetWidth(), rect.GetHeight()};
@@ -412,7 +461,16 @@ void RasterizerCacheVulkan::CopySurface(const Surface& src_surface, const Surfac
 
     // This is only called when CanCopy is true, no need to run checks here
     if (src_surface->type == SurfaceType::Fill) {
-        // NO-OP Vulkan does not allow easy clearing for arbitary textures with rectangle
+        // FillSurface needs a 4 bytes buffer
+        const u32 fill_offset =
+            (boost::icl::first(copy_interval) - src_surface->addr) % src_surface->fill_size;
+        std::array<u8, 4> fill_buffer;
+
+        u32 fill_buff_pos = fill_offset;
+        for (int i : {0, 1, 2, 3})
+            fill_buffer[i] = src_surface->fill_data[fill_buff_pos++ % src_surface->fill_size];
+
+        FillSurface(dst_surface, fill_buffer, dst_surface->GetScaledSubRect(subrect_params));
         return;
     }
     if (src_surface->CanSubRect(subrect_params)) {

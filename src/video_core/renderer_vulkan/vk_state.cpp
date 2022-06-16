@@ -25,43 +25,56 @@ auto IsStencil = [](vk::Format format) -> bool {
     };
 };
 
+void DescriptorUpdater::Reset() {
+    write_count = 0;
+    buffer_count = 0;
+    image_count = 0;
+}
+
 void DescriptorUpdater::Update() {
-    assert(update_count > 0);
+    assert(write_count > 0);
 
     auto device = g_vk_instace->GetDevice();
-    device.updateDescriptorSets(update_count, writes.data(), 0, nullptr);
+    device.updateDescriptorSets(write_count, writes.data(), 0, nullptr);
 
     Reset();
 }
 
+void DescriptorUpdater::PushTextureArrayUpdate(vk::DescriptorSet set, u32 binding, vk::Sampler sampler,
+                                               std::span<vk::ImageView> views) {
+    ASSERT(image_count < MAX_UPDATES);
+
+    u32 start = image_count;
+    for (auto& view : views) {
+        image_infos[image_count++] = {sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal};
+    }
+
+    writes[write_count++] = vk::WriteDescriptorSet{set, binding, 0, static_cast<u32>(views.size()),
+                             vk::DescriptorType::eCombinedImageSampler,
+                             image_infos.data() + start};
+}
+
 void DescriptorUpdater::PushCombinedImageSamplerUpdate(vk::DescriptorSet set, u32 binding,
                                                        vk::Sampler sampler, vk::ImageView view) {
-    assert(update_count < MAX_DESCRIPTORS);
+    ASSERT(image_count < MAX_UPDATES);
 
-    auto& info = update_queue[update_count];
-    info.image_info = vk::DescriptorImageInfo{sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal};
+    image_infos[image_count] = {sampler, view, vk::ImageLayout::eShaderReadOnlyOptimal};
 
-    writes[update_count++] = vk::WriteDescriptorSet{
-        set, binding, 0, 1,
-        vk::DescriptorType::eCombinedImageSampler,
-        &info.image_info
-    };
+    writes[write_count++] = vk::WriteDescriptorSet{set, binding, 0, 1,
+                             vk::DescriptorType::eCombinedImageSampler,
+                             &image_infos[image_count++]};
 }
 
 void DescriptorUpdater::PushBufferUpdate(vk::DescriptorSet set, u32 binding,
                                          vk::DescriptorType buffer_type, u32 offset, u32 size,
                                          vk::Buffer buffer, const vk::BufferView& view) {
-    assert(update_count < MAX_DESCRIPTORS);
+    ASSERT(buffer_count < MAX_UPDATES);
 
-    auto& info = update_queue[update_count];
-    info.buffer_info = vk::DescriptorBufferInfo{buffer, offset, size};
-    info.buffer_view = view;
+    buffer_infos[buffer_count] = vk::DescriptorBufferInfo{buffer, offset, size};
 
-    writes[update_count++] = vk::WriteDescriptorSet{
-        set, binding, 0, 1,
-        buffer_type, nullptr,
-        &info.buffer_info, &info.buffer_view
-    };
+    writes[write_count++] = vk::WriteDescriptorSet{set, binding, 0, 1, buffer_type, nullptr,
+                             &buffer_infos[buffer_count++],
+                             view ? &view : nullptr};
 }
 
 VulkanState::VulkanState(const std::shared_ptr<VKSwapChain>& swapchain) : swapchain(swapchain) {
@@ -169,15 +182,19 @@ void VulkanState::SetTexelBuffer(u32 binding, u32 offset, u32 size, const VKBuff
     descriptors_dirty = true;
 }
 
-void VulkanState::SetPresentTexture(const VKTexture& image) {
+void VulkanState::SetPresentTextures(vk::ImageView view0, vk::ImageView view1, vk::ImageView view2) {
     auto& set = descriptor_sets[3];
-    updater.PushCombinedImageSamplerUpdate(set, 0, present_sampler, image.GetView());
-    present_view = image.GetView();
+
+    std::array views{view0, view1, view2};
+    updater.PushTextureArrayUpdate(set, 0, present_sampler, views);
     descriptors_dirty = true;
 }
 
 void VulkanState::SetPresentData(DrawInfo data) {
-    present_data = data;
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+    cmdbuffer.pushConstants(present_pipeline_layout, vk::ShaderStageFlagBits::eFragment |
+                            vk::ShaderStageFlagBits::eVertex, 0, sizeof(data), &data);
+
 }
 
 void VulkanState::SetPlaceholderColor(u8 red, u8 green, u8 blue, u8 alpha) {
@@ -480,8 +497,6 @@ void VulkanState::ApplyPresentState() {
     // Bind present pipeline and descriptors
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, present_pipeline.get());
-    cmdbuffer.pushConstants(present_pipeline_layout, vk::ShaderStageFlagBits::eFragment |
-                            vk::ShaderStageFlagBits::eVertex, 0, sizeof(present_data), &present_data);
 
     ApplyCommonState(false);
 
@@ -561,7 +576,7 @@ void VulkanState::BuildDescriptorLayouts() {
         {2, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment} // texture_buffer_lut_rgba
     }};
     std::array<vk::DescriptorSetLayoutBinding, 1> present_set{{
-       {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment}
+       {0, vk::DescriptorType::eCombinedImageSampler, 3, vk::ShaderStageFlagBits::eFragment}
     }};
 
     std::array<vk::DescriptorSetLayoutCreateInfo, DESCRIPTOR_SET_COUNT> create_infos{{

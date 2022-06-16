@@ -33,37 +33,30 @@ using VSOutputAttributes = RasterizerRegs::VSOutputAttributes;
 namespace Vulkan {
 
 static const char present_vertex_shader_source[] = R"(
-#version 450
+#version 450 core
 #extension GL_ARB_separate_shader_objects : enable
 layout (location = 0) in vec2 vert_position;
-layout (location = 1) in vec2 vert_tex_coord;
-layout (location = 0) out vec2 frag_tex_coord;
+layout (location = 1) in vec3 vert_tex_coord;
+layout (location = 0) out vec3 frag_tex_coord;
 
-// This is a truncated 3x3 matrix for 2D transformations:
-// The upper-left 2x2 submatrix performs scaling/rotation/mirroring.
-// The third column performs translation.
-// The third row could be used for projection, which we don't need in 2D. It hence is assumed to
-// implicitly be [0, 0, 1]
 layout (push_constant) uniform DrawInfo {
-    mat3x2 modelview_matrix;
+    mat4 modelview_matrix;
     vec4 i_resolution;
     vec4 o_resolution;
     int layer;
 };
 
 void main() {
-    // Multiply input position by the rotscale part of the matrix and then manually translate by
-    // the last column. This is equivalent to using a full 3x3 matrix and expanding the vector
-    // to `vec3(vert_position.xy, 1.0)`
-    gl_Position = vec4(mat2(modelview_matrix) * vert_position + modelview_matrix[2], 0.0, 1.0);
+    vec4 position = vec4(vert_position, 0.0, 1.0) * modelview_matrix;
+    gl_Position = vec4(position.x, -position.y, 0.0, 1.0);
     frag_tex_coord = vert_tex_coord;
 }
 )";
 
 static const char present_fragment_shader_source[] = R"(
-#version 450
+#version 450 core
 #extension GL_ARB_separate_shader_objects : enable
-layout (location = 0) in vec2 frag_tex_coord;
+layout (location = 0) in vec3 frag_tex_coord;
 layout (location = 0) out vec4 color;
 
 layout (push_constant) uniform DrawInfo {
@@ -73,10 +66,11 @@ layout (push_constant) uniform DrawInfo {
     int layer;
 };
 
-layout (set = 0, binding = 0) uniform sampler2D color_texture;
+layout (set = 0, binding = 0) uniform sampler2D screen_textures[3];
 
 void main() {
-    color = texture(color_texture, frag_tex_coord);
+    color = texture(screen_textures[int(frag_tex_coord.z)], frag_tex_coord.xy);
+    //color = vec4(0.5, 0.0, 0.5, 1.0);
 }
 )";
 

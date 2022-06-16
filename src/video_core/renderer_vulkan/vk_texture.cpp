@@ -75,6 +75,8 @@ void VKTexture::Create(const Info& create_info) {
         info.format = vk::Format::eD32SfloatS8Uint;
     }
 
+    std::cout << "New surface!\n";
+
     // Create the texture
     image_size = info.width * info.height * BytesPerPixel(info.format);
     aspect = GetImageAspect(info.format);
@@ -136,9 +138,12 @@ void VKTexture::Destroy() {
 
         auto deleter = [this]() {
             auto device = g_vk_instace->GetDevice();
-            device.destroyImage(texture);
-            device.destroyImageView(view);
-            device.freeMemory(memory);
+            if (texture) {
+                std::cout << "Surface destroyed!\n";
+                device.destroyImage(texture);
+                device.destroyImageView(view);
+                device.freeMemory(memory);
+            }
         };
 
         // Schedule deletion of the texture after it's no longer used
@@ -270,7 +275,7 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     }
     else if (is_d24s8) {
         auto data = D24S8ToD32S8(pixels);
-        std::memcpy(buffer, data.data(), data.size());
+        std::memcpy(buffer, data.data(), data.size() * sizeof(data[0]));
     }
     else {
         std::memcpy(buffer, pixels.data(), pixels.size());
@@ -322,7 +327,7 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
     }
     else if (is_d24s8) {
         auto data = D32S8ToD24S8(memory);
-        std::memcpy(buffer, data.data(), data.size());
+        std::memcpy(buffer, data.data(), data.size() * sizeof(data[0]));
     }
     else {
         std::memcpy(buffer, memory.data(), memory.size());

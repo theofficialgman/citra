@@ -52,8 +52,8 @@ private:
     void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
 
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
-    void DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y, float w, float h);
-    void DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w, float h);
+    void DrawSingleScreenRotated(u32 screen_id, float x, float y, float w, float h);
+    void DrawSingleScreen(u32 screen_id, float x, float y, float w, float h);
     void DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
                                        const ScreenInfo& screen_info_r, float x, float y, float w, float h);
     void DrawSingleScreenStereo(const ScreenInfo& screen_info_l, const ScreenInfo& screen_info_r,
@@ -70,7 +70,7 @@ private:
 private:
     // Vulkan state
     DrawInfo draw_info{};
-    VKBuffer vertex_buffer;
+    StreamBuffer vertex_buffer;
     vk::ClearColorValue clear_color{};
 
     /// Display information for top and bottom screens respectively

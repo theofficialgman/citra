@@ -39,6 +39,8 @@ struct Rectangle {
         return Rectangle{left, top, static_cast<T>(left + GetWidth() * s),
                          static_cast<T>(top + GetHeight() * s)};
     }
+
+    auto operator <=> (const Rectangle<T>& other) const = default;
 };
 
 template <typename T>

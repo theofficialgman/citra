@@ -84,25 +84,26 @@ struct HardwareVertex : public VertexBase {
 
 struct ScreenRectVertexBase {
     ScreenRectVertexBase() = default;
-    ScreenRectVertexBase(float x, float y, float u, float v) {
+    ScreenRectVertexBase(float x, float y, float u, float v, float s) {
         position.x = x;
         position.y = y;
         tex_coord.x = u;
         tex_coord.y = v;
+        tex_coord.z = s;
     }
 
     glm::vec2 position;
-    glm::vec2 tex_coord;
+    glm::vec3 tex_coord;
 };
 
 struct ScreenRectVertex : public ScreenRectVertexBase {
     ScreenRectVertex() = default;
-    ScreenRectVertex(float x, float y, float u, float v) : ScreenRectVertexBase(x, y, u, v) {};
+    ScreenRectVertex(float x, float y, float u, float v, float s) : ScreenRectVertexBase(x, y, u, v, s) {};
     static constexpr auto binding_desc = vk::VertexInputBindingDescription(0, sizeof(ScreenRectVertexBase));
     static constexpr std::array<vk::VertexInputAttributeDescription, 2> attribute_desc =
     {
           vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, position)),
-          vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32Sfloat, offsetof(ScreenRectVertexBase, tex_coord)),
+          vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(ScreenRectVertexBase, tex_coord)),
     };
 };
 

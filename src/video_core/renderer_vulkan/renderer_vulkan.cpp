@@ -280,7 +280,7 @@ void RendererVulkan::CreateVulkanObjects() {
 
     // Generate VBO handle for drawing
     VKBuffer::Info vertex_info{
-        .size = sizeof(ScreenRectVertex) * 4,
+        .size = sizeof(ScreenRectVertex) * 10,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
         .usage = vk::BufferUsageFlagBits::eVertexBuffer |
                  vk::BufferUsageFlagBits::eTransferDst
@@ -340,19 +340,23 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
  * Draws a single texture to the emulator window, rotating the texture to correct for the 3DS's LCD
  * rotation.
  */
-void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, float x, float y,
-                                             float w, float h) {
+void RendererVulkan::DrawSingleScreenRotated(u32 screen_id, float x, float y, float w, float h) {
+    auto& screen_info = screen_infos[screen_id];
     const auto& texcoords = screen_info.display_texcoords;
 
+    u32 size = sizeof(ScreenRectVertex) * 4;
+    auto [ptr, offset, invalidate] = vertex_buffer.Map(size);
+
     const std::array vertices{
-        ScreenRectVertex(x, y, texcoords.bottom, texcoords.left),
-        ScreenRectVertex(x + w, y, texcoords.bottom, texcoords.right),
-        ScreenRectVertex(x, y + h, texcoords.top, texcoords.left),
-        ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right),
+        ScreenRectVertex(x, y, texcoords.bottom, texcoords.left, screen_id),
+        ScreenRectVertex(x + w, y, texcoords.bottom, texcoords.right, screen_id),
+        ScreenRectVertex(x, y + h, texcoords.top, texcoords.left, screen_id),
+        ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right, screen_id),
     };
 
-    auto data = std::as_bytes(std::span(vertices));
-    vertex_buffer.Upload(data, 0);
+    std::memcpy(ptr, vertices.data(), size);
+    vertex_buffer.Commit(size, vk::AccessFlagBits::eVertexAttributeRead,
+                         vk::PipelineStageFlagBits::eVertexInput);
 
     // As this is the "DrawSingleScreenRotated" function, the output resolution dimensions have been
     // swapped. If a non-rotated draw-screen function were to be added for book-mode games, those
@@ -365,34 +369,32 @@ void RendererVulkan::DrawSingleScreenRotated(const ScreenInfo& screen_info, floa
                                        1.0f / (height * scale_factor)};
     draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
 
-    auto& image = swapchain->GetCurrentImage();
     auto& state = VulkanState::Get();
-
-    state.BeginRendering(image, std::nullopt, false, clear_color, vk::AttachmentLoadOp::eClear);
     state.SetPresentData(draw_info);
-    state.SetPresentTexture(*screen_info.display_texture);
-    state.ApplyPresentState();
 
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-    vk::DeviceSize offset = 0;
 
-    cmdbuffer.bindVertexBuffers(0, 1, &vertex_buffer.GetBuffer(), &offset);
-    cmdbuffer.draw(4, 1, 0, 0);
+    cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
+    cmdbuffer.draw(4, 1, offset / sizeof(ScreenRectVertex), 0);
 }
 
-void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, float y, float w,
-                                      float h) {
+void RendererVulkan::DrawSingleScreen(u32 screen_id, float x, float y, float w, float h) {
+    auto& screen_info = screen_infos[screen_id];
     const auto& texcoords = screen_info.display_texcoords;
 
+    u32 size = sizeof(ScreenRectVertex) * 4;
+    auto [ptr, offset, invalidate] = vertex_buffer.Map(size);
+
     const std::array vertices{
-        ScreenRectVertex(x, y, texcoords.bottom, texcoords.right),
-        ScreenRectVertex(x + w, y, texcoords.top, texcoords.right),
-        ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.left),
-        ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.left),
+        ScreenRectVertex(x, y, texcoords.bottom, texcoords.right, screen_id),
+        ScreenRectVertex(x + w, y, texcoords.top, texcoords.right, screen_id),
+        ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.left, screen_id),
+        ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.left, screen_id),
     };
 
-    auto data = std::as_bytes(std::span(vertices));
-    vertex_buffer.Upload(data, 0);
+    std::memcpy(ptr, vertices.data(), size);
+    vertex_buffer.Commit(size, vk::AccessFlagBits::eVertexAttributeRead,
+                         vk::PipelineStageFlagBits::eVertexInput);
 
     const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
     auto [width, height] = screen_info.texture.GetArea().extent;
@@ -403,17 +405,13 @@ void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
                                        1.0f / (height * scale_factor)};
     draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
 
-    auto& image = swapchain->GetCurrentImage();
     auto& state = VulkanState::Get();
-
-    state.BeginRendering(image, std::nullopt, false, clear_color, vk::AttachmentLoadOp::eClear);
     state.SetPresentData(draw_info);
-    state.SetPresentTexture(*screen_info.display_texture);
-    state.ApplyPresentState();
 
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+
     cmdbuffer.bindVertexBuffers(0, vertex_buffer.GetBuffer(), {0});
-    cmdbuffer.draw(4, 1, 0, 0);
+    cmdbuffer.draw(4, 1, offset / sizeof(ScreenRectVertex), 0);
 }
 
 /**
@@ -423,7 +421,8 @@ void RendererVulkan::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
 void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
                                                    const ScreenInfo& screen_info_r, float x,
                                                    float y, float w, float h) {
-    DrawSingleScreenRotated(screen_info_l, x, y, w, h);
+    ASSERT(false);
+    //DrawSingleScreenRotated(screen_info_l, x, y, w, h);
     /*const auto& texcoords = screen_info_l.display_texcoords;
 
     const std::array<ScreenRectVertex, 4> vertices = {{
@@ -460,7 +459,8 @@ void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info
 void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
                                             const ScreenInfo& screen_info_r, float x, float y,
                                             float w, float h) {
-    DrawSingleScreen(screen_info_l, x, y, w, h);
+    ASSERT(false);
+    //DrawSingleScreen(screen_info_l, x, y, w, h);
     /*const auto& texcoords = screen_info_l.display_texcoords;
 
     const std::array<ScreenRectVertex, 4> vertices = {{
@@ -518,8 +518,9 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     const auto& bottom_screen = layout.bottom_screen;
 
     // Set projection matrix
-    draw_info.modelview = MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
-
+    draw_info.modelview = glm::transpose(glm::ortho(0.f, static_cast<float>(layout.width),
+                                                    static_cast<float>(layout.height), 0.0f,
+                                                    0.f, 1.f));
     const bool stereo_single_screen = false
     /*    Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
         Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
@@ -530,28 +531,37 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
         //glUniform1i(uniform_color_texture_r, 1);
     }
 
+    auto& image = swapchain->GetCurrentImage();
+    auto& state = VulkanState::Get();
+
+    state.BeginRendering(image, std::nullopt, false, clear_color, vk::AttachmentLoadOp::eClear);
+    state.SetPresentTextures(screen_infos[0].display_texture->GetView(),
+                             screen_infos[1].display_texture->GetView(),
+                             screen_infos[2].display_texture->GetView());
+    state.ApplyPresentState();
+
     draw_info.layer = 0;
     if (layout.top_screen_enabled) {
         if (layout.is_rotated) {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
-                DrawSingleScreenRotated(screen_infos[0], (float)top_screen.left,
-                                        (float)top_screen.top, (float)top_screen.GetWidth(),
-                                        (float)top_screen.GetHeight());
+                DrawSingleScreenRotated(0, top_screen.left,
+                                        top_screen.top, top_screen.GetWidth(),
+                                        top_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::SideBySide) {
-                DrawSingleScreenRotated(screen_infos[0], (float)top_screen.left / 2,
+                DrawSingleScreenRotated(0, (float)top_screen.left / 2,
                                         (float)top_screen.top, (float)top_screen.GetWidth() / 2,
                                         (float)top_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreenRotated(screen_infos[1],
+                DrawSingleScreenRotated(1,
                                         ((float)top_screen.left / 2) + ((float)layout.width / 2),
                                         (float)top_screen.top, (float)top_screen.GetWidth() / 2,
                                         (float)top_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::CardboardVR) {
-                DrawSingleScreenRotated(screen_infos[0], layout.top_screen.left,
+                DrawSingleScreenRotated(0, layout.top_screen.left,
                                         layout.top_screen.top, layout.top_screen.GetWidth(),
                                         layout.top_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreenRotated(screen_infos[1],
+                DrawSingleScreenRotated(1,
                                         layout.cardboard.top_screen_right_eye +
                                             ((float)layout.width / 2),
                                         layout.top_screen.top, layout.top_screen.GetWidth(),
@@ -563,21 +573,21 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             }
         } else {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
-                DrawSingleScreen(screen_infos[0], (float)top_screen.left, (float)top_screen.top,
+                DrawSingleScreen(0, (float)top_screen.left, (float)top_screen.top,
                                  (float)top_screen.GetWidth(), (float)top_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::SideBySide) {
-                DrawSingleScreen(screen_infos[0], (float)top_screen.left / 2, (float)top_screen.top,
+                DrawSingleScreen(0, (float)top_screen.left / 2, (float)top_screen.top,
                                  (float)top_screen.GetWidth() / 2, (float)top_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreen(screen_infos[1],
+                DrawSingleScreen(1,
                                  ((float)top_screen.left / 2) + ((float)layout.width / 2),
                                  (float)top_screen.top, (float)top_screen.GetWidth() / 2,
                                  (float)top_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::CardboardVR) {
-                DrawSingleScreen(screen_infos[0], layout.top_screen.left, layout.top_screen.top,
+                DrawSingleScreen(0, layout.top_screen.left, layout.top_screen.top,
                                  layout.top_screen.GetWidth(), layout.top_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreen(screen_infos[1],
+                DrawSingleScreen(1,
                                  layout.cardboard.top_screen_right_eye + ((float)layout.width / 2),
                                  layout.top_screen.top, layout.top_screen.GetWidth(),
                                  layout.top_screen.GetHeight());
@@ -588,28 +598,29 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             }
         }
     }
+
     draw_info.layer = 0;
-    if (/*layout.bottom_screen_enabled*/false) {
+    if (layout.bottom_screen_enabled) {
         if (layout.is_rotated) {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
-                DrawSingleScreenRotated(screen_infos[2], (float)bottom_screen.left,
+                DrawSingleScreenRotated(2, (float)bottom_screen.left,
                                         (float)bottom_screen.top, (float)bottom_screen.GetWidth(),
                                         (float)bottom_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::SideBySide) {
                 DrawSingleScreenRotated(
-                    screen_infos[2], (float)bottom_screen.left / 2, (float)bottom_screen.top,
+                    2, (float)bottom_screen.left / 2, (float)bottom_screen.top,
                     (float)bottom_screen.GetWidth() / 2, (float)bottom_screen.GetHeight());
                 draw_info.layer = 1;
                 DrawSingleScreenRotated(
-                    screen_infos[2], ((float)bottom_screen.left / 2) + ((float)layout.width / 2),
+                    2, ((float)bottom_screen.left / 2) + ((float)layout.width / 2),
                     (float)bottom_screen.top, (float)bottom_screen.GetWidth() / 2,
                     (float)bottom_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::CardboardVR) {
-                DrawSingleScreenRotated(screen_infos[2], layout.bottom_screen.left,
+                DrawSingleScreenRotated(2, layout.bottom_screen.left,
                                         layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
                                         layout.bottom_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreenRotated(screen_infos[2],
+                DrawSingleScreenRotated(2,
                                         layout.cardboard.bottom_screen_right_eye +
                                             ((float)layout.width / 2),
                                         layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
@@ -622,24 +633,24 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
             }
         } else {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
-                DrawSingleScreen(screen_infos[2], (float)bottom_screen.left,
+                DrawSingleScreen(2, (float)bottom_screen.left,
                                  (float)bottom_screen.top, (float)bottom_screen.GetWidth(),
                                  (float)bottom_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::SideBySide) {
-                DrawSingleScreen(screen_infos[2], (float)bottom_screen.left / 2,
+                DrawSingleScreen(2, (float)bottom_screen.left / 2,
                                  (float)bottom_screen.top, (float)bottom_screen.GetWidth() / 2,
                                  (float)bottom_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreen(screen_infos[2],
+                DrawSingleScreen(2,
                                  ((float)bottom_screen.left / 2) + ((float)layout.width / 2),
                                  (float)bottom_screen.top, (float)bottom_screen.GetWidth() / 2,
                                  (float)bottom_screen.GetHeight());
             } else if (Settings::values.render_3d == Settings::StereoRenderOption::CardboardVR) {
-                DrawSingleScreen(screen_infos[2], layout.bottom_screen.left,
+                DrawSingleScreen(2, layout.bottom_screen.left,
                                  layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
                                  layout.bottom_screen.GetHeight());
                 draw_info.layer = 1;
-                DrawSingleScreen(screen_infos[2],
+                DrawSingleScreen(2,
                                  layout.cardboard.bottom_screen_right_eye +
                                      ((float)layout.width / 2),
                                  layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
