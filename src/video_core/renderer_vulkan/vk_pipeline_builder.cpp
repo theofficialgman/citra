@@ -188,7 +188,7 @@ void PipelineBuilder::SetBlendConstants(float r, float g, float b, float a) {
 
 void PipelineBuilder::SetBlendLogicOp(vk::LogicOp logic_op)  {
     blend_state.logicOp = logic_op;
-    blend_state.logicOpEnable = true;
+    blend_state.logicOpEnable = false;
 }
 
 void PipelineBuilder::SetBlendAttachment(bool blend_enable, vk::BlendFactor src_factor, vk::BlendFactor dst_factor,

@@ -70,7 +70,6 @@ layout (set = 0, binding = 0) uniform sampler2D screen_textures[3];
 
 void main() {
     color = texture(screen_textures[int(frag_tex_coord.z)], frag_tex_coord.xy);
-    //color = vec4(0.5, 0.0, 0.5, 1.0);
 }
 )";
 
@@ -1656,10 +1655,10 @@ void main() {
     texcoord0_w = vert_texcoord0_w;
     normquat = vert_normquat;
     view = vert_view;
-    gl_Position = vert_position;
+    gl_Position = vert_position + vec4(0.0, 0.0, 1.0, 0.0);
 #if !defined(CITRA_GLES) || defined(GL_EXT_clip_cull_distance)
-    gl_ClipDistance[0] = -vert_position.z; // fixed PICA clipping plane z <= 0
-    gl_ClipDistance[1] = dot(clip_coef, vert_position);
+    //gl_ClipDistance[0] = -vert_position.z; // fixed PICA clipping plane z <= 0
+    //gl_ClipDistance[1] = dot(clip_coef, vert_position);
 #endif // !defined(CITRA_GLES) || defined(GL_EXT_clip_cull_distance)
 }
 )";
@@ -1670,7 +1669,7 @@ void main() {
 vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage) {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
-    options.SetOptimizationLevel(shaderc_optimization_level_performance);
+    options.SetOptimizationLevel(shaderc_optimization_level_zero);
     options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
     options.SetWarningsAsErrors();
     options.SetSourceLanguage(shaderc_source_language_glsl);

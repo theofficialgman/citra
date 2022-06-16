@@ -40,7 +40,7 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
     vk::SwapchainCreateInfoKHR swapchain_info{{}, surface, details.image_count, details.format.format,
                 details.format.colorSpace, details.extent, 1, vk::ImageUsageFlagBits::eColorAttachment,
                 vk::SharingMode::eExclusive, 1, indices.data(), details.transform,
-                vk::CompositeAlphaFlagBitsKHR::eOpaque, details.present_mode, true, VK_NULL_HANDLE};
+                vk::CompositeAlphaFlagBitsKHR::eOpaque, details.present_mode, true, swapchain};
 
     // For dedicated present queues, select concurrent sharing mode
     if (indices[0] != indices[1]) {

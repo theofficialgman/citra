@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+//#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <algorithm>
 #include <array>
 #include <condition_variable>
@@ -520,7 +521,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     // Set projection matrix
     draw_info.modelview = glm::transpose(glm::ortho(0.f, static_cast<float>(layout.width),
                                                     static_cast<float>(layout.height), 0.0f,
-                                                    0.f, 1.f));
+                                                    -1.f, 1.f));
     const bool stereo_single_screen = false
     /*    Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
         Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
@@ -722,14 +723,11 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     auto instance = vk::createInstance(instance_info);
     auto physical_devices = instance.enumeratePhysicalDevices();
 
-    auto props = physical_devices[1].getProperties();
-    std::cout << props.deviceName << '\n';
-
     // Create global instance
     auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<VKInstance>();
     g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
-    g_vk_instace->Create(instance, physical_devices[1], surface, true);
+    g_vk_instace->Create(instance, physical_devices[0], surface, true);
     g_vk_task_scheduler->Create();
 
     //auto& layout = render_window.GetFramebufferLayout();
