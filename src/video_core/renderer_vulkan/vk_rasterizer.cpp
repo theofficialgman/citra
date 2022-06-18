@@ -293,7 +293,8 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     // Sync the viewport
     vk::Viewport viewport{0, 0, static_cast<float>(viewport_rect_unscaled.GetWidth() * res_scale),
-                                static_cast<float>(viewport_rect_unscaled.GetHeight() * res_scale)};
+                                static_cast<float>(viewport_rect_unscaled.GetHeight() * res_scale),
+                                0.f, 1.f};
     state.SetViewport(viewport);
 
     if (uniform_block_data.data.framebuffer_scale != res_scale) {
@@ -1146,12 +1147,12 @@ void RasterizerVulkan::SyncCullMode() {
         break;
 
     case Pica::RasterizerRegs::CullMode::KeepClockWise:
-        state.SetCullMode(vk::CullModeFlagBits::eBack);
+        state.SetCullMode(vk::CullModeFlagBits::eFront);
         state.SetFrontFace(vk::FrontFace::eClockwise);
         break;
 
     case Pica::RasterizerRegs::CullMode::KeepCounterClockWise:
-        state.SetCullMode(vk::CullModeFlagBits::eBack);
+        state.SetCullMode(vk::CullModeFlagBits::eFront);
         state.SetFrontFace(vk::FrontFace::eCounterClockwise);
         break;
 

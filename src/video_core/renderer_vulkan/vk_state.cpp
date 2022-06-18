@@ -95,9 +95,9 @@ VulkanState::VulkanState(const std::shared_ptr<VKSwapChain>& swapchain) : swapch
     // Create texture sampler
     auto props = g_vk_instace->GetPhysicalDevice().getProperties();
     vk::SamplerCreateInfo sampler_info{
-        {}, vk::Filter::eNearest,
-        vk::Filter::eNearest,
-        vk::SamplerMipmapMode::eNearest,
+        {}, vk::Filter::eLinear,
+        vk::Filter::eLinear,
+        vk::SamplerMipmapMode::eLinear,
         vk::SamplerAddressMode::eClampToEdge,
         vk::SamplerAddressMode::eClampToEdge,
         vk::SamplerAddressMode::eClampToEdge,

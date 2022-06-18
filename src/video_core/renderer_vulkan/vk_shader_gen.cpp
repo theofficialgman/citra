@@ -1275,8 +1275,6 @@ std::string GenerateFragmentShader(const PicaFSConfig& config) {
 
     out += R"(
     #version 450
-    #extension GL_ARB_shader_image_load_store : enable
-    #extension GL_ARB_shader_image_size : enable
     #define ALLOW_SHADOW 0
     )";
     out += "#extension GL_ARB_separate_shader_objects : enable\n";
@@ -1284,9 +1282,7 @@ std::string GenerateFragmentShader(const PicaFSConfig& config) {
     out += GetVertexInterfaceDeclaration(false, true);
 
     out += R"(
-    #ifndef CITRA_GLES
     in vec4 gl_FragCoord;
-    #endif // CITRA_GLES
 
     layout (location = 0) out vec4 color;
 
@@ -1539,7 +1535,6 @@ vec4 secondary_fragment_color = vec4(0.0);
     // do our own transformation according to PICA specification.
     out += "float z_over_w = 2.0 * gl_FragCoord.z - 1.0;\n"
            "float depth = z_over_w * depth_scale + depth_offset;\n";
-    //out += "if (gl_FragCoord.z == 0) { color = vec4(1.0, 0.0, 0.0, 1.0); return; }\n";
     if (state.depthmap_enable == RasterizerRegs::DepthBuffering::WBuffering) {
         out += "depth /= gl_FragCoord.w;\n";
     }
@@ -1657,13 +1652,11 @@ void main() {
     normquat = vert_normquat;
     view = vert_view;
 
-    // Convert OpenGL [-1, 1] to Vulkan [0, 1]
-    vec4 position = vert_position;
-    position.z = (position.z + 1) * 0.5;
-
-    gl_Position = position;
-    gl_ClipDistance[0] = -vert_position.z; // fixed PICA clipping plane z <= 0
-    gl_ClipDistance[1] = dot(clip_coef, vert_position);
+    gl_Position = vert_position;
+    gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
+    //gl_Position.y = -gl_Position.y;
+    //gl_ClipDistance[0] = -vert_position.z; // fixed PICA clipping plane z <= 0
+    //gl_ClipDistance[1] = dot(clip_coef, vert_position);
 }
 )";
 
