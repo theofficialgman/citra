@@ -19,10 +19,10 @@ static int BytesPerPixel(vk::Format format) {
     case vk::Format::eD32Sfloat:
     case vk::Format::eB8G8R8A8Unorm:
     case vk::Format::eR8G8B8A8Uint:
-    case vk::Format::eR8G8B8A8Srgb:
+    case vk::Format::eR8G8B8A8Unorm:
     case vk::Format::eD24UnormS8Uint:
         return 4;
-    case vk::Format::eR8G8B8Uint:
+    case vk::Format::eR8G8B8Unorm:
     case vk::Format::eR8G8B8Srgb:
         return 3;
     case vk::Format::eR5G6B5UnormPack16:
@@ -58,15 +58,41 @@ VKTexture::~VKTexture() {
     Destroy();
 }
 
+VKTexture::VKTexture(VKTexture&& other) noexcept {
+    info = std::exchange(other.info, Info{});
+    texture = std::exchange(other.texture, VK_NULL_HANDLE);
+    aspect = std::exchange(other.aspect, vk::ImageAspectFlagBits::eNone);
+    view = std::exchange(other.view, VK_NULL_HANDLE);
+    memory = std::exchange(other.memory, VK_NULL_HANDLE);
+    image_size = std::exchange(other.image_size, 0);
+    adopted = std::exchange(other.adopted, false);
+    is_rgb = std::exchange(other.is_rgb, false);
+    is_d24s8 = std::exchange(other.is_d24s8, false);
+}
+
+VKTexture& VKTexture::operator=(VKTexture&& other) noexcept {
+    Destroy();
+    info = std::exchange(other.info, Info{});
+    texture = std::exchange(other.texture, VK_NULL_HANDLE);
+    aspect = std::exchange(other.aspect, vk::ImageAspectFlagBits::eNone);
+    view = std::exchange(other.view, VK_NULL_HANDLE);
+    memory = std::exchange(other.memory, VK_NULL_HANDLE);
+    image_size = std::exchange(other.image_size, 0);
+    adopted = std::exchange(other.adopted, false);
+    is_rgb = std::exchange(other.is_rgb, false);
+    is_d24s8 = std::exchange(other.is_d24s8, false);
+    return *this;
+}
+
 void VKTexture::Create(const Info& create_info) {
     auto device = g_vk_instace->GetDevice();
     info = create_info;
 
     // Emulate RGB8 format with RGBA8
     is_rgb = false;
-    if (info.format == vk::Format::eR8G8B8Srgb) {
+    if (info.format == vk::Format::eR8G8B8Unorm) {
         is_rgb = true;
-        info.format = vk::Format::eR8G8B8A8Srgb;
+        info.format = vk::Format::eR8G8B8A8Unorm;
     }
 
     is_d24s8 = false;
@@ -136,7 +162,9 @@ void VKTexture::Destroy() {
         auto& state = VulkanState::Get();
         state.UnbindTexture(*this);
 
-        auto deleter = [this]() {
+        auto deleter = [texture = texture,
+                        view = view,
+                        memory = memory]() {
             auto device = g_vk_instace->GetDevice();
             if (texture) {
                 std::cout << "Surface destroyed!\n";
@@ -154,7 +182,7 @@ void VKTexture::Destroy() {
     // If the image was adopted (probably from the swapchain) then only
     // destroy the view
     if (adopted) {
-        g_vk_task_scheduler->Schedule([this](){
+        g_vk_task_scheduler->Schedule([view = view](){
             auto device = g_vk_instace->GetDevice();
             device.destroyImageView(view);
         });
@@ -281,19 +309,32 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
         std::memcpy(buffer, pixels.data(), pixels.size());
     }
 
-    vk::BufferImageCopy copy_region{
+    std::array<vk::BufferImageCopy, 2> copy_regions;
+    u32 region_count = 1;
+
+    copy_regions[0] = vk::BufferImageCopy{
         offset, row_length, region.extent.height,
         {aspect, level, layer, 1},
         {region.offset.x, region.offset.y, 0},
         {region.extent.width, region.extent.height, 1}
     };
 
+    if (aspect & vk::ImageAspectFlagBits::eDepth &&
+            aspect & vk::ImageAspectFlagBits::eStencil) {
+        // Copying both depth and stencil requires two seperate regions
+        copy_regions[1] = copy_regions[0];
+        copy_regions[0].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+        copy_regions[1].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+
+        region_count++;
+    }
+
     // Transition image to transfer format
     Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
 
     cmdbuffer.copyBufferToImage(g_vk_task_scheduler->GetStaging().GetBuffer(),
-                                     texture, vk::ImageLayout::eTransferDstOptimal,
-                                     copy_region);
+                                texture, vk::ImageLayout::eTransferDstOptimal, region_count,
+                                copy_regions.data());
 
     // Prepare image for shader reads
     Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -301,7 +342,7 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
 
 void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
     u32 request_size = is_rgb ? (memory.size() / 3) * 4 :
-                       (is_d24s8 ? (memory.size() / 4) * 5 : memory.size());
+                       (is_d24s8 ? (memory.size() / 4) * 8 : memory.size());
     auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
     if (!buffer) {
         LOG_ERROR(Render_Vulkan, "Cannot download texture without staging buffer!");
@@ -312,25 +353,24 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
 
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
 
-    // Copy pixels to staging buffer
-    vk::BufferImageCopy download_region{
+    std::array<vk::BufferImageCopy, 2> copy_regions;
+    u32 region_count = 1;
+
+    copy_regions[0] = vk::BufferImageCopy{
         offset, row_length, region.extent.height,
         {aspect, level, layer, 1},
         {region.offset.x, region.offset.y, 0},
         {region.extent.width, region.extent.height, 1}
     };
 
-    // Automatically convert RGB to RGBA
-    if (is_rgb) {
-        auto data = RGBAToRGB(memory);
-        std::memcpy(buffer, data.data(), data.size());
-    }
-    else if (is_d24s8) {
-        auto data = D32S8ToD24S8(memory);
-        std::memcpy(buffer, data.data(), data.size() * sizeof(data[0]));
-    }
-    else {
-        std::memcpy(buffer, memory.data(), memory.size());
+    if (aspect & vk::ImageAspectFlagBits::eDepth &&
+            aspect & vk::ImageAspectFlagBits::eStencil) {
+        // Copying both depth and stencil requires two seperate regions
+        copy_regions[1] = copy_regions[0];
+        copy_regions[0].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+        copy_regions[1].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+
+        region_count++;
     }
 
     // Transition image to transfer format
@@ -338,16 +378,28 @@ void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region
     Transition(cmdbuffer, vk::ImageLayout::eTransferSrcOptimal);
 
     cmdbuffer.copyImageToBuffer(texture, vk::ImageLayout::eTransferSrcOptimal,
-                                     g_vk_task_scheduler->GetStaging().GetBuffer(),
-                                     download_region);
+                                g_vk_task_scheduler->GetStaging().GetBuffer(),
+                                region_count, copy_regions.data());
+
+    // Restore layout
+    Transition(cmdbuffer, old_layout);
 
     // Wait for the data to be available
     // NOTE: This is really slow and should be reworked
     g_vk_task_scheduler->Submit(true);
-    std::memcpy(memory.data(), buffer, memory.size_bytes());
 
-    // Restore layout
-    Transition(cmdbuffer, old_layout);
+    // Automatically convert RGB to RGBA
+    if (is_rgb) {
+        auto data = RGBAToRGB(std::span(buffer, request_size));
+        std::memcpy(memory.data(), data.data(), memory.size());
+    }
+    else if (is_d24s8) {
+        auto data = D32S8ToD24S8(std::span(buffer, request_size));
+        std::memcpy(memory.data(), data.data(), memory.size());
+    }
+    else {
+        std::memcpy(memory.data(), buffer, memory.size());
+    }
 }
 
 template <typename Out, typename In>

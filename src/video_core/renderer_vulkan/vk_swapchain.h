@@ -42,8 +42,8 @@ public:
     vk::SurfaceKHR GetSurface() const { return surface; }
     vk::SurfaceFormatKHR GetSurfaceFormat() const { return details.format; }
     vk::SwapchainKHR GetSwapChain() const { return swapchain; }
-    const vk::Semaphore& GetAvailableSemaphore() const { return image_available.get(); }
-    const vk::Semaphore& GetRenderSemaphore() const { return render_finished.get(); }
+    const vk::Semaphore& GetAvailableSemaphore() const { return image_available; }
+    const vk::Semaphore& GetRenderSemaphore() const { return render_finished; }
     VKTexture& GetCurrentImage() { return swapchain_images[image_index]; }
 
 private:
@@ -53,7 +53,7 @@ private:
 private:
     SwapChainDetails details{};
     vk::SurfaceKHR surface;
-    vk::UniqueSemaphore image_available, render_finished;
+    vk::Semaphore image_available, render_finished;
     bool vsync_enabled{false}, is_outdated{true}, is_suboptimal{true};
 
     vk::SwapchainKHR swapchain{VK_NULL_HANDLE};

@@ -367,7 +367,8 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     state.SetScissor(scissor);
 
     // Bind the framebuffer surfaces
-    state.BeginRendering(color_surface->texture, depth_surface->texture, true);
+    state.BeginRendering(color_surface != nullptr ? &color_surface->texture : nullptr,
+                         depth_surface != nullptr ? &depth_surface->texture : nullptr, true);
     state.ApplyRenderState(Pica::g_state.regs);
     state.SetVertexBuffer(vertex_buffer, 0);
 
@@ -399,8 +400,14 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     }
 
     state.EndRendering();
-    color_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
-    depth_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    if (color_surface) {
+        color_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
+
+    if (depth_surface) {
+        depth_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+    }
 
     g_vk_task_scheduler->Submit();
 

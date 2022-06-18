@@ -7,6 +7,7 @@
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
+#include "video_core/renderer_vulkan/vk_rasterizer_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_shader_gen.h"
 
@@ -82,7 +83,7 @@ VulkanState::VulkanState(const std::shared_ptr<VKSwapChain>& swapchain) : swapch
     VKTexture::Info info{
         .width = 1,
         .height = 1,
-        .format = vk::Format::eR8G8B8A8Srgb,
+        .format = vk::Format::eR8G8B8A8Unorm,
         .type = vk::ImageType::e2D,
         .view_type = vk::ImageViewType::e2D,
         .usage = vk::ImageUsageFlagBits::eSampled |
@@ -124,9 +125,12 @@ VulkanState::VulkanState(const std::shared_ptr<VKSwapChain>& swapchain) : swapch
 
 VulkanState::~VulkanState() {
     auto device = g_vk_instace->GetDevice();
+    device.waitIdle();
 
     // Destroy vertex shader
     device.destroyShaderModule(render_vertex_shader);
+    device.destroyShaderModule(present_vertex_shader);
+    device.destroyShaderModule(present_fragment_shader);
 
     // Destroy pipeline layouts
     device.destroyPipelineLayout(render_pipeline_layout);
@@ -227,7 +231,7 @@ void VulkanState::UnbindTexture(u32 unit) {
     descriptors_dirty = true;
 }
 
-void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> depth, bool update_pipeline_formats,
+void VulkanState::BeginRendering(VKTexture* color, VKTexture* depth, bool update_pipeline_formats,
                     vk::ClearColorValue color_clear, vk::AttachmentLoadOp color_load_op,
                     vk::AttachmentStoreOp color_store_op, vk::ClearDepthStencilValue depth_clear,
                     vk::AttachmentLoadOp depth_load_op, vk::AttachmentStoreOp depth_store_op,
@@ -236,38 +240,37 @@ void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> dept
     EndRendering();
 
     // Make sure attachments are in optimal layout
-    vk::RenderingInfo render_info{{}, color->get().GetArea(), 1, {}};
+    vk::RenderingInfo render_info{{}, {}, 1, {}};
     std::array<vk::RenderingAttachmentInfo, 3> infos{};
 
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-    if (color.has_value()) {
-        auto& image = color->get();
-        image.Transition(cmdbuffer, vk::ImageLayout::eColorAttachmentOptimal);
+    if (color != nullptr) {
+        color->Transition(cmdbuffer, vk::ImageLayout::eColorAttachmentOptimal);
 
         infos[0] = vk::RenderingAttachmentInfo{
-            image.GetView(), image.GetLayout(), {}, {}, {},
+            color->GetView(), color->GetLayout(), {}, {}, {},
             color_load_op, color_store_op, color_clear
         };
 
         render_info.colorAttachmentCount = 1;
         render_info.pColorAttachments = &infos[0];
+        render_info.renderArea = color->GetArea();
     }
 
-    if (depth.has_value()) {
-        auto& image = depth->get();
-        image.Transition(cmdbuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    if (depth != nullptr) {
+        depth->Transition(cmdbuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
         infos[1] = vk::RenderingAttachmentInfo{
-            image.GetView(), image.GetLayout(), {}, {}, {},
+            depth->GetView(), depth->GetLayout(), {}, {}, {},
             depth_load_op, depth_store_op, depth_clear
         };
 
         render_info.pDepthAttachment = &infos[1];
 
 
-        if (IsStencil(image.GetFormat())) {
+        if (IsStencil(depth->GetFormat())) {
             infos[2] = vk::RenderingAttachmentInfo{
-                image.GetView(), image.GetLayout(), {}, {}, {},
+                depth->GetView(), depth->GetLayout(), {}, {}, {},
                 stencil_load_op, stencil_store_op, depth_clear
             };
 
@@ -276,8 +279,12 @@ void VulkanState::BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> dept
     }
 
     if (update_pipeline_formats) {
-        render_pipeline_key.color = color.has_value() ? color->get().GetFormat() : vk::Format::eUndefined;
-        render_pipeline_key.depth_stencil = depth.has_value() ? depth->get().GetFormat() : vk::Format::eUndefined;
+        render_pipeline_key.color = color != nullptr ?
+                    color->GetFormat() :
+                    vk::Format::eUndefined;
+        render_pipeline_key.depth_stencil = depth != nullptr ?
+                    depth->GetFormat() :
+                    vk::Format::eUndefined;
     }
 
     // Begin rendering

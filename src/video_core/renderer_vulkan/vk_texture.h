@@ -32,8 +32,8 @@ public:
     ~VKTexture();
 
     /// Enable move operations
-    VKTexture(VKTexture&&) = default;
-    VKTexture& operator=(VKTexture&&) = default;
+    VKTexture(VKTexture&& other) noexcept;
+    VKTexture& operator=(VKTexture&& other) noexcept;
 
     /// Create a new Vulkan texture object
     void Create(const Info& info);

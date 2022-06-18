@@ -131,35 +131,6 @@ std::vector<const char*> RequiredExtensions(Frontend::WindowSystemType window_ty
     return extensions;
 }
 
-/**
- * Defines a 1:1 pixel ortographic projection matrix with (0,0) on the top-left
- * corner and (width, height) on the lower-bottom.
- *
- * The projection part of the matrix is trivial, hence these operations are represented
- * by a 3x2 matrix.
- *
- * @param flipped Whether the frame should be flipped upside down.
- */
-static glm::mat3x2 MakeOrthographicMatrix(const float width, const float height, bool flipped) {
-    glm::mat3x2 matrix; // Laid out in column-major order
-
-    // Last matrix row is implicitly assumed to be [0, 0, 1].
-    if (flipped) {
-        // clang-format off
-        matrix[0][0] = 2.f / width; matrix[1][0] = 0.f;           matrix[2][0] = -1.f;
-        matrix[0][1] = 0.f;         matrix[1][1] = 2.f / height;  matrix[2][1] = -1.f;
-        // clang-format on
-    }
-    else {
-        // clang-format off
-        matrix[0][0] = 2.f / width; matrix[1][0] = 0.f;           matrix[2][0] = -1.f;
-        matrix[1][1] = 0.f;         matrix[1][1] = -2.f / height; matrix[2][1] = 1.f;
-        // clang-format on
-    }
-
-    return matrix;
-}
-
 RendererVulkan::RendererVulkan(Frontend::EmuWindow& window)
     : RendererBase{window} {
 
@@ -304,13 +275,13 @@ void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::
 
     switch (screen.format) {
     case GPU::Regs::PixelFormat::RGBA8:
-        texture_info.format = vk::Format::eR8G8B8A8Srgb;
+        texture_info.format = vk::Format::eR8G8B8A8Unorm;
         break;
 
     case GPU::Regs::PixelFormat::RGB8:
         // Note that the texture will actually give us an RGBA8 image because next to no modern hardware supports RGB formats.
         // The pixels will be converted automatically by Upload()
-        texture_info.format = vk::Format::eR8G8B8Srgb;
+        texture_info.format = vk::Format::eR8G8B8Unorm;
         break;
 
     case GPU::Regs::PixelFormat::RGB565:
@@ -521,7 +492,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     // Set projection matrix
     draw_info.modelview = glm::transpose(glm::ortho(0.f, static_cast<float>(layout.width),
                                                     static_cast<float>(layout.height), 0.0f,
-                                                    -1.f, 1.f));
+                                                    0.f, 1.f));
     const bool stereo_single_screen = false
     /*    Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
         Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
@@ -535,7 +506,7 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     auto& image = swapchain->GetCurrentImage();
     auto& state = VulkanState::Get();
 
-    state.BeginRendering(image, std::nullopt, false, clear_color, vk::AttachmentLoadOp::eClear);
+    state.BeginRendering(&image, nullptr, false, clear_color, vk::AttachmentLoadOp::eClear);
     state.SetPresentTextures(screen_infos[0].display_texture->GetView(),
                              screen_infos[1].display_texture->GetView(),
                              screen_infos[2].display_texture->GetView());
@@ -727,7 +698,7 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<VKInstance>();
     g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
-    g_vk_instace->Create(instance, physical_devices[0], surface, true);
+    g_vk_instace->Create(instance, physical_devices[1], surface, true);
     g_vk_task_scheduler->Create();
 
     //auto& layout = render_window.GetFramebufferLayout();

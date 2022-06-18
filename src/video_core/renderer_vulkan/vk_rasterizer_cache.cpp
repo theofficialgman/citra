@@ -42,8 +42,8 @@ using SurfaceType = SurfaceParams::SurfaceType;
 using PixelFormat = SurfaceParams::PixelFormat;
 
 static constexpr std::array<vk::Format, 5> fb_format_tuples = {{
-    vk::Format::eR8G8B8A8Srgb,     // RGBA8
-    vk::Format::eR8G8B8Srgb,       // RGB8
+    vk::Format::eR8G8B8A8Unorm,     // RGBA8
+    vk::Format::eR8G8B8Unorm,       // RGB8
     vk::Format::eR5G5B5A1UnormPack16, // RGB5A1
     vk::Format::eR5G6B5UnormPack16,     // RGB565
     vk::Format::eR4G4B4A4UnormPack16,   // RGBA4
@@ -66,7 +66,7 @@ vk::Format GetFormatTuple(PixelFormat pixel_format) {
         ASSERT(tuple_idx < depth_format_tuples.size());
         return depth_format_tuples[tuple_idx];
     }
-    return vk::Format::eR8G8B8A8Srgb;
+    return vk::Format::eR8G8B8A8Unorm;
 }
 
 template <typename Map, typename Interval>
@@ -293,6 +293,7 @@ static bool FillSurface(const Surface& surface, std::array<u8, 4> fill_buffer,
     if (surface->GetScaledRect() != rect) {
         // TODO: use vkCmdClearAttachments to clear subrects
         LOG_ERROR(Render_Vulkan, "Partial surface fills not implemented");
+        return false;
     }
 
     vk::ImageSubresourceRange image_range{{}, 0, 1, 0, 1};
@@ -327,12 +328,36 @@ static bool FillSurface(const Surface& surface, std::array<u8, 4> fill_buffer,
 
         cmdbuffer.clearColorImage(texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
                                               color, image_range);
+        texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+        return true;
+    }
+    case SurfaceParams::SurfaceType::Depth:
+    case SurfaceParams::SurfaceType::DepthStencil: {
+        auto& texture = surface->texture;
+        texture.Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
 
+        u32 value_32bit = 0;
+        vk::ClearDepthStencilValue clear_value;
+
+        if (surface->pixel_format == SurfaceParams::PixelFormat::D16) {
+            std::memcpy(&value_32bit, fill_buffer.data(), sizeof(u16));
+            clear_value.depth = value_32bit / 65535.0f; // 2^16 - 1
+        } else if (surface->pixel_format == SurfaceParams::PixelFormat::D24) {
+            std::memcpy(&value_32bit, fill_buffer.data(), 3);
+            clear_value.depth = value_32bit / 16777215.0f; // 2^24 - 1
+        } else {
+            std::memcpy(&value_32bit, fill_buffer.data(), sizeof(u32));
+            clear_value.depth = (value_32bit & 0xFFFFFF) / 16777215.0f; // 2^24 - 1
+            clear_value.stencil = value_32bit >> 24;
+        }
+
+        cmdbuffer.clearDepthStencilImage(texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
+                                         clear_value, image_range);
         texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
         return true;
     }
     default:
-        LOG_ERROR(Render_Vulkan, "non-color fills not implemented");
+        LOG_CRITICAL(Render_Vulkan, "Unsupported fill operation requested!");
         return false;
     }
 }
@@ -344,14 +369,14 @@ static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
 }
 
 // Allocate an uninitialized texture of appropriate size and format for the surface
-VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(SurfaceType type, vk::Format format,
+void RasterizerCacheVulkan::AllocateTexture(VKTexture& target, SurfaceType type, vk::Format format,
                                                         u32 width, u32 height) {
     // First check if the texture can be recycled
     auto recycled_tex = host_texture_recycler.find({format, width, height});
     if (recycled_tex != host_texture_recycler.end()) {
-        VKTexture texture = std::move(recycled_tex->second);
+        target = std::move(recycled_tex->second);
         host_texture_recycler.erase(recycled_tex);
-        return texture;
+        return;
     }
 
     auto GetUsage = [](SurfaceType type) {
@@ -378,7 +403,7 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(SurfaceType type, vk::Fo
 
     // Otherwise create a brand new texture
     u32 levels = std::log2(std::max(width, height)) + 1;
-    VKTexture::Info texture_info = {
+    VKTexture::Info texture_info{
         .width = width,
         .height = height,
         .format = format,
@@ -388,13 +413,11 @@ VKTexture RasterizerCacheVulkan::AllocateSurfaceTexture(SurfaceType type, vk::Fo
         .levels = levels
     };
 
-    VKTexture texture;
-    texture.Create(texture_info);
-
     auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
-    texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    return texture;
+    target.Destroy();
+    target.Create(texture_info);
+    target.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 CachedSurface::~CachedSurface() {
@@ -1431,8 +1454,8 @@ Surface RasterizerCacheVulkan::CreateSurface(const SurfaceParams& params) {
     static_cast<SurfaceParams&>(*surface) = params;
 
     surface->invalid_regions.insert(surface->GetInterval());
-    surface->texture = AllocateSurfaceTexture(params.type, GetFormatTuple(surface->pixel_format),
-                                              surface->GetScaledWidth(), surface->GetScaledHeight());
+    AllocateTexture(surface->texture, params.type, GetFormatTuple(surface->pixel_format),
+                    surface->GetScaledWidth(), surface->GetScaledHeight());
     return surface;
 }
 

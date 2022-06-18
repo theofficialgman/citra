@@ -56,10 +56,6 @@ protected:
     constexpr NonCopyable() = default;
     ~NonCopyable() = default;
 
-    // Enable std::move operations
-    NonCopyable(NonCopyable&&) = default;
-    NonCopyable& operator=(NonCopyable&&) = default;
-
     NonCopyable(const NonCopyable&) = delete;
     NonCopyable& operator=(const NonCopyable&) = delete;
 };

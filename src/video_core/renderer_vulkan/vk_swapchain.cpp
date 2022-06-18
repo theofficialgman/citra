@@ -19,9 +19,13 @@ VKSwapChain::VKSwapChain(vk::SurfaceKHR surface_) : surface(surface_) {
 
 VKSwapChain::~VKSwapChain() {
     auto device = g_vk_instace->GetDevice();
+    auto instance = g_vk_instace->GetInstance();
     device.waitIdle();
 
+    device.destroySemaphore(render_finished);
+    device.destroySemaphore(image_available);
     device.destroySwapchainKHR(swapchain);
+    instance.destroySurfaceKHR(surface);
 }
 
 bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
@@ -59,11 +63,11 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
 
     // Create sync objects if not already created
     if (!image_available) {
-        image_available = device.createSemaphoreUnique({});
+        image_available = device.createSemaphore({});
     }
 
     if (!render_finished) {
-        render_finished = device.createSemaphoreUnique({});
+        render_finished = device.createSemaphore({});
     }
 
     // Create framebuffer and image views
@@ -78,7 +82,7 @@ constexpr u64 ACQUIRE_TIMEOUT = 1000000000;
 
 void VKSwapChain::AcquireNextImage() {
     auto result = g_vk_instace->GetDevice().acquireNextImageKHR(swapchain, ACQUIRE_TIMEOUT,
-                                                                image_available.get(), VK_NULL_HANDLE,
+                                                                image_available, VK_NULL_HANDLE,
                                                                 &image_index);
     switch (result) {
     case vk::Result::eSuccess:
@@ -98,7 +102,7 @@ void VKSwapChain::AcquireNextImage() {
 void VKSwapChain::Present() {
     const auto present_queue = g_vk_instace->GetPresentQueue();
 
-    vk::PresentInfoKHR present_info(render_finished.get(), swapchain, image_index);
+    vk::PresentInfoKHR present_info(render_finished, swapchain, image_index);
     vk::Result result = present_queue.presentKHR(present_info);
 
     switch (result) {

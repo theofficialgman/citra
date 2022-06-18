@@ -54,7 +54,7 @@ public:
 protected:
     Info buffer_info;
     vk::Buffer buffer;
-    vk::DeviceMemory buffer_memory;
+    vk::DeviceMemory memory;
     void* host_ptr = nullptr;
     std::array<vk::BufferView, MAX_BUFFER_VIEWS> views;
     u32 view_count{};

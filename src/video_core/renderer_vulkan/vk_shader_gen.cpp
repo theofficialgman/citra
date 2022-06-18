@@ -1539,6 +1539,7 @@ vec4 secondary_fragment_color = vec4(0.0);
     // do our own transformation according to PICA specification.
     out += "float z_over_w = 2.0 * gl_FragCoord.z - 1.0;\n"
            "float depth = z_over_w * depth_scale + depth_offset;\n";
+    //out += "if (gl_FragCoord.z == 0) { color = vec4(1.0, 0.0, 0.0, 1.0); return; }\n";
     if (state.depthmap_enable == RasterizerRegs::DepthBuffering::WBuffering) {
         out += "depth /= gl_FragCoord.w;\n";
     }
@@ -1655,11 +1656,14 @@ void main() {
     texcoord0_w = vert_texcoord0_w;
     normquat = vert_normquat;
     view = vert_view;
-    gl_Position = vert_position + vec4(0.0, 0.0, 1.0, 0.0);
-#if !defined(CITRA_GLES) || defined(GL_EXT_clip_cull_distance)
-    //gl_ClipDistance[0] = -vert_position.z; // fixed PICA clipping plane z <= 0
-    //gl_ClipDistance[1] = dot(clip_coef, vert_position);
-#endif // !defined(CITRA_GLES) || defined(GL_EXT_clip_cull_distance)
+
+    // Convert OpenGL [-1, 1] to Vulkan [0, 1]
+    vec4 position = vert_position;
+    position.z = (position.z + 1) * 0.5;
+
+    gl_Position = position;
+    gl_ClipDistance[0] = -vert_position.z; // fixed PICA clipping plane z <= 0
+    gl_ClipDistance[1] = dot(clip_coef, vert_position);
 }
 )";
 

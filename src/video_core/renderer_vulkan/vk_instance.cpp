@@ -7,22 +7,21 @@
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 
-#if defined(VK_EXT_color_write_enable)
-PFN_vkCmdSetColorWriteEnableEXT ptr_vkCmdSetColorWriteEnableEXT;
-#endif /* defined(VK_EXT_color_write_enable) */
-
 namespace Vulkan {
 
 std::unique_ptr<VKInstance> g_vk_instace;
 
 VKInstance::~VKInstance() {
+    device.waitIdle();
 
+    device.destroy();
+    instance.destroy();
 }
 
-bool VKInstance::Create(vk::Instance instance, vk::PhysicalDevice physical_device,
+bool VKInstance::Create(vk::Instance new_instance, vk::PhysicalDevice gpu,
                         vk::SurfaceKHR surface, bool enable_validation_layer) {
-    this->instance = instance;
-    this->physical_device = physical_device;
+    instance = new_instance;
+    physical_device = gpu;
 
     // Get physical device limits
     device_limits = physical_device.getProperties().limits;
@@ -98,15 +97,11 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     }
 
     // Create logical device
-    device = physical_device.createDeviceUnique(device_info);
-
-#if defined(VK_EXT_color_write_enable)
-    ptr_vkCmdSetColorWriteEnableEXT = reinterpret_cast<PFN_vkCmdSetColorWriteEnableEXT>(device->getProcAddr("vkCmdSetColorWriteEnableEXT"));
-#endif /* defined(VK_EXT_color_write_enable) */
+    device = physical_device.createDevice(device_info);
 
     // Grab the graphics and present queues.
-    graphics_queue = device->getQueue(graphics_queue_family_index, 0);
-    present_queue = device->getQueue(present_queue_family_index, 0);
+    graphics_queue = device.getQueue(graphics_queue_family_index, 0);
+    present_queue = device.getQueue(present_queue_family_index, 0);
 
     return true;
 }
@@ -195,7 +190,3 @@ bool VKInstance::FindExtensions() {
 }
 
 } // namespace Vulkan
-
-void vkCmdSetColorWriteEnableEXT(VkCommandBuffer commandBuffer, uint32_t attachmentCount, const VkBool32* pColorWriteEnables) {
-    ptr_vkCmdSetColorWriteEnableEXT(commandBuffer, attachmentCount, pColorWriteEnables);
-}

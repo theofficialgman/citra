@@ -22,8 +22,9 @@ public:
     bool Create(vk::Instance instance, vk::PhysicalDevice gpu,
                 vk::SurfaceKHR surface, bool enable_validation_layer);
 
-    vk::Device GetDevice() const { return device.get(); }
+    vk::Device GetDevice() const { return device; }
     vk::PhysicalDevice GetPhysicalDevice() const { return physical_device; }
+    vk::Instance GetInstance() const { return instance; }
 
     /// Retrieve queue information
     u32 GetGraphicsQueueFamilyIndex() const { return graphics_queue_family_index; }
@@ -46,9 +47,9 @@ public:
     vk::Queue present_queue, graphics_queue;
 
     // Core vulkan objects
-    vk::Instance instance;
     vk::PhysicalDevice physical_device;
-    vk::UniqueDevice device;
+    vk::Instance instance;
+    vk::Device device;
 
     // Extensions and features
     std::vector<const char*> extensions;
@@ -67,7 +68,3 @@ public:
 extern std::unique_ptr<VKInstance> g_vk_instace;
 
 } // namespace Vulkan
-
-#if defined(VK_EXT_color_write_enable)
-extern PFN_vkCmdSetColorWriteEnableEXT ptr_vkCmdSetColorWriteEnableEXT;
-#endif /* defined(VK_EXT_color_write_enable) */

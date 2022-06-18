@@ -11,10 +11,11 @@
 namespace Vulkan {
 
 VKTaskScheduler::~VKTaskScheduler() {
-    SyncToGPU();
-
     // Destroy Vulkan resources
     auto device = g_vk_instace->GetDevice();
+    device.waitIdle();
+
+    SyncToGPU();
     device.destroyCommandPool(command_pool);
     device.destroySemaphore(timeline);
 
@@ -63,7 +64,8 @@ bool VKTaskScheduler::Create() {
         .size = STAGING_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eHostVisible |
                       vk::MemoryPropertyFlagBits::eHostCoherent,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc
+        .usage = vk::BufferUsageFlagBits::eTransferSrc |
+                vk::BufferUsageFlagBits::eTransferDst
     };
 
     // Should be enough for a single frame
@@ -131,6 +133,7 @@ void VKTaskScheduler::SyncToGPU(u64 task_index) {
             for (auto& func : task.cleanups) {
                 func();
             }
+            task.cleanups.clear();
         }
     }
 }

@@ -17,9 +17,6 @@ namespace Vulkan {
 
 constexpr u32 DESCRIPTOR_SET_COUNT = 4;
 
-template <typename T>
-using OptRef = std::optional<std::reference_wrapper<T>>;
-
 struct DrawInfo {
     glm::mat4 modelview;
     glm::vec4 i_resolution;
@@ -93,7 +90,7 @@ public:
                     vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha);
 
     /// Rendering
-    void BeginRendering(OptRef<VKTexture> color, OptRef<VKTexture> depth, bool update_pipeline_formats = false,
+    void BeginRendering(VKTexture* color, VKTexture* depth, bool update_pipeline_formats = false,
                         vk::ClearColorValue color_clear = {},
                         vk::AttachmentLoadOp color_load_op = vk::AttachmentLoadOp::eLoad,
                         vk::AttachmentStoreOp color_store_op = vk::AttachmentStoreOp::eStore,

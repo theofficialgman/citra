@@ -28,12 +28,12 @@ void VKBuffer::Create(const VKBuffer::Info& info) {
     auto memory_type_index = FindMemoryType(mem_requirements.memoryTypeBits, info.properties);
     vk::MemoryAllocateInfo alloc_info(mem_requirements.size, memory_type_index);
 
-    buffer_memory = device.allocateMemory(alloc_info);
-    device.bindBufferMemory(buffer, buffer_memory, 0);
+    memory = device.allocateMemory(alloc_info);
+    device.bindBufferMemory(buffer, memory, 0);
 
     // Optionally map the buffer to CPU memory
     if (info.properties & vk::MemoryPropertyFlagBits::eHostVisible) {
-        host_ptr = device.mapMemory(buffer_memory, 0, info.size);
+        host_ptr = device.mapMemory(memory, 0, info.size);
     }
 
     for (auto& format : info.view_formats) {
@@ -51,13 +51,16 @@ void VKBuffer::Recreate() {
 void VKBuffer::Destroy() {
     if (buffer) {
         if (host_ptr != nullptr) {
-            g_vk_instace->GetDevice().unmapMemory(buffer_memory);
+            g_vk_instace->GetDevice().unmapMemory(memory);
         }
 
-        auto deleter = [this]() {
+        auto deleter = [buffer = buffer,
+                        memory = memory,
+                        view_count = view_count,
+                        views = views]() {
             auto device = g_vk_instace->GetDevice();
             device.destroyBuffer(buffer);
-            device.freeMemory(buffer_memory);
+            device.freeMemory(memory);
 
             for (u32 i = 0; i < view_count; i++) {
                 device.destroyBufferView(views[i]);
