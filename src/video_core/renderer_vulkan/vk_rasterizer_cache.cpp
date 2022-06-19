@@ -239,23 +239,28 @@ inline vk::ImageSubresourceRange SubResourceLayersToRange(const vk::ImageSubreso
 }
 
 static bool BlitTextures(const Surface& src_surface, const Common::Rectangle<u32>& src_rect,
-                         const Surface& dst_surface, const Common::Rectangle<u32>& dst_rect, SurfaceType type) {
-    vk::ImageSubresourceLayers image_range{{}, {}, 0, 1};
-    switch (src_surface->type) {
-    case SurfaceParams::SurfaceType::Color:
-    case SurfaceParams::SurfaceType::Texture:
-        image_range.aspectMask = vk::ImageAspectFlagBits::eColor;
-        break;
-    case SurfaceParams::SurfaceType::Depth:
-        image_range.aspectMask = vk::ImageAspectFlagBits::eDepth;
-        break;
-    case SurfaceParams::SurfaceType::DepthStencil:
-        image_range.aspectMask =
-            vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
-        break;
-    default:
-        UNIMPLEMENTED();
-    }
+                         const Surface& dst_surface, const Common::Rectangle<u32>& dst_rect,
+                         u32 src_level = 0, u32 dst_level = 0) {
+    vk::ImageSubresourceLayers src_range{{}, src_level, 0, 1};
+    vk::ImageSubresourceLayers dst_range{{}, dst_level, 0, 1};
+
+    auto GetAspect = [](SurfaceType type) -> vk::ImageAspectFlags {
+        switch (type) {
+        case SurfaceParams::SurfaceType::Color:
+        case SurfaceParams::SurfaceType::Texture:
+            return vk::ImageAspectFlagBits::eColor;
+        case SurfaceParams::SurfaceType::Depth:
+            return vk::ImageAspectFlagBits::eDepth;
+        case SurfaceParams::SurfaceType::DepthStencil:
+            return vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil;
+        default:
+            UNIMPLEMENTED();
+            return vk::ImageAspectFlagBits::eNone;
+        }
+    };
+
+    src_range.aspectMask = GetAspect(src_surface->type);
+    dst_range.aspectMask = GetAspect(dst_surface->type);
 
     // Prepare images for transfer
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
@@ -276,7 +281,7 @@ static bool BlitTextures(const Surface& src_surface, const Common::Rectangle<u32
         vk::Offset3D{static_cast<s32>(dst_rect.right), static_cast<s32>(dst_rect.top), 1}
     };
 
-    vk::ImageBlit blit_area{image_range, src_offsets, image_range, dst_offsets};
+    vk::ImageBlit blit_area{src_range, src_offsets, dst_range, dst_offsets};
     cmdbuffer.blitImage(src_texture.GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
                         dst_texture.GetHandle(), vk::ImageLayout::eTransferDstOptimal,
                         {blit_area}, vk::Filter::eNearest);
@@ -497,10 +502,8 @@ void RasterizerCacheVulkan::CopySurface(const Surface& src_surface, const Surfac
         return;
     }
     if (src_surface->CanSubRect(subrect_params)) {
-        auto srect = src_surface->GetScaledSubRect(subrect_params);
-        auto drect = dst_surface->GetScaledSubRect(subrect_params);
-
-        BlitTextures(src_surface, srect, dst_surface, drect, src_surface->type);
+        BlitTextures(src_surface, src_surface->GetScaledSubRect(subrect_params),
+                     dst_surface, dst_surface->GetScaledSubRect(subrect_params));
         return;
     }
 
@@ -811,7 +814,7 @@ bool RasterizerCacheVulkan::BlitSurfaces(const Surface& src_surface,
         return false;
 
     dst_surface->InvalidateAllWatcher();
-    return BlitTextures(src_surface, src_rect, dst_surface, dst_rect, src_surface->type);
+    return BlitTextures(src_surface, src_rect, dst_surface, dst_rect);
 }
 
 Surface RasterizerCacheVulkan::GetSurface(const SurfaceParams& params, ScaleMatch match_res_scale,
@@ -1016,12 +1019,10 @@ Surface RasterizerCacheVulkan::GetTextureSurface(const Pica::Texture::TextureInf
                     ValidateSurface(level_surface, level_surface->addr, level_surface->size);
                 }
 
-                //state.ResetTexture(level_surface->texture.handle);
-                //state.Apply();
                 if (!surface->is_custom /*&& texture_filterer->IsNull()*/) {
-                    auto src_rect = level_surface->GetScaledRect();
-                    auto dst_rect = surface_params.GetScaledRect();
-                    BlitSurfaces(level_surface, src_rect, surface, dst_rect);
+                    BlitTextures(level_surface, level_surface->GetScaledRect(),
+                                 surface, surface_params.GetScaledRect(),
+                                 0, level);
                 }
                 watcher->Validate();
             }

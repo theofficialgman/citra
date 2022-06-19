@@ -468,7 +468,6 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
         render_pipeline_builder.SetBlendAttachment(att.blendEnable, att.srcColorBlendFactor, att.dstColorBlendFactor,
                                                    att.colorBlendOp, att.srcAlphaBlendFactor, att.dstAlphaBlendFactor,
                                                    att.alphaBlendOp, att.colorWriteMask);
-        std::cout << "New pipeline!\n";
         // Cache the resulted pipeline
         pipeline = render_pipeline_builder.Build();
         render_pipelines.emplace(render_pipeline_key, vk::UniquePipeline{pipeline});

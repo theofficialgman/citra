@@ -328,6 +328,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     }
 
     // Sync and bind the texture surfaces
+    VKTexture temp_tex;
     const auto pica_textures = regs.texturing.GetTextures();
     for (unsigned texture_index = 0; texture_index < pica_textures.size(); ++texture_index) {
         const auto& texture = pica_textures[texture_index];
@@ -336,7 +337,16 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
             //texture_samplers[texture_index].SyncWithConfig(texture.config);
             Surface surface = res_cache.GetTextureSurface(texture);
             if (surface != nullptr) {
-                state.SetTexture(texture_index, surface->texture);
+                if (color_surface && color_surface->texture.GetHandle() ==
+                        surface->texture.GetHandle()) {
+                    // The game is trying to use a surface as a texture and framebuffer at the same time
+                    // which causes unpredictable behavior on the host.
+                    // Making a copy to sample from eliminates this issue and seems to be fairly cheap.
+                    temp_tex.Create(color_surface->texture);
+                    state.SetTexture(texture_index, temp_tex);
+                } else {
+                    state.SetTexture(texture_index, surface->texture);
+                }
             } else {
                 // Can occur when texture addr is null or its memory is unmapped/invalid
                 // HACK: In this case, the correct behaviour for the PICA is to use the last
@@ -1141,6 +1151,9 @@ void RasterizerVulkan::SyncCullMode() {
     const auto& regs = Pica::g_state.regs;
 
     auto& state = VulkanState::Get();
+    state.SetCullMode(vk::CullModeFlagBits::eNone);
+    return;
+
     switch (regs.rasterizer.cull_mode) {
     case Pica::RasterizerRegs::CullMode::KeepAll:
         state.SetCullMode(vk::CullModeFlagBits::eNone);

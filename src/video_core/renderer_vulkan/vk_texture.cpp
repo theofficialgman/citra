@@ -101,8 +101,6 @@ void VKTexture::Create(const Info& create_info) {
         info.format = vk::Format::eD32SfloatS8Uint;
     }
 
-    std::cout << "New surface!\n";
-
     // Create the texture
     image_size = info.width * info.height * BytesPerPixel(info.format);
     aspect = GetImageAspect(info.format);
@@ -139,6 +137,36 @@ void VKTexture::Create(const Info& create_info) {
     view = device.createImageView(view_info);
 }
 
+void VKTexture::Create(VKTexture& other) {
+    auto info = other.info;
+    Create(info);
+
+    // Copy the buffer contents
+    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
+    Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
+
+    auto old_layout = other.GetLayout();
+    other.Transition(cmdbuffer, vk::ImageLayout::eTransferSrcOptimal);
+
+    u32 copy_count = 0;
+    std::array<vk::ImageCopy, 16> copy_regions;
+
+    for (u32 i = 0; i < info.levels; i++) {
+        copy_regions[copy_count++] = vk::ImageCopy{
+            vk::ImageSubresourceLayers{aspect, i, 0, 1}, {0},
+            vk::ImageSubresourceLayers{aspect, i, 0, 1}, {0},
+            {info.width, info.height, 0}
+        };
+    }
+
+    cmdbuffer.copyImage(other.GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
+                        texture, vk::ImageLayout::eTransferDstOptimal, copy_count,
+                        copy_regions.data());
+
+    Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+    other.Transition(cmdbuffer, old_layout);
+}
+
 void VKTexture::Adopt(const Info& create_info, vk::Image image) {
     info = create_info;
     image_size = info.width * info.height * BytesPerPixel(info.format);
@@ -167,7 +195,6 @@ void VKTexture::Destroy() {
                         memory = memory]() {
             auto device = g_vk_instace->GetDevice();
             if (texture) {
-                std::cout << "Surface destroyed!\n";
                 device.destroyImage(texture);
                 device.destroyImageView(view);
                 device.freeMemory(memory);
