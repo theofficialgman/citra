@@ -63,6 +63,7 @@ class RendererBase;
 
 namespace Core {
 
+class ExclusiveMonitor;
 class Timing;
 
 class System {
@@ -364,6 +365,8 @@ private:
     std::unique_ptr<Memory::MemorySystem> memory;
     std::unique_ptr<Kernel::KernelSystem> kernel;
     std::unique_ptr<Timing> timing;
+
+     std::unique_ptr<Core::ExclusiveMonitor> exclusive_monitor;
 
 private:
     static System s_instance;
