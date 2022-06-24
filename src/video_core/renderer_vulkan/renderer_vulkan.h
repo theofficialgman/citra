@@ -26,7 +26,7 @@ struct ScreenInfo {
     GPU::Regs::PixelFormat format;
 };
 
-class RendererVulkan : public RendererBase {
+class RendererVulkan : public VideoCore::RendererBase {
 public:
     RendererVulkan(Frontend::EmuWindow& window);
     ~RendererVulkan() override = default;
@@ -39,7 +39,7 @@ public:
 
     bool BeginPresent();
     void EndPresent();
-    void SwapBuffers();
+    void SwapBuffers() override;
 
     void TryPresent(int timeout_ms) override {}
     void PrepareVideoDumping() override {}

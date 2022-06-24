@@ -43,10 +43,13 @@ static bool IsVendorAmd() {
     const std::string_view gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
     return gpu_vendor == "ATI Technologies Inc." || gpu_vendor == "Advanced Micro Devices, Inc.";
 }
+
+#ifdef __APPLE__
 static bool IsVendorIntel() {
     std::string gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
     return gpu_vendor == "Intel Inc.";
 }
+#endif
 
 RasterizerOpenGL::RasterizerOpenGL(Frontend::EmuWindow& emu_window)
     : is_amd(IsVendorAmd()), vertex_buffer(GL_ARRAY_BUFFER, VERTEX_BUFFER_SIZE, is_amd),
@@ -758,8 +761,9 @@ bool RasterizerOpenGL::Draw(bool accelerate, bool is_indexed) {
                     texture_cube_sampler.SyncWithConfig(texture.config);
                     state.texture_units[texture_index].texture_2d = 0;
                     continue; // Texture unit 0 setup finished. Continue to next unit
+                default:
+                    state.texture_cube_unit.texture_cube = 0;
                 }
-                state.texture_cube_unit.texture_cube = 0;
             }
 
             texture_samplers[texture_index].SyncWithConfig(texture.config);

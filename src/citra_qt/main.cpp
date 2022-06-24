@@ -763,7 +763,7 @@ void GMainWindow::ConnectMenuEvents() {
     connect(ui->action_Close_Movie, &QAction::triggered, this, &GMainWindow::OnCloseMovie);
     connect(ui->action_Save_Movie, &QAction::triggered, this, &GMainWindow::OnSaveMovie);
     connect(ui->action_Movie_Read_Only_Mode, &QAction::toggled, this,
-            [this](bool checked) { Core::Movie::GetInstance().SetReadOnly(checked); });
+            [](bool checked) { Core::Movie::GetInstance().SetReadOnly(checked); });
     connect(ui->action_Enable_Frame_Advancing, &QAction::triggered, this, [this] {
         if (emulation_running) {
             Core::System::GetInstance().frame_limiter.SetFrameAdvancing(
@@ -1499,7 +1499,7 @@ void GMainWindow::InstallCIA(QStringList filepaths) {
         const auto cia_progress = [&](std::size_t written, std::size_t total) {
             emit UpdateProgress(written, total);
         };
-        for (const auto current_path : filepaths) {
+        for (const auto& current_path : filepaths) {
             status = Service::AM::InstallCIA(current_path.toStdString(), cia_progress);
             emit CIAInstallReport(status, current_path);
         }
@@ -1951,7 +1951,8 @@ void GMainWindow::OnCaptureScreenshot() {
     png_dialog.setAcceptMode(QFileDialog::AcceptSave);
     png_dialog.setDefaultSuffix(QStringLiteral("png"));
     if (png_dialog.exec()) {
-        const QString path = png_dialog.selectedFiles().first();
+        const QList selected = png_dialog.selectedFiles();
+        const QString path = selected.first();
         if (!path.isEmpty()) {
             UISettings::values.screenshot_path = QFileInfo(path).path();
             render_window->CaptureScreenshot(UISettings::values.screenshot_resolution_factor, path);

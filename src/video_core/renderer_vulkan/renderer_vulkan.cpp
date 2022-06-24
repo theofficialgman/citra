@@ -723,6 +723,14 @@ VideoCore::ResultStatus RendererVulkan::Init() {
 }
 
 /// Shutdown the renderer
-void RendererVulkan::ShutDown() {}
+void RendererVulkan::ShutDown() {
+    vertex_buffer.Destroy();
 
-} // namespace OpenGL
+    rasterizer.reset();
+    swapchain.reset();
+    g_vk_task_scheduler.reset();
+    s_vulkan_state.reset();
+    g_vk_instace.reset();
+}
+
+} // namespace Vulkan

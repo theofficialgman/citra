@@ -13,7 +13,7 @@
 
 namespace Vulkan {
 
-std::unique_ptr<VulkanState> s_vulkan_state{};
+std::unique_ptr<VulkanState> s_vulkan_state;
 
 auto IsStencil = [](vk::Format format) -> bool {
     switch (format) {
@@ -144,6 +144,18 @@ VulkanState::~VulkanState() {
     // Destroy samplers
     device.destroySampler(render_sampler);
     device.destroySampler(present_sampler);
+
+    // Destroy shaders
+    for (auto& shader : render_fragment_shaders) {
+        device.destroyShaderModule(shader.second);
+    }
+
+    // Destroy pipelines
+    for (auto& pipeline : render_pipelines) {
+        device.destroyPipeline(pipeline.second);
+    }
+
+    device.destroyPipeline(present_pipeline);
 }
 
 void VulkanState::Create(const std::shared_ptr<VKSwapChain>& swapchain) {
@@ -445,19 +457,19 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
     // Try to use an already complete pipeline
     vk::Pipeline pipeline;
     if (result != render_pipelines.end()) {
-        pipeline = result->second.get();
+        pipeline = result->second;
     }
     else {
         // Maybe the shader has been compiled but the pipeline state changed?
         auto shader = render_fragment_shaders.find(render_pipeline_key.fragment_config);
         if (shader != render_fragment_shaders.end()) {
-            render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, shader->second.get());
+            render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, shader->second);
         }
         else {
             // Re-compile shader module and create new pipeline
             auto code = GenerateFragmentShader(render_pipeline_key.fragment_config);
             auto module = CompileShader(code, vk::ShaderStageFlagBits::eFragment);
-            render_fragment_shaders.emplace(render_pipeline_key.fragment_config, vk::UniqueShaderModule{module});
+            render_fragment_shaders.emplace(render_pipeline_key.fragment_config, module);
             render_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, module);
         }
 
@@ -470,7 +482,7 @@ void VulkanState::ApplyRenderState(const Pica::Regs& regs) {
                                                    att.alphaBlendOp, att.colorWriteMask);
         // Cache the resulted pipeline
         pipeline = render_pipeline_builder.Build();
-        render_pipelines.emplace(render_pipeline_key, vk::UniquePipeline{pipeline});
+        render_pipelines.emplace(render_pipeline_key, pipeline);
     }
 
     // Bind the render pipeline
@@ -502,7 +514,7 @@ void VulkanState::ApplyPresentState() {
 
     // Bind present pipeline and descriptors
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-    cmdbuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, present_pipeline.get());
+    cmdbuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, present_pipeline);
 
     ApplyCommonState(false);
 
@@ -686,7 +698,7 @@ void VulkanState::ConfigurePresentPipeline() {
     present_fragment_shader = CompileShader(fragment_code, vk::ShaderStageFlagBits::eFragment);
     present_pipeline_builder.SetShaderStage(vk::ShaderStageFlagBits::eFragment, present_fragment_shader);
 
-    present_pipeline = vk::UniquePipeline{present_pipeline_builder.Build()};
+    present_pipeline = present_pipeline_builder.Build();
 }
 
 }  // namespace Vulkan

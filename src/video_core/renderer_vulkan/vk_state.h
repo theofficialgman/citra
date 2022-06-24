@@ -141,12 +141,12 @@ private:
     PipelineCacheKey render_pipeline_key{};
     PipelineBuilder render_pipeline_builder, present_pipeline_builder;
     vk::PipelineLayout render_pipeline_layout, present_pipeline_layout;
-    std::unordered_map<PipelineCacheKey, vk::UniquePipeline> render_pipelines;
-    vk::UniquePipeline present_pipeline;
+    std::unordered_map<PipelineCacheKey, vk::Pipeline> render_pipelines;
+    vk::Pipeline present_pipeline;
 
     // Shader caches
     vk::ShaderModule render_vertex_shader, present_vertex_shader, present_fragment_shader;
-    std::unordered_map<PicaFSConfig, vk::UniqueShaderModule> render_fragment_shaders;
+    std::unordered_map<PicaFSConfig, vk::ShaderModule> render_fragment_shaders;
 
     // Dynamic state
     enum DynamicStateFlags : u32 {
@@ -176,5 +176,7 @@ private:
     vk::LogicOp logic_op{};
     std::array<float, 4> blend_constants{};
 };
+
+extern std::unique_ptr<VulkanState> s_vulkan_state;
 
 } // namespace Vulkan

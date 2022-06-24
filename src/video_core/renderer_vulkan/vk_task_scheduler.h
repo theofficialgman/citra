@@ -20,7 +20,7 @@
 
 namespace Vulkan {
 
-constexpr u32 TASK_COUNT = 3;
+constexpr u32 TASK_COUNT = 5;
 constexpr u32 STAGING_BUFFER_SIZE = 16 * 1024 * 1024;
 
 class VKSwapChain;
@@ -60,8 +60,8 @@ public:
 
 private:
     struct Task {
-        bool use_upload_buffer{false};
-        u64 current_offset{}, task_id{};
+        bool use_upload_buffer = false;
+        u64 current_offset = 0, task_id = 0;
         std::array<vk::CommandBuffer, 2> command_buffers;
         std::vector<std::function<void()>> cleanups;
         vk::DescriptorPool pool;
@@ -70,11 +70,11 @@ private:
 
     vk::Semaphore timeline;
     vk::CommandPool command_pool;
-    u64 current_task_id = 1;
+    u64 current_task_id = -1;
 
     // Each task contains unique resources
     std::array<Task, TASK_COUNT> tasks;
-    u64 current_task = 0;
+    u64 current_task = TASK_COUNT - 1;
 };
 
 extern std::unique_ptr<VKTaskScheduler> g_vk_task_scheduler;

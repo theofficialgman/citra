@@ -422,9 +422,6 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     g_vk_task_scheduler->Submit();
 
-    auto gpu_tick = g_vk_task_scheduler->GetGPUTick();
-    auto cpu_tick = g_vk_task_scheduler->GetCPUTick();
-
     return true;
 }
 

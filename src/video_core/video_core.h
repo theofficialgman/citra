@@ -6,14 +6,13 @@
 
 #include <atomic>
 #include <iostream>
+#include <functional>
 #include <memory>
 #include "core/frontend/emu_window.h"
 
 namespace Frontend {
 class EmuWindow;
 }
-
-class RendererBase;
 
 namespace Memory {
 class MemorySystem;
@@ -24,6 +23,7 @@ class MemorySystem;
 
 namespace VideoCore {
 
+class RendererBase;
 extern std::unique_ptr<RendererBase> g_renderer; ///< Renderer plugin
 
 // TODO: Wrap these in a user settings struct along with any other graphics settings (often set from

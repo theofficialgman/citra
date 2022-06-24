@@ -436,7 +436,7 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window, u32 system_mo
     return ResultStatus::Success;
 }
 
-RendererBase& System::Renderer() {
+VideoCore::RendererBase& System::Renderer() {
     return *VideoCore::g_renderer;
 }
 

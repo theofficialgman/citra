@@ -832,7 +832,7 @@ struct MicroProfile
 #define MP_LOG_LEAVE 0x0
 
 
-inline int MicroProfileLogType(MicroProfileLogEntry Index)
+inline uint64_t MicroProfileLogType(MicroProfileLogEntry Index)
 {
     return ((MP_LOG_BEGIN_MASK & Index)>>62) & 0x3;
 }
@@ -845,7 +845,7 @@ inline uint64_t MicroProfileLogTimerIndex(MicroProfileLogEntry Index)
 inline MicroProfileLogEntry MicroProfileMakeLogIndex(uint64_t nBegin, MicroProfileToken nToken, int64_t nTick)
 {
     MicroProfileLogEntry Entry =  (nBegin<<62) | ((0x3fff&nToken)<<48) | (MP_LOG_TICK_MASK&nTick);
-    int t = MicroProfileLogType(Entry);
+    uint64_t t = MicroProfileLogType(Entry);
     uint64_t nTimerIndex = MicroProfileLogTimerIndex(Entry);
     MP_ASSERT(t == nBegin);
     MP_ASSERT(nTimerIndex == (nToken&0x3fff));

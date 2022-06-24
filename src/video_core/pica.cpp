@@ -34,13 +34,13 @@ template <typename T>
 void Zero(T& o) {
     static_assert(std::is_trivially_copyable_v<T>,
                   "It's undefined behavior to memset a non-trivially copyable type");
-    memset(&o, 0, sizeof(o));
+    std::memset(&o, 0, sizeof(o));
 }
 
 State::State() : geometry_pipeline(*this) {
     auto SubmitVertex = [this](const Shader::AttributeBuffer& vertex) {
         using Pica::Shader::OutputVertex;
-        auto AddTriangle = [this](const OutputVertex& v0, const OutputVertex& v1,
+        auto AddTriangle = [](const OutputVertex& v0, const OutputVertex& v1,
                                   const OutputVertex& v2) {
             VideoCore::g_renderer->Rasterizer()->AddTriangle(v0, v1, v2);
         };

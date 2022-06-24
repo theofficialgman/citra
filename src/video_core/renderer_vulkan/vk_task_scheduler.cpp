@@ -15,13 +15,14 @@ VKTaskScheduler::~VKTaskScheduler() {
     auto device = g_vk_instace->GetDevice();
     device.waitIdle();
 
+    for (auto& task : tasks) {
+        task.staging.Destroy();
+        device.destroyDescriptorPool(task.pool);
+    }
+
     SyncToGPU();
     device.destroyCommandPool(command_pool);
     device.destroySemaphore(timeline);
-
-    for (auto& task : tasks) {
-        device.destroyDescriptorPool(task.pool);
-    }
 }
 
 std::tuple<u8*, u32> VKTaskScheduler::RequestStaging(u32 size) {
@@ -111,7 +112,8 @@ vk::DescriptorPool VKTaskScheduler::GetDescriptorPool() const {
 
 void VKTaskScheduler::SyncToGPU(u64 task_index) {
     // No need to sync if the GPU already has finished the task
-    if (tasks[task_index].task_id <= GetGPUTick()) {
+    auto tick = GetGPUTick();
+    if (tasks[task_index].task_id <= tick) {
         return;
     }
 
@@ -162,11 +164,11 @@ void VKTaskScheduler::Submit(bool wait_completion, bool present, VKSwapChain* sw
     }
 
     const u32 num_signal_semaphores = present ? 2U : 1U;
-    const std::array signal_values{task.task_id, u64(0)};
+    const std::array signal_values{task.task_id + 1, u64(0)};
     std::array signal_semaphores{timeline, vk::Semaphore{}};
 
     const u32 num_wait_semaphores = present ? 2U : 1U;
-    const std::array wait_values{task.task_id - 1, u64(1)};
+    const std::array wait_values{task.task_id, u64(1)};
     std::array wait_semaphores{timeline, vk::Semaphore{}};
 
     // When the task completes the timeline will increment to the task id
@@ -224,7 +226,7 @@ void VKTaskScheduler::BeginTask() {
 
     // Move to the next command buffer.
     current_task = next_task_index;
-    task.task_id = current_task_id++;
+    task.task_id = ++current_task_id;
     task.current_offset = 0;
     task.use_upload_buffer = false;
 
