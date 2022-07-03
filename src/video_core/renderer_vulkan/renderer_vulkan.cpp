@@ -2,19 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-//#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#include <algorithm>
-#include <array>
-#include <condition_variable>
-#include <cstddef>
-#include <cstdlib>
-#include <deque>
-#include <memory>
-#include <mutex>
-#include <queue>
 #include <glm/gtc/matrix_transform.hpp>
 #include "common/assert.h"
-#include "common/bit_field.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "core/core.h"
@@ -27,10 +16,8 @@
 #include "core/hw/lcd.h"
 #include "core/memory.h"
 #include "core/settings.h"
-#include "core/tracer/recorder.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_pipeline_builder.h"
@@ -387,85 +374,6 @@ void RendererVulkan::DrawSingleScreen(u32 screen_id, float x, float y, float w, 
 }
 
 /**
- * Draws a single texture to the emulator window, rotating the texture to correct for the 3DS's LCD
- * rotation.
- */
-void RendererVulkan::DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
-                                                   const ScreenInfo& screen_info_r, float x,
-                                                   float y, float w, float h) {
-    ASSERT(false);
-    //DrawSingleScreenRotated(screen_info_l, x, y, w, h);
-    /*const auto& texcoords = screen_info_l.display_texcoords;
-
-    const std::array<ScreenRectVertex, 4> vertices = {{
-        ScreenRectVertex(x, y, texcoords.bottom, texcoords.left),
-        ScreenRectVertex(x + w, y, texcoords.bottom, texcoords.right),
-        ScreenRectVertex(x, y + h, texcoords.top, texcoords.left),
-        ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right),
-    }};
-
-    const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
-    auto [width_l, height_l] = screen_info_l.texture.GetArea().extent;
-
-    draw_info.i_resolution = glm::vec4{width_l * scale_factor, height_l * scale_factor,
-                                       1.0f / (width_l * scale_factor),
-                                       1.0f / (height_l * scale_factor)};
-    draw_info.o_resolution = glm::vec4{h, w, 1.0f / h, 1.0f / w};
-
-    state.texture_units[0].texture_2d = screen_info_l.display_texture;
-    state.texture_units[1].texture_2d = screen_info_r.display_texture;
-    state.texture_units[0].sampler = filter_sampler.handle;
-    state.texture_units[1].sampler = filter_sampler.handle;
-    state.Apply();
-
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    state.texture_units[0].texture_2d = 0;
-    state.texture_units[1].texture_2d = 0;
-    state.texture_units[0].sampler = 0;
-    state.texture_units[1].sampler = 0;
-    state.Apply();*/
-}
-
-void RendererVulkan::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
-                                            const ScreenInfo& screen_info_r, float x, float y,
-                                            float w, float h) {
-    ASSERT(false);
-    //DrawSingleScreen(screen_info_l, x, y, w, h);
-    /*const auto& texcoords = screen_info_l.display_texcoords;
-
-    const std::array<ScreenRectVertex, 4> vertices = {{
-        ScreenRectVertex(x, y, texcoords.bottom, texcoords.right),
-        ScreenRectVertex(x + w, y, texcoords.top, texcoords.right),
-        ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.left),
-        ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.left),
-    }};
-
-    const u16 scale_factor = VideoCore::GetResolutionScaleFactor();
-    glUniform4f(uniform_i_resolution,
-                static_cast<float>(screen_info_l.texture.width * scale_factor),
-                static_cast<float>(screen_info_l.texture.height * scale_factor),
-                1.0f / static_cast<float>(screen_info_l.texture.width * scale_factor),
-                1.0f / static_cast<float>(screen_info_l.texture.height * scale_factor));
-    glUniform4f(uniform_o_resolution, w, h, 1.0f / w, 1.0f / h);
-    state.texture_units[0].texture_2d = screen_info_l.display_texture;
-    state.texture_units[1].texture_2d = screen_info_r.display_texture;
-    state.texture_units[0].sampler = filter_sampler.handle;
-    state.texture_units[1].sampler = filter_sampler.handle;
-    state.Apply();
-
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    state.texture_units[0].texture_2d = 0;
-    state.texture_units[1].texture_2d = 0;
-    state.texture_units[0].sampler = 0;
-    state.texture_units[1].sampler = 0;
-    state.Apply();*/
-}
-
-/**
  * Draws the emulated screens to the emulator window.
  */
 void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool flipped) {
@@ -497,11 +405,6 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     /*    Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
         Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
         Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced*/;
-
-    // Bind a second texture for the right eye if in Anaglyph mode
-    if (stereo_single_screen) {
-        //glUniform1i(uniform_color_texture_r, 1);
-    }
 
     auto& image = swapchain->GetCurrentImage();
     auto& state = VulkanState::Get();
@@ -538,10 +441,6 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                                             ((float)layout.width / 2),
                                         layout.top_screen.top, layout.top_screen.GetWidth(),
                                         layout.top_screen.GetHeight());
-            } else if (stereo_single_screen) {
-                DrawSingleScreenStereoRotated(
-                    screen_infos[0], screen_infos[1], (float)top_screen.left, (float)top_screen.top,
-                    (float)top_screen.GetWidth(), (float)top_screen.GetHeight());
             }
         } else {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
@@ -563,10 +462,6 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                                  layout.cardboard.top_screen_right_eye + ((float)layout.width / 2),
                                  layout.top_screen.top, layout.top_screen.GetWidth(),
                                  layout.top_screen.GetHeight());
-            } else if (stereo_single_screen) {
-                DrawSingleScreenStereo(screen_infos[0], screen_infos[1], (float)top_screen.left,
-                                       (float)top_screen.top, (float)top_screen.GetWidth(),
-                                       (float)top_screen.GetHeight());
             }
         }
     }
@@ -597,11 +492,6 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                                             ((float)layout.width / 2),
                                         layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
                                         layout.bottom_screen.GetHeight());
-            } else if (stereo_single_screen) {
-                DrawSingleScreenStereoRotated(screen_infos[2], screen_infos[2],
-                                              (float)bottom_screen.left, (float)bottom_screen.top,
-                                              (float)bottom_screen.GetWidth(),
-                                              (float)bottom_screen.GetHeight());
             }
         } else {
             if (Settings::values.render_3d == Settings::StereoRenderOption::Off) {
@@ -627,10 +517,6 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
                                      ((float)layout.width / 2),
                                  layout.bottom_screen.top, layout.bottom_screen.GetWidth(),
                                  layout.bottom_screen.GetHeight());
-            } else if (stereo_single_screen) {
-                DrawSingleScreenStereo(screen_infos[2], screen_infos[2], (float)bottom_screen.left,
-                                       (float)bottom_screen.top, (float)bottom_screen.GetWidth(),
-                                       (float)bottom_screen.GetHeight());
             }
         }
     }

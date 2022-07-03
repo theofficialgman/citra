@@ -20,9 +20,9 @@ namespace Vulkan {
 
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {
-    Vulkan::VKTexture* display_texture;
+    VKTexture* display_texture;
     Common::Rectangle<float> display_texcoords;
-    Vulkan::VKTexture texture;
+    VKTexture texture;
     GPU::Regs::PixelFormat format;
 };
 
@@ -47,19 +47,12 @@ public:
 
 private:
     void CreateVulkanObjects();
-    void ConfigureRenderPipeline();
     void PrepareRendertarget();
     void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
 
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
     void DrawSingleScreenRotated(u32 screen_id, float x, float y, float w, float h);
     void DrawSingleScreen(u32 screen_id, float x, float y, float w, float h);
-    void DrawSingleScreenStereoRotated(const ScreenInfo& screen_info_l,
-                                       const ScreenInfo& screen_info_r, float x, float y, float w, float h);
-    void DrawSingleScreenStereo(const ScreenInfo& screen_info_l, const ScreenInfo& screen_info_r,
-                                float x, float y, float w, float h);
-
-    void UpdateFramerate();
 
     // Loads framebuffer from emulated memory into the display information structure
     void LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& framebuffer,
