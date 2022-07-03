@@ -59,11 +59,11 @@ private:
 
     vk::Semaphore timeline;
     vk::CommandPool command_pool;
-    u64 current_task_id = -1;
+    u64 current_task_id = 0;
 
     // Each task contains unique resources
     std::array<Task, TASK_COUNT> tasks;
-    u64 current_task = TASK_COUNT - 1;
+    u64 current_task = -1;
 };
 
 extern std::unique_ptr<TaskScheduler> g_vk_task_scheduler;

@@ -118,26 +118,12 @@ void TaskScheduler::SyncToGPU(u64 task_index) {
         return;
     }
 
-    auto last_completed_task_id = GetGPUTick();
-
     // Wait for the task to complete
     vk::SemaphoreWaitInfo wait_info{{}, timeline, tasks[task_index].task_id};
     auto result = g_vk_instace->GetDevice().waitSemaphores(wait_info, UINT64_MAX);
 
     if (result != vk::Result::eSuccess) {
         LOG_CRITICAL(Render_Vulkan, "Failed waiting for timeline semaphore!");
-    }
-
-    auto completed_task_id = GetGPUTick();
-
-    // Delete all resources that can be freed now
-    for (auto& task : tasks) {
-        if (task.task_id > last_completed_task_id && task.task_id <= completed_task_id) {
-            for (auto& func : task.cleanups) {
-                func();
-            }
-            task.cleanups.clear();
-        }
     }
 }
 
@@ -165,11 +151,11 @@ void TaskScheduler::Submit(bool wait_completion, bool present, Swapchain* swapch
     }
 
     const u32 num_signal_semaphores = present ? 2U : 1U;
-    const std::array signal_values{task.task_id + 1, u64(0)};
+    const std::array signal_values{task.task_id, u64(0)};
     std::array signal_semaphores{timeline, vk::Semaphore{}};
 
     const u32 num_wait_semaphores = present ? 2U : 1U;
-    const std::array wait_values{task.task_id, u64(1)};
+    const std::array wait_values{task.task_id - 1, u64(1)};
     std::array wait_semaphores{timeline, vk::Semaphore{}};
 
     // When the task completes the timeline will increment to the task id
@@ -222,6 +208,12 @@ void TaskScheduler::BeginTask() {
 
     // Wait for the GPU to finish with all resources for this task.
     SyncToGPU(next_task_index);
+
+    // Delete all resources that can be freed now
+    for (auto& func : task.cleanups) {
+        func();
+    }
+
     device.resetDescriptorPool(task.pool);
     task.command_buffers[1].begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
@@ -230,6 +222,7 @@ void TaskScheduler::BeginTask() {
     task.task_id = ++current_task_id;
     task.current_offset = 0;
     task.use_upload_buffer = false;
+    task.cleanups.clear();
 
     auto& state = VulkanState::Get();
     state.InitDescriptorSets();
