@@ -79,6 +79,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_format_reinterpreter.h
     renderer_vulkan/vk_instance.cpp
     renderer_vulkan/vk_instance.h
+    renderer_vulkan/vk_memory.cpp
+    renderer_vulkan/vk_memory.h
     renderer_vulkan/vk_pipeline_builder.cpp
     renderer_vulkan/vk_pipeline_builder.h
     renderer_vulkan/vk_rasterizer_cache.cpp
@@ -180,6 +182,6 @@ if (ARCHITECTURE_x86_64)
 endif()
 
 if (ENABLE_VULKAN)
-    target_include_directories(video_core PRIVATE ${Vulkan_INCLUDE_DIRS})
+    target_include_directories(video_core PRIVATE ${Vulkan_INCLUDE_DIRS} ${VMA_INCLUDE_DIR})
     target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_DEP})
 endif()

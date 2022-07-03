@@ -199,6 +199,11 @@ if (ENABLE_QT)
     endif()
 endif()
 
+if (ENABLE_VULKAN)
+    # Vulkan Memory Allocator
+    set(VMA_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/externals/vma/include)
+endif()
+
 # Ensure libusb is properly configured (based on dolphin libusb include)
 if(NOT APPLE)
     include(FindPkgConfig)
