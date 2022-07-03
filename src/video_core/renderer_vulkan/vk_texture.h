@@ -15,7 +15,7 @@
 namespace Vulkan {
 
 /// Vulkan texture object
-class VKTexture final : public NonCopyable {
+class Texture final : public NonCopyable {
 public:
     /// Information for the creation of the target texture
     struct Info {
@@ -28,16 +28,16 @@ public:
         u32 levels = 1, layers = 1;
     };
 
-    VKTexture() = default;
-    ~VKTexture();
+    Texture() = default;
+    ~Texture();
 
     /// Enable move operations
-    VKTexture(VKTexture&& other) noexcept;
-    VKTexture& operator=(VKTexture&& other) noexcept;
+    Texture(Texture&& other) noexcept;
+    Texture& operator=(Texture&& other) noexcept;
 
     /// Create a new Vulkan texture object
     void Create(const Info& info);
-    void Create(VKTexture& texture);
+    void Create(Texture& texture);
     void Adopt(const Info& info, vk::Image image);
     void Destroy();
 
@@ -69,7 +69,7 @@ private:
     std::vector<u32> D32S8ToD24S8(std::span<u8> data);
 
 private:
-    VKTexture::Info info{};
+    Texture::Info info{};
     vk::ImageLayout layout{};
     vk::ImageAspectFlags aspect{};
     vk::Image texture;

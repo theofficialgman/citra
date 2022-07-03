@@ -23,17 +23,17 @@ namespace Vulkan {
 constexpr u32 TASK_COUNT = 5;
 constexpr u32 STAGING_BUFFER_SIZE = 16 * 1024 * 1024;
 
-class VKSwapChain;
+class Swapchain;
 
 /// Wrapper class around command buffer execution. Handles an arbitrary
 /// number of tasks that can be submitted concurrently. This allows the host
 /// to start recording the next frame while the GPU is working on the
 /// current one. Larger values can be used with caution, as they can cause
 /// frame latency if the CPU is too far ahead of the GPU
-class VKTaskScheduler {
+class TaskScheduler {
 public:
-    VKTaskScheduler() = default;
-    ~VKTaskScheduler();
+    TaskScheduler() = default;
+    ~TaskScheduler();
 
     /// Create and initialize the work scheduler
     bool Create();
@@ -45,7 +45,7 @@ public:
 
     /// Access the staging buffer of the current task
     std::tuple<u8*, u32> RequestStaging(u32 size);
-    VKBuffer& GetStaging();
+    Buffer& GetStaging();
 
     /// Query and/or synchronization CPU and GPU
     u64 GetCPUTick() const;
@@ -54,7 +54,7 @@ public:
     void SyncToGPU(u64 task_index);
 
     void Schedule(std::function<void()> func);
-    void Submit(bool wait_completion = false, bool present = false, VKSwapChain* swapchain = nullptr);
+    void Submit(bool wait_completion = false, bool present = false, Swapchain* swapchain = nullptr);
 
     void BeginTask();
 
@@ -65,7 +65,7 @@ private:
         std::array<vk::CommandBuffer, 2> command_buffers;
         std::vector<std::function<void()>> cleanups;
         vk::DescriptorPool pool;
-        VKBuffer staging;
+        Buffer staging;
     };
 
     vk::Semaphore timeline;
@@ -77,6 +77,6 @@ private:
     u64 current_task = TASK_COUNT - 1;
 };
 
-extern std::unique_ptr<VKTaskScheduler> g_vk_task_scheduler;
+extern std::unique_ptr<TaskScheduler> g_vk_task_scheduler;
 
 }  // namespace Vulkan

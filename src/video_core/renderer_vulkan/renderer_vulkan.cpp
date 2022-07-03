@@ -238,7 +238,7 @@ void RendererVulkan::CreateVulkanObjects() {
     //ReloadSampler();
 
     // Generate VBO handle for drawing
-    VKBuffer::Info vertex_info{
+    Buffer::Info vertex_info{
         .size = sizeof(ScreenRectVertex) * 10,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
         .usage = vk::BufferUsageFlagBits::eVertexBuffer |
@@ -250,7 +250,7 @@ void RendererVulkan::CreateVulkanObjects() {
 void RendererVulkan::ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer) {
     screen.format = framebuffer.color_format;
 
-    VKTexture::Info texture_info{
+    Texture::Info texture_info{
         .width = framebuffer.width,
         .height = framebuffer.height,
         .type = vk::ImageType::e2D,
@@ -582,13 +582,13 @@ VideoCore::ResultStatus RendererVulkan::Init() {
 
     // Create global instance
     auto surface = CreateSurface(instance, render_window);
-    g_vk_instace = std::make_unique<VKInstance>();
-    g_vk_task_scheduler = std::make_unique<VKTaskScheduler>();
+    g_vk_instace = std::make_unique<Instance>();
+    g_vk_task_scheduler = std::make_unique<TaskScheduler>();
     g_vk_instace->Create(instance, physical_devices[1], surface, true);
     g_vk_task_scheduler->Create();
 
     //auto& layout = render_window.GetFramebufferLayout();
-    swapchain = std::make_shared<VKSwapChain>(surface);
+    swapchain = std::make_shared<Swapchain>(surface);
     //swapchain->Create(layout.width, layout.height, false);
 
     // Create Vulkan state

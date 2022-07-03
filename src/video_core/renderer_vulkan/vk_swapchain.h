@@ -18,10 +18,10 @@ struct SwapChainDetails {
     u32 image_count;
 };
 
-class VKSwapChain {
+class Swapchain {
 public:
-    VKSwapChain(vk::SurfaceKHR surface);
-    ~VKSwapChain();
+    Swapchain(vk::SurfaceKHR surface);
+    ~Swapchain();
 
     /// Creates (or recreates) the swapchain with a given size.
     bool Create(u32 width, u32 height, bool vsync_enabled);
@@ -44,7 +44,7 @@ public:
     vk::SwapchainKHR GetSwapChain() const { return swapchain; }
     const vk::Semaphore& GetAvailableSemaphore() const { return image_available; }
     const vk::Semaphore& GetRenderSemaphore() const { return render_finished; }
-    VKTexture& GetCurrentImage() { return swapchain_images[image_index]; }
+    Texture& GetCurrentImage() { return swapchain_images[image_index]; }
 
 private:
     void PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height);
@@ -57,7 +57,7 @@ private:
     bool vsync_enabled{false}, is_outdated{true}, is_suboptimal{true};
 
     vk::SwapchainKHR swapchain{VK_NULL_HANDLE};
-    std::vector<VKTexture> swapchain_images;
+    std::vector<Texture> swapchain_images;
     u32 image_index{0}, frame_index{0};
 };
 

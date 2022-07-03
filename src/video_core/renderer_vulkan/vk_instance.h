@@ -13,10 +13,10 @@
 namespace Vulkan {
 
 /// The global Vulkan instance
-class VKInstance {
+class Instance {
 public:
-    VKInstance() = default;
-    ~VKInstance();
+    Instance() = default;
+    ~Instance();
 
     /// Construct global Vulkan context
     bool Create(vk::Instance instance, vk::PhysicalDevice gpu,
@@ -65,6 +65,6 @@ public:
     vk::PhysicalDeviceColorWriteEnableFeaturesEXT color_write_features{};
 };
 
-extern std::unique_ptr<VKInstance> g_vk_instace;
+extern std::unique_ptr<Instance> g_vk_instace;
 
 } // namespace Vulkan

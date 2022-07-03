@@ -176,7 +176,7 @@ struct CachedSurface : SurfaceParams, std::enable_shared_from_this<CachedSurface
     u32 fill_size = 0; /// Number of bytes to read from fill_data
     std::array<u8, 4> fill_data;
 
-    VKTexture texture;
+    Texture texture;
 
     /// max mipmap level that has been attached to the texture
     u32 max_level = 0;
@@ -234,7 +234,7 @@ private:
 };
 
 struct CachedTextureCube {
-    VKTexture texture;
+    Texture texture;
     u16 res_scale = 1;
     std::shared_ptr<SurfaceWatcher> px;
     std::shared_ptr<SurfaceWatcher> nx;
@@ -298,7 +298,7 @@ public:
     // in the driver
     // this must be placed above the surface_cache to ensure all cached surfaces are destroyed
     // before destroying the recycler
-    std::unordered_multimap<HostTextureTag, VKTexture> host_texture_recycler;
+    std::unordered_multimap<HostTextureTag, Texture> host_texture_recycler;
 
 private:
     void DuplicateSurface(const Surface& src_surface, const Surface& dest_surface);
@@ -342,7 +342,7 @@ private:
     std::recursive_mutex mutex;
 
 public:
-    void AllocateTexture(VKTexture& target, SurfaceParams::SurfaceType type, vk::Format format,
+    void AllocateTexture(Texture& target, SurfaceParams::SurfaceType type, vk::Format format,
                                      u32 width, u32 height);
     std::unique_ptr<FormatReinterpreterVulkan> format_reinterpreter;
 };

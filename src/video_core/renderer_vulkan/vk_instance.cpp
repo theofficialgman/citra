@@ -9,16 +9,16 @@
 
 namespace Vulkan {
 
-std::unique_ptr<VKInstance> g_vk_instace;
+std::unique_ptr<Instance> g_vk_instace;
 
-VKInstance::~VKInstance() {
+Instance::~Instance() {
     device.waitIdle();
 
     device.destroy();
     instance.destroy();
 }
 
-bool VKInstance::Create(vk::Instance new_instance, vk::PhysicalDevice gpu,
+bool Instance::Create(vk::Instance new_instance, vk::PhysicalDevice gpu,
                         vk::SurfaceKHR surface, bool enable_validation_layer) {
     instance = new_instance;
     physical_device = gpu;
@@ -34,7 +34,7 @@ bool VKInstance::Create(vk::Instance new_instance, vk::PhysicalDevice gpu,
     return CreateDevice(surface, enable_validation_layer);
 }
 
-bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
+bool Instance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     // Can't create an instance without a valid surface
     if (!surface) {
         LOG_CRITICAL(Render_Vulkan, "Invalid surface provided during instance creation!");
@@ -106,7 +106,7 @@ bool VKInstance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     return true;
 }
 
-bool VKInstance::FindFeatures() {
+bool Instance::FindFeatures() {
     auto available = physical_device.getFeatures();
 
     // Not having geometry shaders or wide lines will cause issues with rendering.
@@ -146,7 +146,7 @@ bool VKInstance::FindFeatures() {
     return true;
 }
 
-bool VKInstance::FindExtensions() {
+bool Instance::FindExtensions() {
     auto available = physical_device.enumerateDeviceExtensionProperties();
     if (available.empty()) {
         LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");

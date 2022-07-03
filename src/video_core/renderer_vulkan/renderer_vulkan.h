@@ -20,9 +20,9 @@ namespace Vulkan {
 
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {
-    VKTexture* display_texture;
+    Texture* display_texture;
     Common::Rectangle<float> display_texcoords;
-    VKTexture texture;
+    Texture texture;
     GPU::Regs::PixelFormat format;
 };
 
@@ -68,7 +68,7 @@ private:
 
     /// Display information for top and bottom screens respectively
     std::array<ScreenInfo, 3> screen_infos;
-    std::shared_ptr<VKSwapChain> swapchain;
+    std::shared_ptr<Swapchain> swapchain;
 };
 
 } // namespace OpenGL

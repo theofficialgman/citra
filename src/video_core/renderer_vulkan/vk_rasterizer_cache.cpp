@@ -374,7 +374,7 @@ static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
 }
 
 // Allocate an uninitialized texture of appropriate size and format for the surface
-void RasterizerCacheVulkan::AllocateTexture(VKTexture& target, SurfaceType type, vk::Format format,
+void RasterizerCacheVulkan::AllocateTexture(Texture& target, SurfaceType type, vk::Format format,
                                                         u32 width, u32 height) {
     // First check if the texture can be recycled
     auto recycled_tex = host_texture_recycler.find({format, width, height});
@@ -408,7 +408,7 @@ void RasterizerCacheVulkan::AllocateTexture(VKTexture& target, SurfaceType type,
 
     // Otherwise create a brand new texture
     u32 levels = std::log2(std::max(width, height)) + 1;
-    VKTexture::Info texture_info{
+    Texture::Info texture_info{
         .width = width,
         .height = height,
         .format = format,

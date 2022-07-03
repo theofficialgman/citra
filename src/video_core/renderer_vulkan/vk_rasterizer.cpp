@@ -66,7 +66,7 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     uniform_size_aligned_fs = Common::AlignUp<std::size_t>(sizeof(UniformData),
                                                            uniform_buffer_alignment);
     // Allocate texture buffer LUTs
-    VKBuffer::Info texel_buffer_info = {
+    Buffer::Info texel_buffer_info = {
         .size = TEXTURE_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
         .usage = vk::BufferUsageFlagBits::eUniformTexelBuffer |
@@ -80,7 +80,7 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     texture_buffer_lut.Create(texel_buffer_info);
 
     // Create and bind uniform buffers
-    VKBuffer::Info uniform_info = {
+    Buffer::Info uniform_info = {
         .size = UNIFORM_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
         .usage = vk::BufferUsageFlagBits::eUniformBuffer |
@@ -98,14 +98,14 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     state.SetTexelBuffer(2, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 1);
 
     // Create vertex and index buffers
-    VKBuffer::Info vertex_info = {
+    Buffer::Info vertex_info = {
         .size = VERTEX_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
         .usage = vk::BufferUsageFlagBits::eVertexBuffer |
                  vk::BufferUsageFlagBits::eTransferDst
     };
 
-    VKBuffer::Info index_info = {
+    Buffer::Info index_info = {
         .size = INDEX_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
         .usage = vk::BufferUsageFlagBits::eIndexBuffer |
@@ -328,7 +328,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     }
 
     // Sync and bind the texture surfaces
-    VKTexture temp_tex;
+    Texture temp_tex;
     const auto pica_textures = regs.texturing.GetTextures();
     for (unsigned texture_index = 0; texture_index < pica_textures.size(); ++texture_index) {
         const auto& texture = pica_textures[texture_index];

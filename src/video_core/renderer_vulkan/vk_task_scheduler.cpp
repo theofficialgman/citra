@@ -10,7 +10,7 @@
 
 namespace Vulkan {
 
-VKTaskScheduler::~VKTaskScheduler() {
+TaskScheduler::~TaskScheduler() {
     // Destroy Vulkan resources
     auto device = g_vk_instace->GetDevice();
     device.waitIdle();
@@ -25,7 +25,7 @@ VKTaskScheduler::~VKTaskScheduler() {
     device.destroySemaphore(timeline);
 }
 
-std::tuple<u8*, u32> VKTaskScheduler::RequestStaging(u32 size) {
+std::tuple<u8*, u32> TaskScheduler::RequestStaging(u32 size) {
     auto& task = tasks[current_task];
     if (size > STAGING_BUFFER_SIZE - task.current_offset) {
         // If we run out of space, allocate a new buffer.
@@ -43,11 +43,11 @@ std::tuple<u8*, u32> VKTaskScheduler::RequestStaging(u32 size) {
     return std::make_tuple(ptr, task.current_offset - size);
 }
 
-VKBuffer& VKTaskScheduler::GetStaging() {
+Buffer& TaskScheduler::GetStaging() {
     return tasks[current_task].staging;
 }
 
-bool VKTaskScheduler::Create() {
+bool TaskScheduler::Create() {
     auto device = g_vk_instace->GetDevice();
 
     // Create command pool
@@ -61,7 +61,7 @@ bool VKTaskScheduler::Create() {
 
     timeline = device.createSemaphore(semaphore_info);
 
-    VKBuffer::Info staging_info{
+    Buffer::Info staging_info{
         .size = STAGING_BUFFER_SIZE,
         .properties = vk::MemoryPropertyFlagBits::eHostVisible |
                       vk::MemoryPropertyFlagBits::eHostCoherent,
@@ -89,12 +89,12 @@ bool VKTaskScheduler::Create() {
     return true;
 }
 
-vk::CommandBuffer VKTaskScheduler::GetRenderCommandBuffer() const {
+vk::CommandBuffer TaskScheduler::GetRenderCommandBuffer() const {
     const auto& task = tasks[current_task];
     return task.command_buffers[1];
 }
 
-vk::CommandBuffer VKTaskScheduler::GetUploadCommandBuffer() {
+vk::CommandBuffer TaskScheduler::GetUploadCommandBuffer() {
     auto& task = tasks[current_task];
     if (!task.use_upload_buffer) {
         auto& cmdbuffer = task.command_buffers[0];
@@ -105,12 +105,12 @@ vk::CommandBuffer VKTaskScheduler::GetUploadCommandBuffer() {
     return task.command_buffers[0];
 }
 
-vk::DescriptorPool VKTaskScheduler::GetDescriptorPool() const {
+vk::DescriptorPool TaskScheduler::GetDescriptorPool() const {
     const auto& task = tasks[current_task];
     return task.pool;
 }
 
-void VKTaskScheduler::SyncToGPU(u64 task_index) {
+void TaskScheduler::SyncToGPU(u64 task_index) {
     // No need to sync if the GPU already has finished the task
     auto tick = GetGPUTick();
     if (tasks[task_index].task_id <= tick) {
@@ -140,20 +140,20 @@ void VKTaskScheduler::SyncToGPU(u64 task_index) {
     }
 }
 
-void VKTaskScheduler::SyncToGPU() {
+void TaskScheduler::SyncToGPU() {
     SyncToGPU(current_task);
 }
 
-u64 VKTaskScheduler::GetCPUTick() const {
+u64 TaskScheduler::GetCPUTick() const {
     return current_task_id;
 }
 
-u64 VKTaskScheduler::GetGPUTick() const {
+u64 TaskScheduler::GetGPUTick() const {
     auto device = g_vk_instace->GetDevice();
     return device.getSemaphoreCounterValue(timeline);
 }
 
-void VKTaskScheduler::Submit(bool wait_completion, bool present, VKSwapChain* swapchain) {
+void TaskScheduler::Submit(bool wait_completion, bool present, Swapchain* swapchain) {
     // End the current task recording.
     auto& task = tasks[current_task];
 
@@ -209,12 +209,12 @@ void VKTaskScheduler::Submit(bool wait_completion, bool present, VKSwapChain* sw
     BeginTask();
 }
 
-void VKTaskScheduler::Schedule(std::function<void()> func) {
+void TaskScheduler::Schedule(std::function<void()> func) {
     auto& task = tasks[current_task];
     task.cleanups.push_back(func);
 }
 
-void VKTaskScheduler::BeginTask() {
+void TaskScheduler::BeginTask() {
     u32 next_task_index = (current_task + 1) % TASK_COUNT;
     auto& task = tasks[next_task_index];
     auto device = g_vk_instace->GetDevice();
@@ -234,6 +234,6 @@ void VKTaskScheduler::BeginTask() {
     state.InitDescriptorSets();
 }
 
-std::unique_ptr<VKTaskScheduler> g_vk_task_scheduler;
+std::unique_ptr<TaskScheduler> g_vk_task_scheduler;
 
 }  // namespace Vulkan

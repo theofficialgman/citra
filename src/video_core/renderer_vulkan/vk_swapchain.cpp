@@ -13,11 +13,11 @@
 
 namespace Vulkan {
 
-VKSwapChain::VKSwapChain(vk::SurfaceKHR surface_) : surface(surface_) {
+Swapchain::Swapchain(vk::SurfaceKHR surface_) : surface(surface_) {
 
 }
 
-VKSwapChain::~VKSwapChain() {
+Swapchain::~Swapchain() {
     auto device = g_vk_instace->GetDevice();
     auto instance = g_vk_instace->GetInstance();
     device.waitIdle();
@@ -28,7 +28,7 @@ VKSwapChain::~VKSwapChain() {
     instance.destroySurfaceKHR(surface);
 }
 
-bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
+bool Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
     is_outdated = false;
     is_suboptimal = false;
 
@@ -80,7 +80,7 @@ bool VKSwapChain::Create(u32 width, u32 height, bool vsync_enabled) {
 // Wait for maximum of 1 second
 constexpr u64 ACQUIRE_TIMEOUT = 1000000000;
 
-void VKSwapChain::AcquireNextImage() {
+void Swapchain::AcquireNextImage() {
     auto result = g_vk_instace->GetDevice().acquireNextImageKHR(swapchain, ACQUIRE_TIMEOUT,
                                                                 image_available, VK_NULL_HANDLE,
                                                                 &image_index);
@@ -99,7 +99,7 @@ void VKSwapChain::AcquireNextImage() {
     }
 }
 
-void VKSwapChain::Present() {
+void Swapchain::Present() {
     const auto present_queue = g_vk_instace->GetPresentQueue();
 
     vk::PresentInfoKHR present_info(render_finished, swapchain, image_index);
@@ -122,7 +122,7 @@ void VKSwapChain::Present() {
     frame_index = (frame_index + 1) % swapchain_images.size();
 }
 
-void VKSwapChain::PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height) {
+void Swapchain::PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height) {
     auto gpu = g_vk_instace->GetPhysicalDevice();
 
     // Choose surface format
@@ -184,12 +184,12 @@ void VKSwapChain::PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u3
     }
 }
 
-void VKSwapChain::SetupImages() {
+void Swapchain::SetupImages() {
     // Get the swap chain images
     auto device = g_vk_instace->GetDevice();
     auto images = device.getSwapchainImagesKHR(swapchain);
 
-    VKTexture::Info image_info{
+    Texture::Info image_info{
         .width = details.extent.width,
         .height = details.extent.height,
         .format = details.format.format,
@@ -201,7 +201,7 @@ void VKSwapChain::SetupImages() {
     // Create the swapchain buffers containing the image and imageview
     swapchain_images.resize(images.size());
     for (int i = 0; i < swapchain_images.size(); i++) {
-        // Wrap swapchain images with VKTexture
+        // Wrap swapchain images with Texture
         swapchain_images[i].Adopt(image_info, images[i]);
     }
 }

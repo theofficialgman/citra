@@ -54,16 +54,16 @@ private:
     u32 image_count{0}, buffer_count{0}, write_count{0};
 };
 
-class VKSwapChain;
+class Swapchain;
 
 /// Tracks global Vulkan state
 class VulkanState {
 public:
-    VulkanState(const std::shared_ptr<VKSwapChain>& swapchain);
+    VulkanState(const std::shared_ptr<Swapchain>& swapchain);
     ~VulkanState();
 
     /// Initialize object to its initial state
-    static void Create(const std::shared_ptr<VKSwapChain>& swapchain);
+    static void Create(const std::shared_ptr<Swapchain>& swapchain);
     static VulkanState& Get();
 
     /// Query state
@@ -71,7 +71,7 @@ public:
     bool StencilTestEnabled() const { return stencil_enabled && stencil_writes; }
 
     /// Configure drawing state
-    void SetVertexBuffer(const VKBuffer& buffer, vk::DeviceSize offset);
+    void SetVertexBuffer(const Buffer& buffer, vk::DeviceSize offset);
     void SetViewport(vk::Viewport viewport);
     void SetScissor(vk::Rect2D scissor);
     void SetCullMode(vk::CullModeFlags flags);
@@ -90,7 +90,7 @@ public:
                     vk::BlendFactor src_alpha, vk::BlendFactor dst_alpha);
 
     /// Rendering
-    void BeginRendering(VKTexture* color, VKTexture* depth, bool update_pipeline_formats = false,
+    void BeginRendering(Texture* color, Texture* depth, bool update_pipeline_formats = false,
                         vk::ClearColorValue color_clear = {},
                         vk::AttachmentLoadOp color_load_op = vk::AttachmentLoadOp::eLoad,
                         vk::AttachmentStoreOp color_store_op = vk::AttachmentStoreOp::eStore,
@@ -102,13 +102,13 @@ public:
     void EndRendering();
 
     /// Configure shader resources
-    void SetUniformBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer);
-    void SetTexture(u32 binding,  const VKTexture& texture);
-    void SetTexelBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer, u32 view_index);
+    void SetUniformBuffer(u32 binding, u32 offset, u32 size, const Buffer& buffer);
+    void SetTexture(u32 binding,  const Texture& texture);
+    void SetTexelBuffer(u32 binding, u32 offset, u32 size, const Buffer& buffer, u32 view_index);
     void SetPresentTextures(vk::ImageView view0, vk::ImageView view1, vk::ImageView view2);
     void SetPresentData(DrawInfo data);
     void SetPlaceholderColor(u8 red, u8 green, u8 blue, u8 alpha);
-    void UnbindTexture(const VKTexture& image);
+    void UnbindTexture(const Texture& image);
     void UnbindTexture(u32 unit);
 
     /// Apply all dirty state to the current Vulkan command buffer
@@ -124,12 +124,12 @@ private:
 
 private:
     // Render targets
-    std::shared_ptr<VKSwapChain> swapchain;
+    std::shared_ptr<Swapchain> swapchain;
     bool rendering{false};
     vk::ImageView present_view;
     std::array<vk::ImageView, 4> render_views;
     vk::Sampler render_sampler, present_sampler;
-    VKTexture placeholder;
+    Texture placeholder;
 
     // Render state
     bool descriptors_dirty{};

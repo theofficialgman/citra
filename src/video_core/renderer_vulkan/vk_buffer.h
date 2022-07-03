@@ -17,7 +17,7 @@ constexpr u32 MAX_BUFFER_VIEWS = 5;
 constexpr u32 MAX_COMMIT_CHUNKS = 6;
 
 /// Generic Vulkan buffer object used by almost every resource
-class VKBuffer : public NonCopyable {
+class Buffer : public NonCopyable {
 public:
     struct Info {
         u32 size;
@@ -26,12 +26,12 @@ public:
         std::array<vk::Format, MAX_BUFFER_VIEWS> view_formats{};
     };
 
-    VKBuffer() = default;
-    ~VKBuffer();
+    Buffer() = default;
+    ~Buffer();
 
     /// Enable move operations
-    VKBuffer(VKBuffer&&) = default;
-    VKBuffer& operator=(VKBuffer&&) = default;
+    Buffer(Buffer&&) = default;
+    Buffer& operator=(Buffer&&) = default;
 
     /// Create a new Vulkan buffer object
     void Create(const Info& info);
@@ -60,7 +60,7 @@ protected:
     u32 view_count{};
 };
 
-class StreamBuffer : public VKBuffer {
+class StreamBuffer : public Buffer {
 public:
     /*
      * Allocates a linear chunk of memory in the GPU buffer with at least "size" bytes

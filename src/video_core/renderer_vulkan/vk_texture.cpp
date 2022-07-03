@@ -54,11 +54,11 @@ vk::ImageAspectFlags GetImageAspect(vk::Format format) {
     return flags;
 }
 
-VKTexture::~VKTexture() {
+Texture::~Texture() {
     Destroy();
 }
 
-VKTexture::VKTexture(VKTexture&& other) noexcept {
+Texture::Texture(Texture&& other) noexcept {
     info = std::exchange(other.info, Info{});
     texture = std::exchange(other.texture, VK_NULL_HANDLE);
     aspect = std::exchange(other.aspect, vk::ImageAspectFlagBits::eNone);
@@ -70,7 +70,7 @@ VKTexture::VKTexture(VKTexture&& other) noexcept {
     is_d24s8 = std::exchange(other.is_d24s8, false);
 }
 
-VKTexture& VKTexture::operator=(VKTexture&& other) noexcept {
+Texture& Texture::operator=(Texture&& other) noexcept {
     Destroy();
     info = std::exchange(other.info, Info{});
     texture = std::exchange(other.texture, VK_NULL_HANDLE);
@@ -84,7 +84,7 @@ VKTexture& VKTexture::operator=(VKTexture&& other) noexcept {
     return *this;
 }
 
-void VKTexture::Create(const Info& create_info) {
+void Texture::Create(const Info& create_info) {
     auto device = g_vk_instace->GetDevice();
     info = create_info;
 
@@ -121,7 +121,7 @@ void VKTexture::Create(const Info& create_info) {
 
     // Create texture memory
     auto requirements = device.getImageMemoryRequirements(texture);
-    auto memory_index = VKBuffer::FindMemoryType(requirements.memoryTypeBits,
+    auto memory_index = Buffer::FindMemoryType(requirements.memoryTypeBits,
                                                  vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk::MemoryAllocateInfo alloc_info(requirements.size, memory_index);
 
@@ -137,7 +137,7 @@ void VKTexture::Create(const Info& create_info) {
     view = device.createImageView(view_info);
 }
 
-void VKTexture::Create(VKTexture& other) {
+void Texture::Create(Texture& other) {
     auto info = other.info;
     Create(info);
 
@@ -167,7 +167,7 @@ void VKTexture::Create(VKTexture& other) {
     other.Transition(cmdbuffer, old_layout);
 }
 
-void VKTexture::Adopt(const Info& create_info, vk::Image image) {
+void Texture::Adopt(const Info& create_info, vk::Image image) {
     info = create_info;
     image_size = info.width * info.height * BytesPerPixel(info.format);
     aspect = GetImageAspect(info.format);
@@ -184,7 +184,7 @@ void VKTexture::Adopt(const Info& create_info, vk::Image image) {
     adopted = true;
 }
 
-void VKTexture::Destroy() {
+void Texture::Destroy() {
     if (texture && !adopted) {
         // Make sure to unbind the texture before destroying it
         auto& state = VulkanState::Get();
@@ -216,11 +216,11 @@ void VKTexture::Destroy() {
     }
 }
 
-void VKTexture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout) {
+void Texture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout) {
     Transition(cmdbuffer, new_layout, 0, info.levels, 0, info.layers);
 }
 
-void VKTexture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout,
+void Texture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout,
                            u32 start_level, u32 level_count, u32 start_layer, u32 layer_count) {
     if (new_layout == layout) {
         return;
@@ -305,11 +305,11 @@ void VKTexture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layo
     layout = new_layout;
 }
 
-void VKTexture::OverrideImageLayout(vk::ImageLayout new_layout) {
+void Texture::OverrideImageLayout(vk::ImageLayout new_layout) {
     layout = new_layout;
 }
 
-void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels) {
+void Texture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels) {
     u32 request_size = is_rgb ? (pixels.size() / 3) * 4 :
                        (is_d24s8 ? (pixels.size() / 4) * 5 : pixels.size());
     auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
@@ -367,7 +367,7 @@ void VKTexture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, 
     Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
-void VKTexture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
+void Texture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
     u32 request_size = is_rgb ? (memory.size() / 3) * 4 :
                        (is_d24s8 ? (memory.size() / 4) * 8 : memory.size());
     auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
@@ -434,7 +434,7 @@ std::span<Out> SpanCast(std::span<In> span) {
     return std::span(reinterpret_cast<Out*>(span.data()), span.size_bytes() / sizeof(Out));
 }
 
-std::vector<u8> VKTexture::RGBToRGBA(std::span<u8> data) {
+std::vector<u8> Texture::RGBToRGBA(std::span<u8> data) {
     ASSERT(data.size() % 3 == 0);
 
     u32 new_size = (data.size() / 3) * 4;
@@ -450,7 +450,7 @@ std::vector<u8> VKTexture::RGBToRGBA(std::span<u8> data) {
     return rgba;
 }
 
-std::vector<u64> VKTexture::D24S8ToD32S8(std::span<u8> data) {
+std::vector<u64> Texture::D24S8ToD32S8(std::span<u8> data) {
     ASSERT(data.size() % 4 == 0);
 
     std::vector<u64> d32s8;
@@ -471,7 +471,7 @@ std::vector<u64> VKTexture::D24S8ToD32S8(std::span<u8> data) {
     return d32s8;
 }
 
-std::vector<u8> VKTexture::RGBAToRGB(std::span<u8> data) {
+std::vector<u8> Texture::RGBAToRGB(std::span<u8> data) {
     ASSERT(data.size() % 4 == 0);
 
     u32 new_size = (data.size() / 4) * 3;
@@ -486,7 +486,7 @@ std::vector<u8> VKTexture::RGBAToRGB(std::span<u8> data) {
     return rgb;
 }
 
-std::vector<u32> VKTexture::D32S8ToD24S8(std::span<u8> data) {
+std::vector<u32> Texture::D32S8ToD24S8(std::span<u8> data) {
     ASSERT(data.size() % 8 == 0);
 
     std::vector<u32> d24s8;

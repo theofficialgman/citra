@@ -276,7 +276,7 @@ private:
     static constexpr std::size_t UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
     static constexpr std::size_t TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
 
-    VKBuffer vertex_buffer, index_buffer;
+    Buffer vertex_buffer, index_buffer;
     StreamBuffer uniform_buffer, texture_buffer_lut_lf, texture_buffer_lut;
 
     u32 uniform_buffer_alignment;

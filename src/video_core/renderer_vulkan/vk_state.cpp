@@ -78,9 +78,9 @@ void DescriptorUpdater::PushBufferUpdate(vk::DescriptorSet set, u32 binding,
                              view ? &view : nullptr};
 }
 
-VulkanState::VulkanState(const std::shared_ptr<VKSwapChain>& swapchain) : swapchain(swapchain) {
+VulkanState::VulkanState(const std::shared_ptr<Swapchain>& swapchain) : swapchain(swapchain) {
     // Create a placeholder texture which can be used in place of a real binding.
-    VKTexture::Info info{
+    Texture::Info info{
         .width = 1,
         .height = 1,
         .format = vk::Format::eR8G8B8A8Unorm,
@@ -158,7 +158,7 @@ VulkanState::~VulkanState() {
     device.destroyPipeline(present_pipeline);
 }
 
-void VulkanState::Create(const std::shared_ptr<VKSwapChain>& swapchain) {
+void VulkanState::Create(const std::shared_ptr<Swapchain>& swapchain) {
     if (!s_vulkan_state) {
         s_vulkan_state = std::make_unique<VulkanState>(swapchain);
     }
@@ -169,12 +169,12 @@ VulkanState& VulkanState::Get() {
     return *s_vulkan_state;
 }
 
-void VulkanState::SetVertexBuffer(const VKBuffer& buffer, vk::DeviceSize offset) {
+void VulkanState::SetVertexBuffer(const Buffer& buffer, vk::DeviceSize offset) {
     auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
     cmdbuffer.bindVertexBuffers(0, buffer.GetBuffer(), offset);
 }
 
-void VulkanState::SetUniformBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer) {
+void VulkanState::SetUniformBuffer(u32 binding, u32 offset, u32 size, const Buffer& buffer) {
     auto& set = descriptor_sets[0];
     updater.PushBufferUpdate(set, binding,
             vk::DescriptorType::eUniformBuffer,
@@ -182,14 +182,14 @@ void VulkanState::SetUniformBuffer(u32 binding, u32 offset, u32 size, const VKBu
     descriptors_dirty = true;
 }
 
-void VulkanState::SetTexture(u32 binding, const VKTexture& image) {
+void VulkanState::SetTexture(u32 binding, const Texture& image) {
     auto& set = descriptor_sets[1];
     updater.PushCombinedImageSamplerUpdate(set, binding, render_sampler, image.GetView());
     render_views[binding] = image.GetView();
     descriptors_dirty = true;
 }
 
-void VulkanState::SetTexelBuffer(u32 binding, u32 offset, u32 size, const VKBuffer& buffer, u32 view_index) {
+void VulkanState::SetTexelBuffer(u32 binding, u32 offset, u32 size, const Buffer& buffer, u32 view_index) {
     auto& set = descriptor_sets[2];
     updater.PushBufferUpdate(set, binding,
             vk::DescriptorType::eUniformTexelBuffer,
@@ -218,7 +218,7 @@ void VulkanState::SetPlaceholderColor(u8 red, u8 green, u8 blue, u8 alpha) {
     placeholder.Upload(0, 0, 1, placeholder.GetArea(), color);
 }
 
-void VulkanState::UnbindTexture(const VKTexture& image) {
+void VulkanState::UnbindTexture(const Texture& image) {
     for (int i = 0; i < 4; i++) {
         if (render_views[i] == image.GetView()) {
             render_views[i] = placeholder.GetView();
@@ -243,7 +243,7 @@ void VulkanState::UnbindTexture(u32 unit) {
     descriptors_dirty = true;
 }
 
-void VulkanState::BeginRendering(VKTexture* color, VKTexture* depth, bool update_pipeline_formats,
+void VulkanState::BeginRendering(Texture* color, Texture* depth, bool update_pipeline_formats,
                     vk::ClearColorValue color_clear, vk::AttachmentLoadOp color_load_op,
                     vk::AttachmentStoreOp color_store_op, vk::ClearDepthStencilValue depth_clear,
                     vk::AttachmentLoadOp depth_load_op, vk::AttachmentStoreOp depth_store_op,
