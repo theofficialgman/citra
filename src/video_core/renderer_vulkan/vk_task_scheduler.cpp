@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "common/assert.h"

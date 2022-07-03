@@ -98,6 +98,7 @@ bool Instance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
 
     // Create logical device
     device = physical_device.createDevice(device_info);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(device);
 
     // Grab the graphics and present queues.
     graphics_queue = device.getQueue(graphics_queue_family_index, 0);
@@ -133,14 +134,11 @@ bool Instance::FindFeatures() {
     vk13_features.dynamicRendering = true;
     dynamic_state_features.extendedDynamicState = true;
     dynamic_state2_features.extendedDynamicState2 = true;
-    dynamic_state2_features.extendedDynamicState2LogicOp = true;
-    color_write_features.colorWriteEnable = true;
 
     // Include features in device creation
     vk12_features.pNext = &vk13_features;
     vk13_features.pNext = &dynamic_state_features;
     dynamic_state_features.pNext = &dynamic_state2_features;
-    dynamic_state2_features.pNext = &color_write_features;
     features = vk::PhysicalDeviceFeatures2{vk_features, &vk12_features};
 
     return true;

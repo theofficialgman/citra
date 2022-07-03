@@ -3,4 +3,7 @@
 // Refer to the license.txt file included.
 
 #define VMA_IMPLEMENTATION
-#include "vk_memory.h"
+#include "video_core/renderer_vulkan/vk_common.h"
+
+// Store the dispatch loader here
+VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE

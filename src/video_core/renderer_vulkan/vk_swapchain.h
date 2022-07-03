@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string_view>
+#include <vector>
 #include "core/frontend/emu_window.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 

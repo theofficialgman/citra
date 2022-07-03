@@ -5,8 +5,6 @@
 #pragma once
 
 #include <array>
-#include <variant>
-#include <optional>
 #include <bitset>
 #include "video_core/regs.h"
 #include "video_core/renderer_vulkan/vk_shader_state.h"

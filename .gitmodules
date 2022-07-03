@@ -61,3 +61,6 @@
 [submodule "externals/shaderc"]
 	path = externals/shaderc
 	url = https://github.com/google/shaderc
+[submodule "externals/Vulkan-Headers"]
+	path = externals/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers

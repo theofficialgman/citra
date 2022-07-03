@@ -13,7 +13,6 @@
 #include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_set.hpp>
 #include <unordered_map>
-#include <vulkan/vulkan.hpp>
 #include <boost/functional/hash.hpp>
 #include "common/assert.h"
 #include "common/common_funcs.h"

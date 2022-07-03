@@ -9,7 +9,6 @@
 #include <cstring>
 #include <memory>
 #include <vector>
-#include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
 #include "common/bit_field.h"
 #include "common/common_types.h"

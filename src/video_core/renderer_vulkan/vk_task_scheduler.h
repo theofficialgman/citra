@@ -5,17 +5,6 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
-#include <deque>
-#include <functional>
-#include <mutex>
-#include <thread>
-#include <utility>
-#include <vector>
-
-#include "common/common_types.h"
-#include "common/threadsafe_queue.h"
-#include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 
 namespace Vulkan {

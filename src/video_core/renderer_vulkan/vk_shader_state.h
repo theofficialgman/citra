@@ -5,16 +5,12 @@
 #pragma once
 
 #include <array>
-#include <cstring>
-#include <functional>
-#include <optional>
-#include <string>
 #include <type_traits>
-#include <vulkan/vulkan.hpp>
 #include <glm/glm.hpp>
 #include "common/hash.h"
 #include "video_core/regs.h"
 #include "video_core/shader/shader.h"
+#include "video_core/renderer_vulkan/vk_common.h"
 
 namespace Vulkan {
 

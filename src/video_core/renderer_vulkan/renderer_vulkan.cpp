@@ -2,6 +2,22 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+// Enable vulkan platforms
+#if defined(ANDROID) || defined (__ANDROID__)
+  #define VK_USE_PLATFORM_ANDROID_KHR 1
+#elif defined(_WIN32)
+  #define VK_USE_PLATFORM_WIN32_KHR 1
+#elif defined(__APPLE__)
+  #define VK_USE_PLATFORM_MACOS_MVK 1
+  #define VK_USE_PLATFORM_METAL_EXT 1
+#else
+  #ifdef WAYLAND_DISPLAY
+    #define VK_USE_PLATFORM_WAYLAND_KHR 1
+  #else // wayland
+    #define VK_USE_PLATFORM_XLIB_KHR 1
+  #endif
+#endif
+
 #include <glm/gtc/matrix_transform.hpp>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -21,6 +37,8 @@
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_pipeline_builder.h"
+#include "video_core/renderer_vulkan/vk_swapchain.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/video_core.h"
 
 // Include these late to avoid polluting previous headers
@@ -38,12 +56,12 @@
 
 namespace Vulkan {
 
-vk::SurfaceKHR CreateSurface(const VkInstance& instance,
+vk::SurfaceKHR CreateSurface(const vk::Instance& instance,
                              const Frontend::EmuWindow& emu_window) {
     const auto& window_info = emu_window.GetWindowInfo();
-    VkSurfaceKHR unsafe_surface = nullptr;
+    vk::SurfaceKHR surface;
 
-#ifdef _WIN32
+#if VK_USE_PLATFORM_WIN32_KHR
     if (window_info.type == Core::Frontend::WindowSystemType::Windows) {
         const HWND hWnd = static_cast<HWND>(window_info.render_surface);
         const VkWin32SurfaceCreateInfoKHR win32_ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
@@ -53,36 +71,35 @@ vk::SurfaceKHR CreateSurface(const VkInstance& instance,
             UNREACHABLE();
         }
     }
-#endif
-#if !defined(_WIN32) && !defined(__APPLE__)
+#elif VK_USE_PLATFORM_XLIB_KHR
     if (window_info.type == Frontend::WindowSystemType::X11) {
-        const VkXlibSurfaceCreateInfoKHR xlib_ci{
-            VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR, nullptr, 0,
+        const vk::XlibSurfaceCreateInfoKHR xlib_ci{{},
             static_cast<Display*>(window_info.display_connection),
             reinterpret_cast<Window>(window_info.render_surface)};
-        if (vkCreateXlibSurfaceKHR(instance, &xlib_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
+        if (instance.createXlibSurfaceKHR(&xlib_ci, nullptr, &surface) != vk::Result::eSuccess) {
             LOG_ERROR(Render_Vulkan, "Failed to initialize Xlib surface");
             UNREACHABLE();
         }
     }
 
+#elif VK_USE_PLATFORM_WAYLAND_KHR
     if (window_info.type == Frontend::WindowSystemType::Wayland) {
-        /*const VkWaylandSurfaceCreateInfoKHR wayland_ci{
+        const VkWaylandSurfaceCreateInfoKHR wayland_ci{
             VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR, nullptr, 0,
             static_cast<wl_display*>(window_info.display_connection),
             static_cast<wl_surface*>(window_info.render_surface)};
         if (vkCreateWaylandSurfaceKHR(instance, &wayland_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
             LOG_ERROR(Render_Vulkan, "Failed to initialize Wayland surface");
             UNREACHABLE();
-        }*/
+        }
     }
 #endif
-    if (!unsafe_surface) {
+    if (!surface) {
         LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
         UNREACHABLE();
     }
 
-    return vk::SurfaceKHR(unsafe_surface);
+    return surface;
 }
 
 std::vector<const char*> RequiredExtensions(Frontend::WindowSystemType window_type, bool enable_debug_utils) {
@@ -568,23 +585,29 @@ void RendererVulkan::EndPresent() {
 
 /// Initialize the renderer
 VideoCore::ResultStatus RendererVulkan::Init() {
-    // Create vulkan instance
-    vk::ApplicationInfo app_info{"Citra", VK_MAKE_VERSION(1, 0, 0), nullptr, 0, VK_API_VERSION_1_3};
+    // Fetch instance independant function pointers
+    vk::DynamicLoader dl;
+    auto vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
     // Get required extensions
+    vk::ApplicationInfo app_info{"Citra", VK_MAKE_VERSION(1, 0, 0), nullptr, 0, VK_API_VERSION_1_3};
     auto extensions = RequiredExtensions(render_window.GetWindowInfo().type, true);
 
     const char* layers = "VK_LAYER_KHRONOS_validation";
     vk::InstanceCreateInfo instance_info{{}, &app_info, layers, extensions};
 
+    // Create vulkan instance
     auto instance = vk::createInstance(instance_info);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(instance);
+
     auto physical_devices = instance.enumeratePhysicalDevices();
 
     // Create global instance
     auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<Instance>();
     g_vk_task_scheduler = std::make_unique<TaskScheduler>();
-    g_vk_instace->Create(instance, physical_devices[1], surface, true);
+    g_vk_instace->Create(instance, physical_devices[2], surface, true);
     g_vk_task_scheduler->Create();
 
     //auto& layout = render_window.GetFramebufferLayout();

@@ -75,12 +75,12 @@ add_library(video_core STATIC
     renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/vk_buffer.cpp
     renderer_vulkan/vk_buffer.h
+    renderer_vulkan/vk_common.cpp
+    renderer_vulkan/vk_common.h
     renderer_vulkan/vk_format_reinterpreter.cpp
     renderer_vulkan/vk_format_reinterpreter.h
     renderer_vulkan/vk_instance.cpp
     renderer_vulkan/vk_instance.h
-    renderer_vulkan/vk_memory.cpp
-    renderer_vulkan/vk_memory.h
     renderer_vulkan/vk_pipeline_builder.cpp
     renderer_vulkan/vk_pipeline_builder.h
     renderer_vulkan/vk_rasterizer_cache.cpp
@@ -177,11 +177,11 @@ create_target_directory_groups(video_core)
 target_link_libraries(video_core PUBLIC common core)
 target_link_libraries(video_core PRIVATE glad nihstro-headers Boost::serialization)
 
+# Include Vulkan headers
+target_include_directories(video_core PRIVATE ../../externals/Vulkan-Headers/include)
+target_include_directories(video_core PRIVATE ../../externals/vma/include)
+target_link_libraries(video_core PRIVATE ${SHADERC_DEP})
+
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak)
-endif()
-
-if (ENABLE_VULKAN)
-    target_include_directories(video_core PRIVATE ${Vulkan_INCLUDE_DIRS} ${VMA_INCLUDE_DIR})
-    target_link_libraries(video_core PRIVATE ${Vulkan_LIBRARIES} ${SHADERC_DEP})
 endif()

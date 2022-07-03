@@ -9,7 +9,6 @@
 #include "common/math_util.h"
 #include "core/hw/gpu.h"
 #include "video_core/renderer_base.h"
-#include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_state.h"
 
 namespace Layout {
@@ -17,6 +16,8 @@ struct FramebufferLayout;
 }
 
 namespace Vulkan {
+
+class Swapchain;
 
 /// Structure used for storing information about the display target for each 3DS screen
 struct ScreenInfo {

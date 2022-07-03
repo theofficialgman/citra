@@ -8,8 +8,8 @@
 #include <vector>
 #include <deque>
 #include <span>
-#include <vulkan/vulkan.hpp>
 #include "common/common_types.h"
+#include "video_core/renderer_vulkan/vk_common.h"
 
 namespace Vulkan {
 

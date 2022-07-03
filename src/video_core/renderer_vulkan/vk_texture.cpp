@@ -9,6 +9,7 @@
 #include "video_core/renderer_vulkan/vk_texture.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state.h"
+#include "video_core/renderer_vulkan/vk_instance.h"
 
 namespace Vulkan {
 

@@ -5,17 +5,13 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
-#include <glad/glad.h>
 #include <glm/glm.hpp>
-#include <vulkan/vulkan.hpp>
-#include "common/assert.h"
-#include "common/common_types.h"
 #include "common/logging/log.h"
 #include "core/core.h"
 #include "video_core/regs_framebuffer.h"
 #include "video_core/regs_lighting.h"
 #include "video_core/regs_texturing.h"
+#include "video_core/renderer_vulkan/vk_common.h"
 
 namespace PicaToVK {
 
