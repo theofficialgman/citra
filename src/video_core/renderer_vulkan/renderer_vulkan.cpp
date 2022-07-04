@@ -62,11 +62,10 @@ vk::SurfaceKHR CreateSurface(const vk::Instance& instance,
     vk::SurfaceKHR surface;
 
 #if VK_USE_PLATFORM_WIN32_KHR
-    if (window_info.type == Core::Frontend::WindowSystemType::Windows) {
+    if (window_info.type == Frontend::WindowSystemType::Windows) {
         const HWND hWnd = static_cast<HWND>(window_info.render_surface);
-        const VkWin32SurfaceCreateInfoKHR win32_ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
-                                                   nullptr, 0, nullptr, hWnd};
-        if (vkCreateWin32SurfaceKHR(instance, &win32_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
+        const vk::Win32SurfaceCreateInfoKHR win32_ci{{}, nullptr, hWnd};
+        if (instandce.createWin32SurfaceKHR(&win32_ci, nullptr, &surface) != vk::Result::eSuccess) {
             LOG_ERROR(Render_Vulkan, "Failed to initialize Win32 surface");
             UNREACHABLE();
         }
@@ -84,11 +83,10 @@ vk::SurfaceKHR CreateSurface(const vk::Instance& instance,
 
 #elif VK_USE_PLATFORM_WAYLAND_KHR
     if (window_info.type == Frontend::WindowSystemType::Wayland) {
-        const VkWaylandSurfaceCreateInfoKHR wayland_ci{
-            VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR, nullptr, 0,
+        const vk::WaylandSurfaceCreateInfoKHR wayland_ci{{},
             static_cast<wl_display*>(window_info.display_connection),
             static_cast<wl_surface*>(window_info.render_surface)};
-        if (vkCreateWaylandSurfaceKHR(instance, &wayland_ci, nullptr, &unsafe_surface) != VK_SUCCESS) {
+        if (instance.createWaylandSurfaceKHR(&wayland_ci, nullptr, &surface) != vk::Result::eSuccess) {
             LOG_ERROR(Render_Vulkan, "Failed to initialize Wayland surface");
             UNREACHABLE();
         }
@@ -418,11 +416,6 @@ void RendererVulkan::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     draw_info.modelview = glm::transpose(glm::ortho(0.f, static_cast<float>(layout.width),
                                                     static_cast<float>(layout.height), 0.0f,
                                                     0.f, 1.f));
-    const bool stereo_single_screen = false
-    /*    Settings::values.render_3d == Settings::StereoRenderOption::Anaglyph ||
-        Settings::values.render_3d == Settings::StereoRenderOption::Interlaced ||
-        Settings::values.render_3d == Settings::StereoRenderOption::ReverseInterlaced*/;
-
     auto& image = swapchain->GetCurrentImage();
     auto& state = VulkanState::Get();
 
