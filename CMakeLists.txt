@@ -9,13 +9,15 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/externals/cmake-modul
 include(DownloadExternals)
 include(CMakeDependentOption)
 
+# Include vcpkg toolchain file
+set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/externals/vcpkg/scripts/buildsystems/vcpkg.cmake"
+  CACHE STRING "Vcpkg toolchain file")
+
 project(citra LANGUAGES C CXX ASM)
 
 # Set bundled sdl2/qt as dependent options.
 # OFF by default, but if ENABLE_SDL2 and MSVC are true then ON
 option(ENABLE_SDL2 "Enable the SDL2 frontend" ON)
-CMAKE_DEPENDENT_OPTION(CITRA_USE_BUNDLED_SDL2 "Download bundled SDL2 binaries" ON "ENABLE_SDL2;MSVC" OFF)
-
 option(ENABLE_QT "Enable the Qt frontend" ON)
 option(ENABLE_QT_TRANSLATION "Enable translations for the Qt frontend" OFF)
 CMAKE_DEPENDENT_OPTION(CITRA_USE_BUNDLED_QT "Download bundled Qt binaries" ON "ENABLE_QT;MSVC" OFF)
@@ -40,8 +42,6 @@ option(USE_DISCORD_PRESENCE "Enables Discord Rich Presence" OFF)
 CMAKE_DEPENDENT_OPTION(ENABLE_MF "Use Media Foundation decoder (preferred over FFmpeg)" ON "WIN32" OFF)
 
 CMAKE_DEPENDENT_OPTION(COMPILE_WITH_DWARF "Add DWARF debugging information" ON "MINGW" OFF)
-
-option(USE_SYSTEM_BOOST "Use the system Boost libs (instead of the bundled ones)" OFF)
 
 CMAKE_DEPENDENT_OPTION(ENABLE_FDK "Use FDK AAC decoder" OFF "NOT ENABLE_FFMPEG_AUDIO_DECODER;NOT ENABLE_MF" OFF)
 
@@ -138,64 +138,79 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin/$<CONFIG>)
 # System imported libraries
 # ======================
 
+# Boost
+find_package(Boost REQUIRED COMPONENTS serialization)
+
+# Catch2
+find_package(Catch2 CONFIG REQUIRED)
+
+# Crypto++
+find_package(cryptopp CONFIG REQUIRED)
+
+# Xbyak
+if (ARCHITECTURE_x86_64)
+    find_package(xbyak REQUIRED CONFIG)
+endif()
+
+# libfmt
+find_package(fmt CONFIG REQUIRED)
+
+# Zstandard
+find_package(ZSTD CONFIG REQUIRED)
+
+# ENet
+find_package(unofficial-enet CONFIG REQUIRED)
+
+# DiscordRPC
+if (USE_DISCORD_PRESENCE)
+    find_package(discord-rpc CONFIG REQUIRED)
+endif()
+
+if (ENABLE_WEB_SERVICE)
+    # OpenSSL
+    find_package(OpenSSL 1.1)
+
+    # JSON
+    find_package(nlohmann_json CONFIG REQUIRED)
+
+    # httplib
+    find_path(CPP_HTTPLIB_INCLUDE_DIRS "httplib.h")
+    add_library(httplib INTERFACE)
+    target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_INCLUDE_DIRS})
+
+    # cpp-jwt
+    find_package(cpp-jwt REQUIRED)
+endif()
+
+# lodepng
+find_package(lodepng REQUIRED)
+
+# (xperia64): Only use libyuv on Android b/c of build issues on Windows and mandatory JPEG
+if(ANDROID)
+    # libyuv
+    find_package(yuv CONFIG REQUIRED)
+endif()
+
 # Prefer the -pthread flag on Linux.
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 if (ENABLE_SDL2)
-    if (CITRA_USE_BUNDLED_SDL2)
-        # Detect toolchain and platform
-        if ((MSVC_VERSION GREATER_EQUAL 1920 AND MSVC_VERSION LESS 1940) AND ARCHITECTURE_x86_64)
-            set(SDL2_VER "SDL2-2.0.16")
-        else()
-            message(FATAL_ERROR "No bundled SDL2 binaries for your toolchain. Disable CITRA_USE_BUNDLED_SDL2 and provide your own.")
-        endif()
-
-        if (DEFINED SDL2_VER)
-            download_bundled_external("sdl2/" ${SDL2_VER} SDL2_PREFIX)
-        endif()
-
-        set(SDL2_FOUND YES)
-        set(SDL2_INCLUDE_DIR "${SDL2_PREFIX}/include" CACHE PATH "Path to SDL2 headers")
-        set(SDL2_LIBRARY "${SDL2_PREFIX}/lib/x64/SDL2.lib" CACHE PATH "Path to SDL2 library")
-        set(SDL2_DLL_DIR "${SDL2_PREFIX}/lib/x64/" CACHE PATH "Path to SDL2.dll")
-    else()
-        find_package(SDL2 REQUIRED)
-    endif()
+    find_package(SDL2 CONFIG REQUIRED)
 
     if (SDL2_FOUND)
-        # TODO(yuriks): Make FindSDL2.cmake export an IMPORTED library instead
         add_library(SDL2 INTERFACE)
-        target_link_libraries(SDL2 INTERFACE "${SDL2_LIBRARY}")
-        target_include_directories(SDL2 INTERFACE "${SDL2_INCLUDE_DIR}")
+        target_link_libraries(SDL2 INTERFACE SDL2::SDL2 SDL2::SDL2main)
     endif()
 else()
     set(SDL2_FOUND NO)
 endif()
 
 if (ENABLE_QT)
-    if (CITRA_USE_BUNDLED_QT)
-        if ((MSVC_VERSION GREATER_EQUAL 1920 AND MSVC_VERSION LESS 1940) AND ARCHITECTURE_x86_64)
-            set(QT_VER qt-5.10.0-msvc2017_64)
-        else()
-            message(FATAL_ERROR "No bundled Qt binaries for your toolchain. Disable CITRA_USE_BUNDLED_QT and provide your own.")
-        endif()
-
-        if (DEFINED QT_VER)
-            download_bundled_external("qt/" ${QT_VER} QT_PREFIX)
-        endif()
-
-        set(QT_PREFIX_HINT HINTS "${QT_PREFIX}")
-    else()
-        # Passing an empty HINTS seems to cause default system paths to get ignored in CMake 2.8 so
-        # make sure to not pass anything if we don't have one.
-        set(QT_PREFIX_HINT)
-    endif()
-
-    find_package(Qt5 REQUIRED COMPONENTS Widgets Multimedia ${QT_PREFIX_HINT})
+    find_package(Qt5 REQUIRED COMPONENTS Widgets Multimedia)
 
     if (ENABLE_QT_TRANSLATION)
-        find_package(Qt5 REQUIRED COMPONENTS LinguistTools ${QT_PREFIX_HINT})
+        find_package(Qt5 REQUIRED COMPONENTS LinguistTools)
     endif()
 endif()
 
@@ -205,29 +220,20 @@ if(NOT APPLE)
     find_package(LibUSB)
 endif()
 if (NOT LIBUSB_FOUND)
-    add_subdirectory(externals/libusb)
-    set(LIBUSB_INCLUDE_DIR "")
-    set(LIBUSB_LIBRARIES usb)
+    find_package(libusb CONFIG)
+
+    if (NOT ${libusb_FOUND})
+        set(LIBUSB_INCLUDE_DIRS ${LIBUSB_INCLUDE_DIR})
+        set(LIBUSB_LIBRARIES ${LIBUSB_LIBRARY})
+    endif()
 endif()
 
 if (ENABLE_FFMPEG)
-    if (CITRA_USE_BUNDLED_FFMPEG)
-        if ((MSVC_VERSION GREATER_EQUAL 1920 AND MSVC_VERSION LESS 1940) AND ARCHITECTURE_x86_64)
-            set(FFmpeg_VER "ffmpeg-4.1-win64")
-        else()
-            message(FATAL_ERROR "No bundled FFmpeg binaries for your toolchain. Disable CITRA_USE_BUNDLED_FFMPEG and provide your own.")
-        endif()
-
-        if (DEFINED FFmpeg_VER)
-            download_bundled_external("ffmpeg/" ${FFmpeg_VER} FFmpeg_PREFIX)
-            set(FFMPEG_DIR "${FFmpeg_PREFIX}")
-        endif()
-    endif()
-
+    find_package(PkgConfig REQUIRED)
     if (ENABLE_FFMPEG_VIDEO_DUMPER)
-        find_package(FFmpeg REQUIRED COMPONENTS avcodec avformat avutil swscale swresample)
+        find_package(FFMPEG REQUIRED COMPONENTS libavcodec libavformat libavutil libswresample)
     else()
-        find_package(FFmpeg REQUIRED COMPONENTS avcodec)
+        find_package(FFMPEG REQUIRED COMPONENTS libavcodec)
     endif()
     if ("${FFmpeg_avcodec_VERSION}" VERSION_LESS "57.48.101")
         message(FATAL_ERROR "Found version for libavcodec is too low. The required version is at least 57.48.101 (included in FFmpeg 3.1 and later).")
@@ -265,15 +271,8 @@ elseif (CMAKE_SYSTEM_NAME MATCHES "^(Linux|kFreeBSD|GNU|SunOS)$")
 endif()
 
 if (ENABLE_VULKAN)
-    # Find the VulkanSDK
-    find_package(Vulkan REQUIRED)
-
-    set(SHADERC_SKIP_TESTS ON)
-    add_subdirectory(externals/shaderc)
-    set(SHADERC_DEP shaderc)
-
-    # Include Vulkan Memory Allocator
-    add_subdirectory(externals/vma)
+    find_library(SHADERC_LIB shaderc)
+    find_library(SHADERC_UTIL_LIB shaderc_util)
 endif()
 
 # Setup a custom clang-format target (if clang-format can be found) that will run
@@ -351,13 +350,6 @@ function(get_timestamp _var)
     set(${_var} "${timestamp}" PARENT_SCOPE)
 endfunction()
 
-# Prevent boost from linking against libs when building
-add_definitions(-DBOOST_ERROR_CODE_HEADER_ONLY
-    -DBOOST_SYSTEM_NO_LIB
-    -DBOOST_DATE_TIME_NO_LIB
-    -DBOOST_REGEX_NO_LIB
-)
-
 # generate git/build information
 include(GetGitRevisionDescription)
 get_git_head_revision(GIT_REF_SPEC GIT_REV)
@@ -365,20 +357,8 @@ git_describe(GIT_DESC --always --long --dirty)
 git_branch_name(GIT_BRANCH)
 get_timestamp(BUILD_DATE)
 
-if (NOT USE_SYSTEM_BOOST)
-    add_definitions( -DBOOST_ALL_NO_LIB )
-endif()
-
 enable_testing()
 add_subdirectory(externals)
-
-# Boost
-if (USE_SYSTEM_BOOST)
-    find_package(Boost 1.70.0 COMPONENTS serialization REQUIRED)
-else()
-    add_library(Boost::boost ALIAS boost)
-    add_library(Boost::serialization ALIAS boost_serialization)
-endif()
 
 add_subdirectory(src)
 add_subdirectory(dist/installer)

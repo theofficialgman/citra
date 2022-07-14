@@ -1,0 +1,47 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+    "name": "citra-emu",
+    "version-string": "0.0.0",
+    "dependencies": [
+        "boost-serialization",
+        "boost-system",
+        "boost-range",
+        "boost-optional",
+        "boost-icl",
+        "boost-date-time",
+        "boost-crc",
+        "boost-container",
+        "boost-asio",
+        "catch2",
+        "cpp-jwt",
+        "cryptopp",
+        "discord-rpc",
+        "enet",
+        "fmt",
+        {
+            "name": "glad",
+            "features": [
+                "gl-api-33",
+                "gles2-api-32"
+            ]
+        },
+        "glm",
+        "ffmpeg",
+        "fdk-aac",
+        "cpp-httplib",
+        "libressl",
+        "inih",
+        "nlohmann-json",
+        "libusb",
+        "libyuv",
+        "lodepng",
+        "shaderc",
+        "soundtouch",
+        "xbyak",
+        "zstd",
+        "sdl2",
+        "sdl2-image",
+        "qt5-base",
+        "qt5-multimedia"
+    ]
+}

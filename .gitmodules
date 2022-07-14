@@ -64,3 +64,6 @@
 [submodule "externals/Vulkan-Headers"]
 	path = externals/Vulkan-Headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers
+[submodule "externals/vcpkg"]
+	path = externals/vcpkg
+	url = https://github.com/microsoft/vcpkg
