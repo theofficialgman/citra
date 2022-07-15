@@ -272,8 +272,7 @@ elseif (CMAKE_SYSTEM_NAME MATCHES "^(Linux|kFreeBSD|GNU|SunOS)$")
 endif()
 
 if (ENABLE_VULKAN)
-    find_library(SHADERC_LIB shaderc)
-    find_library(SHADERC_UTIL_LIB shaderc_util)
+    find_package(glslang CONFIG REQUIRED)
 endif()
 
 # Setup a custom clang-format target (if clang-format can be found) that will run
