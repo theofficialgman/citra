@@ -3,8 +3,8 @@
 // Refer to the license.txt file included.
 
 #include <cstring>
-#include <dynarmic/A32/a32.h>
-#include <dynarmic/A32/context.h>
+#include <dynarmic/interface/A32/a32.h>
+#include <dynarmic/interface/A32/context.h>
 #include "common/assert.h"
 #include "common/microprofile.h"
 #include "core/arm/dynarmic/arm_dynarmic.h"
@@ -103,7 +103,7 @@ public:
     void InterpreterFallback(VAddr pc, std::size_t num_instructions) override {
         // Should never happen.
         UNREACHABLE_MSG("InterpeterFallback reached with pc = 0x{:08x}, code = 0x{:08x}, num = {}",
-                        pc, MemoryReadCode(pc), num_instructions);
+                        pc, MemoryReadCode(pc).value(), num_instructions);
     }
 
     void CallSVC(std::uint32_t swi) override {
@@ -133,7 +133,7 @@ public:
             return;
         }
         ASSERT_MSG(false, "ExceptionRaised(exception = {}, pc = {:08X}, code = {:08X})", exception,
-                   pc, MemoryReadCode(pc));
+                   pc, MemoryReadCode(pc).value());
     }
 
     void AddTicks(std::uint64_t ticks) override {
