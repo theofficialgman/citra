@@ -22,7 +22,8 @@
             "name": "glad",
             "features": [
                 "gl-api-33",
-                "gles2-api-32"
+                "gles2-api-32",
+                "extensions"
             ]
         },
         "glm",
