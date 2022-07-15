@@ -5,7 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include <nihstro/inline_assembly.h>
 #include "video_core/shader/shader_jit_x64_compiler.h"
 
@@ -65,9 +66,9 @@ TEST_CASE("LG2", "[video_core][shader][shader_jit]") {
     REQUIRE(std::isnan(shader.Run(NAN)));
     REQUIRE(std::isnan(shader.Run(-1.f)));
     REQUIRE(std::isinf(shader.Run(0.f)));
-    REQUIRE(shader.Run(4.f) == Approx(2.f));
-    REQUIRE(shader.Run(64.f) == Approx(6.f));
-    REQUIRE(shader.Run(1.e24f) == Approx(79.7262742773f));
+    REQUIRE(shader.Run(4.f) == Catch2::Approx(2.f));
+    REQUIRE(shader.Run(64.f) == Catch2::Approx(6.f));
+    REQUIRE(shader.Run(1.e24f) == Catch2::Approx(79.7262742773f));
 }
 
 TEST_CASE("EX2", "[video_core][shader][shader_jit]") {
@@ -82,10 +83,10 @@ TEST_CASE("EX2", "[video_core][shader][shader_jit]") {
     });
 
     REQUIRE(std::isnan(shader.Run(NAN)));
-    REQUIRE(shader.Run(-800.f) == Approx(0.f));
-    REQUIRE(shader.Run(0.f) == Approx(1.f));
-    REQUIRE(shader.Run(2.f) == Approx(4.f));
-    REQUIRE(shader.Run(6.f) == Approx(64.f));
-    REQUIRE(shader.Run(79.7262742773f) == Approx(1.e24f));
+    REQUIRE(shader.Run(-800.f) == Catch2::Approx(0.f));
+    REQUIRE(shader.Run(0.f) == Catch2::Approx(1.f));
+    REQUIRE(shader.Run(2.f) == Catch2::Approx(4.f));
+    REQUIRE(shader.Run(6.f) == Catch2::Approx(64.f));
+    REQUIRE(shader.Run(79.7262742773f) == Catch2::Approx(1.e24f));
     REQUIRE(std::isinf(shader.Run(800.f)));
 }
