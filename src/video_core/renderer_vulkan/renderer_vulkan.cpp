@@ -65,7 +65,7 @@ vk::SurfaceKHR CreateSurface(const vk::Instance& instance,
     if (window_info.type == Frontend::WindowSystemType::Windows) {
         const HWND hWnd = static_cast<HWND>(window_info.render_surface);
         const vk::Win32SurfaceCreateInfoKHR win32_ci{{}, nullptr, hWnd};
-        if (instandce.createWin32SurfaceKHR(&win32_ci, nullptr, &surface) != vk::Result::eSuccess) {
+        if (instance.createWin32SurfaceKHR(&win32_ci, nullptr, &surface) != vk::Result::eSuccess) {
             LOG_ERROR(Render_Vulkan, "Failed to initialize Win32 surface");
             UNREACHABLE();
         }
