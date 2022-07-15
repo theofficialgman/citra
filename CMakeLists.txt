@@ -149,14 +149,18 @@ find_package(cryptopp CONFIG REQUIRED)
 
 # Xbyak
 if (ARCHITECTURE_x86_64)
-    find_package(xbyak REQUIRED CONFIG)
+    find_package(xbyak CONFIG REQUIRED)
 endif()
 
 # libfmt
 find_package(fmt CONFIG REQUIRED)
 
+# Glad/Glm
+find_package(glad CONFIG REQUIRED)
+find_package(glm CONFIG REQUIRED)
+
 # Zstandard
-find_package(ZSTD CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 
 # ENet
 find_package(unofficial-enet CONFIG REQUIRED)
@@ -179,16 +183,16 @@ if (ENABLE_WEB_SERVICE)
     target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_INCLUDE_DIRS})
 
     # cpp-jwt
-    find_package(cpp-jwt REQUIRED)
+    find_package(cpp-jwt CONFIG REQUIRED)
 endif()
 
 # lodepng
-find_package(lodepng REQUIRED)
+find_package(lodepng CONFIG REQUIRED)
 
 # (xperia64): Only use libyuv on Android b/c of build issues on Windows and mandatory JPEG
 if(ANDROID)
     # libyuv
-    find_package(yuv CONFIG REQUIRED)
+    find_package(libyuv CONFIG REQUIRED)
 endif()
 
 # Prefer the -pthread flag on Linux.
@@ -245,10 +249,7 @@ if (ENABLE_FFMPEG_VIDEO_DUMPER)
 endif()
 
 if (ENABLE_FDK)
-    find_library(FDK_AAC fdk-aac DOC "The path to fdk_aac library")
-    if(FDK_AAC STREQUAL "FDK_AAC-NOTFOUND")
-        message(FATAL_ERROR "fdk_aac library not found.")
-    endif()
+    find_package(fdk-aac CONFIG REQUIRED)
 endif()
 # Platform-specific library requirements
 # ======================================

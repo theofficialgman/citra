@@ -174,9 +174,8 @@ endif()
 
 create_target_directory_groups(video_core)
 
-find_package(glad CONFIG REQUIRED)
 target_link_libraries(video_core PUBLIC common core)
-target_link_libraries(video_core PRIVATE glad::glad nihstro-headers Boost::serialization)
+target_link_libraries(video_core PRIVATE glad::glad glm::glm nihstro-headers Boost::serialization)
 
 # Include Vulkan headers
 target_include_directories(video_core PRIVATE ../../externals/Vulkan-Headers/include)
