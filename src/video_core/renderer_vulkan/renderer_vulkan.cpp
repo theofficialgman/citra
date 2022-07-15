@@ -144,11 +144,6 @@ void RendererVulkan::PrepareRendertarget() {
         int fb_id = i == 2 ? 1 : 0;
         const auto& framebuffer = GPU::g_regs.framebuffer_config[fb_id];
 
-        // Create swapchain if needed
-        if (swapchain->NeedsRecreation()) {
-            swapchain->Create(framebuffer.width, framebuffer.height, false);
-        }
-
         // Main LCD (0): 0x1ED02204, Sub LCD (1): 0x1ED02A04
         u32 lcd_color_addr =
             (fb_id == 0) ? LCD_REG_INDEX(color_fill_top) : LCD_REG_INDEX(color_fill_bottom);
@@ -536,10 +531,14 @@ void RendererVulkan::SwapBuffers() {
     // Configure current framebuffer and recreate swapchain if necessary
     PrepareRendertarget();
 
-    if (BeginPresent()) {
-        const auto& layout = render_window.GetFramebufferLayout();
-        DrawScreens(layout, false);
+    // Create swapchain if needed
+    const auto& layout = render_window.GetFramebufferLayout();
+    if (swapchain->NeedsRecreation()) {
+        swapchain->Create(layout.width, layout.height, false);
+    }
 
+    if (BeginPresent()) {
+        DrawScreens(layout, false);
         EndPresent();
     }
 }
@@ -600,7 +599,7 @@ VideoCore::ResultStatus RendererVulkan::Init() {
     auto surface = CreateSurface(instance, render_window);
     g_vk_instace = std::make_unique<Instance>();
     g_vk_task_scheduler = std::make_unique<TaskScheduler>();
-    g_vk_instace->Create(instance, physical_devices[2], surface, true);
+    g_vk_instace->Create(instance, physical_devices[0], surface, true);
     g_vk_task_scheduler->Create();
 
     //auto& layout = render_window.GetFramebufferLayout();
