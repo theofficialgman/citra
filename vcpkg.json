@@ -26,7 +26,15 @@
             ]
         },
         "glm",
-        "ffmpeg",
+        {
+            "name": "ffmpeg",
+            "features": [
+                "avcodec",
+                "avformat",
+                "avdevice",
+                "swresample"
+            ]
+        },
         "fdk-aac",
         "cpp-httplib",
         "libressl",
