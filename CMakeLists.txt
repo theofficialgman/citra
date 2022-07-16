@@ -9,6 +9,11 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/externals/cmake-modul
 include(DownloadExternals)
 include(CMakeDependentOption)
 
+# Enable static linking on windows platforms
+if (WIN32)
+    set(VCPKG_TARGET_TRIPLET "x64-windows-static")
+endif()
+
 # Include vcpkg toolchain file
 set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/externals/vcpkg/scripts/buildsystems/vcpkg.cmake"
   CACHE STRING "Vcpkg toolchain file")
