@@ -36,13 +36,8 @@
         "libyuv",
         "lodepng",
         "glslang",
-        "soundtouch",
-        "robin-map",
         "xbyak",
         "zstd",
-        "sdl2",
-        "sdl2-image",
-        "qt5-base",
-        "qt5-multimedia"
+        "sdl2"
     ]
 }

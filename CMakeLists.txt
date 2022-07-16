@@ -210,11 +210,30 @@ else()
     set(SDL2_FOUND NO)
 endif()
 
+
 if (ENABLE_QT)
-    find_package(Qt5 REQUIRED COMPONENTS Widgets Multimedia)
+    if (CITRA_USE_BUNDLED_QT)
+        if ((MSVC_VERSION GREATER_EQUAL 1920 AND MSVC_VERSION LESS 1940) AND ARCHITECTURE_x86_64)
+            set(QT_VER qt-5.10.0-msvc2017_64)
+        else()
+            message(FATAL_ERROR "No bundled Qt binaries for your toolchain. Disable CITRA_USE_BUNDLED_QT and provide your own.")
+        endif()
+
+        if (DEFINED QT_VER)
+            download_bundled_external("qt/" ${QT_VER} QT_PREFIX)
+        endif()
+
+        set(QT_PREFIX_HINT HINTS "${QT_PREFIX}")
+    else()
+        # Passing an empty HINTS seems to cause default system paths to get ignored in CMake 2.8 so
+        # make sure to not pass anything if we don't have one.
+        set(QT_PREFIX_HINT)
+    endif()
+
+    find_package(Qt5 REQUIRED COMPONENTS Widgets Multimedia ${QT_PREFIX_HINT})
 
     if (ENABLE_QT_TRANSLATION)
-        find_package(Qt5 REQUIRED COMPONENTS LinguistTools)
+        find_package(Qt5 REQUIRED COMPONENTS LinguistTools ${QT_PREFIX_HINT})
     endif()
 endif()
 
