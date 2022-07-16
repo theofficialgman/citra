@@ -9,10 +9,11 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include <optional>
 #include <boost/serialization/array.hpp>
-#include <boost/serialization/optional.hpp>
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/vector.hpp>
+#include "common/serialization/optional.h"
 #include "core/global.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/result.h"
@@ -178,10 +179,10 @@ public:
 
     ResultCode DoApplicationJump(DeliverArg arg);
 
-    boost::optional<DeliverArg> ReceiveDeliverArg() const {
+    std::optional<DeliverArg> ReceiveDeliverArg() const {
         return deliver_arg;
     }
-    void SetDeliverArg(boost::optional<DeliverArg> arg) {
+    void SetDeliverArg(std::optional<DeliverArg> arg) {
         deliver_arg = std::move(arg);
     }
 
@@ -224,7 +225,7 @@ public:
 private:
     /// Parameter data to be returned in the next call to Glance/ReceiveParameter.
     // NOTE: A bug in gcc prevents serializing std::optional
-    boost::optional<MessageParameter> next_parameter;
+    std::optional<MessageParameter> next_parameter;
 
     static constexpr std::size_t NumAppletSlot = 4;
 
@@ -271,7 +272,7 @@ private:
     };
 
     ApplicationJumpParameters app_jump_parameters{};
-    boost::optional<DeliverArg> deliver_arg{};
+    std::optional<DeliverArg> deliver_arg{};
 
     // Holds data about the concurrently running applets in the system.
     std::array<AppletSlotData, NumAppletSlot> applet_slots = {};
