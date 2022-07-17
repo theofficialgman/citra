@@ -9,14 +9,9 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/externals/cmake-modul
 include(DownloadExternals)
 include(CMakeDependentOption)
 
-# Enable static linking on windows platforms
-if (WIN32)
-    set(VCPKG_TARGET_TRIPLET "x64-windows-static")
-endif()
-
 # Include vcpkg toolchain file
-set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/externals/vcpkg/scripts/buildsystems/vcpkg.cmake"
-  CACHE STRING "Vcpkg toolchain file")
+set(CMAKE_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/externals/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+include(VcpkgCmakeUtils)
 
 project(citra LANGUAGES C CXX ASM)
 
@@ -143,60 +138,68 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin/$<CONFIG>)
 # System imported libraries
 # ======================
 
-# Boost
-find_package(Boost REQUIRED COMPONENTS serialization)
+# Download required dependecies with vcpkg
+set(REQUIRED_LIBRARIES
+    boost-serialization
+    boost-system
+    boost-range
+    boost-icl
+    boost-date-time
+    boost-crc
+    boost-container
+    boost-asio
+    catch2
+    cryptopp
+    enet
+    fmt
+    glm
+    glad[gl-api-33,gles2-api-32,extensions]
+    inih
+    lodepng
+    glslang
+    zstd
+)
 
-# Catch2
-find_package(Catch2 CONFIG REQUIRED)
-
-# Crypto++
-find_package(cryptopp CONFIG REQUIRED)
+foreach(LIBRARY ${REQUIRED_LIBRARIES})
+    vcpkg_add_package(${LIBRARY})
+endforeach()
 
 # Xbyak
 if (ARCHITECTURE_x86_64)
+    vcpkg_add_package(xbyak)
     find_package(xbyak CONFIG REQUIRED)
 endif()
 
-# libfmt
-find_package(fmt CONFIG REQUIRED)
-
-# Glad/Glm
-find_package(glad CONFIG REQUIRED)
-find_package(glm CONFIG REQUIRED)
-
-# Zstandard
-find_package(zstd CONFIG REQUIRED)
-
-# ENet
-find_package(unofficial-enet CONFIG REQUIRED)
-
 # DiscordRPC
 if (USE_DISCORD_PRESENCE)
+    vcpkg_add_package(discord-rpc)
     find_package(discord-rpc CONFIG REQUIRED)
 endif()
 
 if (ENABLE_WEB_SERVICE)
-    # OpenSSL
-    find_package(OpenSSL 1.1)
+    # LibreSSL
+    vcpkg_add_package(openssl)
+    find_package(OpenSSL REQUIRED)
 
     # JSON
+    vcpkg_add_package(nlohmann-json)
     find_package(nlohmann_json CONFIG REQUIRED)
 
     # httplib
+    vcpkg_add_package(cpp-httplib)
     find_path(CPP_HTTPLIB_INCLUDE_DIRS "httplib.h")
     add_library(httplib INTERFACE)
     target_include_directories(httplib INTERFACE ${CPP_HTTPLIB_INCLUDE_DIRS})
 
     # cpp-jwt
+    vcpkg_add_package(cpp-jwt)
     find_package(cpp-jwt CONFIG REQUIRED)
 endif()
-
-# lodepng
-find_package(lodepng CONFIG REQUIRED)
 
 # (xperia64): Only use libyuv on Android b/c of build issues on Windows and mandatory JPEG
 if(ANDROID)
     # libyuv
+    vcpkg_add_package(libyuv)
     find_package(libyuv CONFIG REQUIRED)
 endif()
 
@@ -205,6 +208,7 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 if (ENABLE_SDL2)
+    vcpkg_add_package(sdl2)
     find_package(SDL2 CONFIG REQUIRED)
 
     if (SDL2_FOUND)
@@ -248,6 +252,7 @@ if(NOT APPLE)
     find_package(LibUSB)
 endif()
 if (NOT LIBUSB_FOUND)
+    vcpkg_add_package(libusb)
     find_package(libusb CONFIG)
 
     if (NOT ${libusb_FOUND})
@@ -257,12 +262,13 @@ if (NOT LIBUSB_FOUND)
 endif()
 
 if (ENABLE_FFMPEG)
-    find_package(PkgConfig REQUIRED)
+    vcpkg_add_package(ffmpeg[avcodec,avformat,avdevice,swresample])
     if (ENABLE_FFMPEG_VIDEO_DUMPER)
         find_package(FFMPEG REQUIRED COMPONENTS libavcodec libavformat libavutil libswresample)
     else()
         find_package(FFMPEG REQUIRED COMPONENTS libavcodec)
     endif()
+
     if ("${FFmpeg_avcodec_VERSION}" VERSION_LESS "57.48.101")
         message(FATAL_ERROR "Found version for libavcodec is too low. The required version is at least 57.48.101 (included in FFmpeg 3.1 and later).")
     endif()
@@ -273,8 +279,29 @@ if (ENABLE_FFMPEG_VIDEO_DUMPER)
 endif()
 
 if (ENABLE_FDK)
+    vcpkg_add_package(fdk-acc)
     find_package(fdk-aac CONFIG REQUIRED)
 endif()
+
+# Find the rest of our dependecies
+set(REQUIRED_PACKAGES
+    Catch2
+    cryptopp
+    fmt
+    glad
+    glm
+    zstd
+    unofficial-enet
+    lodepng
+)
+
+foreach(PACKAGE ${REQUIRED_PACKAGES})
+    find_package(${PACKAGE} CONFIG REQUIRED)
+endforeach()
+
+# Find Boost::serialization
+find_package(Boost REQUIRED COMPONENTS serialization)
+
 # Platform-specific library requirements
 # ======================================
 
