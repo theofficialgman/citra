@@ -302,6 +302,13 @@ endforeach()
 # Find Boost::serialization
 find_package(Boost REQUIRED COMPONENTS serialization)
 
+# Find inih
+find_path(INIH_INCLUDE_DIR "INIReader.h" REQUIRED)
+find_library(INIH_LIB NAMES inih REQUIRED)
+add_library(inih INTERFACE)
+target_include_directories(inih INTERFACE ${INIH_INCLUDE_DIR})
+target_link_libraries(inih INTERFACE ${INIH_LIB})
+
 # Platform-specific library requirements
 # ======================================
 

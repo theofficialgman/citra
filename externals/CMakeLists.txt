@@ -22,9 +22,6 @@ if (MSVC)
     add_subdirectory(getopt)
 endif()
 
-# inih
-add_subdirectory(inih)
-
 # MicroProfile
 add_library(microprofile INTERFACE)
 target_include_directories(microprofile INTERFACE ./microprofile)
