@@ -208,8 +208,12 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 if (ENABLE_SDL2)
-    vcpkg_add_package(sdl2)
-    find_package(SDL2 CONFIG REQUIRED)
+    find_package(SDL2 CONFIG)
+
+    if (NOT SDL2_FOUND)
+        vcpkg_add_package(sdl2)
+        find_package(SDL2 CONFIG REQUIRED)
+    endif()
 
     if (SDL2_FOUND)
         add_library(SDL2 INTERFACE)
