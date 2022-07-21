@@ -32,7 +32,7 @@ public:
 
     /// Feature support
     bool SupportsAnisotropicFiltering() const;
-    u32 UniformMinAlignment() const { return device_limits.minUniformBufferOffsetAlignment; }
+    u32 UniformMinAlignment() const { return static_cast<u32>(device_limits.minUniformBufferOffsetAlignment); }
 
 private:
     bool CreateDevice(vk::SurfaceKHR surface, bool validation_enabled);

@@ -94,7 +94,12 @@ void EmuThread::run() {
                 emit DebugModeLeft();
 
             exec_step = false;
-            Core::System::GetInstance().SingleStep();
+            const auto result = Core::System::GetInstance().SingleStep();
+            if (result != Core::System::ResultStatus::Success) {
+                this->SetRunning(false);
+                emit ErrorThrown(result, Core::System::GetInstance().GetStatusDetails());
+            }
+
             emit DebugModeEntered();
             yieldCurrentThread();
 

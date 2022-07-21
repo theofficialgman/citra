@@ -256,7 +256,8 @@ void ConfigureCamera::SetConfiguration() {
     int index = GetSelectedCameraIndex();
     for (std::size_t i = 0; i < Implementations.size(); i++) {
         if (Implementations[i] == camera_name[index]) {
-            ui->image_source->setCurrentIndex(i);
+            int current_index = static_cast<int>(i);
+            ui->image_source->setCurrentIndex(current_index);
         }
     }
     if (camera_name[index] == "image") {

@@ -49,9 +49,10 @@ CheatDialog::~CheatDialog() = default;
 void CheatDialog::LoadCheats() {
     cheats = Core::System::GetInstance().CheatEngine().GetCheats();
 
-    ui->tableCheats->setRowCount(cheats.size());
+    int cheat_count = static_cast<int>(cheats.size());
+    ui->tableCheats->setRowCount(cheat_count);
 
-    for (size_t i = 0; i < cheats.size(); i++) {
+    for (int i = 0; i < cheat_count; i++) {
         QCheckBox* enabled = new QCheckBox();
         enabled->setChecked(cheats[i]->IsEnabled());
         enabled->setStyleSheet(QStringLiteral("margin-left:7px;"));

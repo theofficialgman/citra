@@ -1633,7 +1633,7 @@ void RasterizerVulkan::UploadUniforms(bool accelerate_draw) {
     if (!sync_vs && !sync_fs)
         return;
 
-    std::size_t uniform_size = uniform_size_aligned_vs + uniform_size_aligned_fs;
+    u32 uniform_size = uniform_size_aligned_vs + uniform_size_aligned_fs;
 
     std::size_t used_bytes = 0;
     u8* uniforms = nullptr; u32 offset = 0; bool invalidate = false;
