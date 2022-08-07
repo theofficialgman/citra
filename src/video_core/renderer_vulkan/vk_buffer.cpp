@@ -2,165 +2,181 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#define VULKAN_HPP_NO_CONSTRUCTORS
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include <cstring>
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
+
+inline vk::BufferUsageFlags ToVkBufferUsage(BufferUsage usage) {
+    constexpr std::array vk_buffer_usages = {
+        vk::BufferUsageFlagBits::eVertexBuffer,
+        vk::BufferUsageFlagBits::eIndexBuffer,
+        vk::BufferUsageFlagBits::eUniformBuffer,
+        vk::BufferUsageFlagBits::eUniformTexelBuffer,
+        vk::BufferUsageFlagBits::eTransferSrc
+    };
+
+    return vk::BufferUsageFlagBits::eTransferDst |
+            vk_buffer_usages.at(static_cast<u32>(usage));
+}
+
+inline vk::Format ToVkViewFormat(ViewFormat format) {
+    constexpr std::array vk_view_formats = {
+        vk::Format::eR32Sfloat,
+        vk::Format::eR32G32Sfloat,
+        vk::Format::eR32G32B32Sfloat,
+        vk::Format::eR32G32B32A32Sfloat
+    };
+
+    return vk_view_formats.at(static_cast<u32>(format));
+}
+
+Buffer::Buffer(Instance& instance, CommandScheduler& scheduler, const BufferInfo& info) :
+        BufferBase(info), instance(instance), scheduler(scheduler) {
+
+    vk::BufferCreateInfo buffer_info = {
+        .size = info.capacity,
+        .usage = ToVkBufferUsage(info.usage)
+    };
+
+    VmaAllocationCreateInfo alloc_create_info = {
+        .flags = info.usage == BufferUsage::Staging ?
+                (VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT) :
+                VmaAllocationCreateFlags{},
+        .usage = VMA_MEMORY_USAGE_AUTO
+    };
+
+    VkBuffer unsafe_buffer = VK_NULL_HANDLE;
+    VkBufferCreateInfo unsafe_buffer_info = static_cast<VkBufferCreateInfo>(buffer_info);
+    VmaAllocationInfo alloc_info;
+    VmaAllocator allocator = instance.GetAllocator();
+
+    // Allocate texture memory
+    vmaCreateBuffer(allocator, &unsafe_buffer_info, &alloc_create_info,
+                    &unsafe_buffer, &allocation, &alloc_info);
+    buffer = vk::Buffer{unsafe_buffer};
+
+    u32 view = 0;
+    vk::Device device = instance.GetDevice();
+    while (info.views[view] != ViewFormat::Undefined) {
+        const vk::BufferViewCreateInfo view_info = {
+            .buffer = buffer,
+            .format = ToVkViewFormat(info.views[view]),
+            .range = info.capacity
+        };
+
+        views[view++] = device.createBufferView(view_info);
+    }
+
+    // Map memory
+    if (info.usage == BufferUsage::Staging) {
+        mapped_ptr = alloc_info.pMappedData;
+    }
+}
 
 Buffer::~Buffer() {
-    Destroy();
-}
-
-void Buffer::Create(const Buffer::Info& info) {
-    auto device = g_vk_instace->GetDevice();
-    buffer_info = info;
-
-    vk::BufferCreateInfo bufferInfo({}, info.size, info.usage);
-    buffer = device.createBuffer(bufferInfo);
-
-    auto mem_requirements = device.getBufferMemoryRequirements(buffer);
-
-    auto memory_type_index = FindMemoryType(mem_requirements.memoryTypeBits, info.properties);
-    vk::MemoryAllocateInfo alloc_info(mem_requirements.size, memory_type_index);
-
-    memory = device.allocateMemory(alloc_info);
-    device.bindBufferMemory(buffer, memory, 0);
-
-    // Optionally map the buffer to CPU memory
-    if (info.properties & vk::MemoryPropertyFlagBits::eHostVisible) {
-        host_ptr = device.mapMemory(memory, 0, info.size);
-    }
-
-    for (auto& format : info.view_formats) {
-        if (format != vk::Format::eUndefined) {
-            views[view_count++] = device.createBufferView({{}, buffer, format, 0, info.size});
-        }
-    }
-}
-
-void Buffer::Recreate() {
-    Destroy();
-    Create(buffer_info);
-}
-
-void Buffer::Destroy() {
     if (buffer) {
-        if (host_ptr != nullptr) {
-            g_vk_instace->GetDevice().unmapMemory(memory);
-        }
+        auto deleter = [allocation = allocation,
+                        buffer = buffer,
+                        views = views](vk::Device device, VmaAllocator allocator) {
+            vmaDestroyBuffer(allocator, static_cast<VkBuffer>(buffer), allocation);
 
-        auto deleter = [buffer = buffer,
-                        memory = memory,
-                        view_count = view_count,
-                        views = views]() {
-            auto device = g_vk_instace->GetDevice();
-            device.destroyBuffer(buffer);
-            device.freeMemory(memory);
-
-            for (u32 i = 0; i < view_count; i++) {
-                device.destroyBufferView(views[i]);
+            u32 view_index = 0;
+            while (views[view_index]) {
+                device.destroyBufferView(views[view_index++]);
             }
         };
 
-        g_vk_task_scheduler->Schedule(deleter);
-    }
-}
-
-u32 Buffer::FindMemoryType(u32 type_filter, vk::MemoryPropertyFlags properties) {
-    vk::PhysicalDeviceMemoryProperties mem_properties = g_vk_instace->GetPhysicalDevice().getMemoryProperties();
-
-    for (uint32_t i = 0; i < mem_properties.memoryTypeCount; i++)
-    {
-        auto flags = mem_properties.memoryTypes[i].propertyFlags;
-        if ((type_filter & (1 << i)) && (flags & properties) == properties)
-            return i;
-    }
-
-    LOG_CRITICAL(Render_Vulkan, "Failed to find suitable memory type.");
-    UNREACHABLE();
-}
-
-void Buffer::Upload(std::span<const std::byte> data, u32 offset,
-                      vk::AccessFlags access_to_block,
-                      vk::PipelineStageFlags stage_to_block) {
-    auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
-    // For small data uploads use vkCmdUpdateBuffer
-    if (data.size_bytes() < 1024) {
-        cmdbuffer.updateBuffer(buffer, 0, data.size_bytes(), data.data());
-    }
-    else {
-        auto [ptr, staging_offset] = g_vk_task_scheduler->RequestStaging(data.size());
-        if (!ptr) {
-            LOG_ERROR(Render_Vulkan, "Cannot upload data without staging buffer!");
+        // Delete the buffer immediately if it's allocated in host memory
+        if (info.usage == BufferUsage::Staging) {
+            vk::Device device = instance.GetDevice();
+            VmaAllocator allocator = instance.GetAllocator();
+            deleter(device, allocator);
+        } else {
+            scheduler.Schedule(deleter);
         }
-
-        // Copy pixels to staging buffer
-        std::memcpy(ptr, data.data(), data.size_bytes());
-
-        auto region = vk::BufferCopy{staging_offset, offset, data.size_bytes()};
-        auto& staging = g_vk_task_scheduler->GetStaging();
-        cmdbuffer.copyBuffer(staging.GetBuffer(), buffer, region);
     }
-
-    vk::BufferMemoryBarrier barrier{
-        vk::AccessFlagBits::eTransferWrite, access_to_block,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        buffer, offset, data.size_bytes()
-    };
-
-    // Add a pipeline barrier for the region modified
-    cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_to_block,
-                              vk::DependencyFlagBits::eByRegion,
-                              0, nullptr, 1, &barrier, 0, nullptr);
 }
 
-std::tuple<u8*, u32, bool> StreamBuffer::Map(u32 size, u32 alignment) {
-    ASSERT(size <= buffer_info.size);
-    ASSERT(alignment <= buffer_info.size);
+std::span<u8> Buffer::Map(u32 size, u32 alignment) {
+    ASSERT(size <= info.capacity && alignment <= info.capacity);
 
     if (alignment > 0) {
-        buffer_pos = Common::AlignUp<std::size_t>(buffer_pos, alignment);
+        buffer_offset = Common::AlignUp<std::size_t>(buffer_offset, alignment);
     }
 
-    bool invalidate = false;
-    if (buffer_pos + size > buffer_info.size) {
-        buffer_pos = 0;
-        invalidate = true;
+    // If the buffer is full, invalidate it
+    if (buffer_offset + size > info.capacity) {
+        Invalidate();
     }
 
-    auto [staging_ptr, staging_offset] = g_vk_task_scheduler->RequestStaging(size);
-    mapped_chunk = vk::BufferCopy{staging_offset, buffer_pos, size};
-
-    return std::make_tuple(staging_ptr, buffer_pos, invalidate);
+    if (info.usage == BufferUsage::Staging) {
+        return std::span<u8>{reinterpret_cast<u8*>(mapped_ptr) + buffer_offset, size};
+    } else {
+        Buffer& staging = scheduler.GetCommandUploadBuffer();
+        return staging.Map(size, alignment);
+    }
 }
 
-void StreamBuffer::Commit(u32 size, vk::AccessFlags access_to_block,
-                          vk::PipelineStageFlags stage_to_block) {
-    if (size > 0) {
-        mapped_chunk.size = size;
+void Buffer::Commit(u32 size) {
+    VmaAllocator allocator = instance.GetAllocator();
+    if (info.usage == BufferUsage::Staging && size > 0) {
+        vmaFlushAllocation(allocator, allocation, buffer_offset, size);
+    } else {
+        vk::CommandBuffer command_buffer = scheduler.GetUploadCommandBuffer();
+        Buffer& staging = scheduler.GetCommandUploadBuffer();
 
-        auto cmdbuffer = g_vk_task_scheduler->GetUploadCommandBuffer();
-        auto& staging = g_vk_task_scheduler->GetStaging();
-        cmdbuffer.copyBuffer(staging.GetBuffer(), buffer, mapped_chunk);
+        const vk::BufferCopy copy_region = {
+            .srcOffset = staging.GetCurrentOffset(),
+            .dstOffset = buffer_offset,
+            .size = size
+        };
 
-        vk::BufferMemoryBarrier barrier{
-            vk::AccessFlagBits::eTransferWrite, access_to_block,
-            VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-            buffer, mapped_chunk.dstOffset, mapped_chunk.size
+        // Copy staging buffer to device local buffer
+        command_buffer.copyBuffer(staging.GetHandle(), buffer, copy_region);
+
+        vk::AccessFlags access_mask;
+        vk::PipelineStageFlags stage_mask;
+        switch (info.usage) {
+        case BufferUsage::Vertex:
+            access_mask = vk::AccessFlagBits::eVertexAttributeRead;
+            stage_mask = vk::PipelineStageFlagBits::eVertexInput;
+            break;
+        case BufferUsage::Index:
+            access_mask = vk::AccessFlagBits::eIndexRead;
+            stage_mask = vk::PipelineStageFlagBits::eVertexInput;
+            break;
+        case BufferUsage::Uniform:
+        case BufferUsage::Texel:
+            access_mask = vk::AccessFlagBits::eUniformRead;
+            stage_mask = vk::PipelineStageFlagBits::eVertexShader |
+                    vk::PipelineStageFlagBits::eFragmentShader;
+            break;
+        default:
+            LOG_CRITICAL(Render_Vulkan, "Unknown BufferUsage flag!");
+        }
+
+        const vk::BufferMemoryBarrier buffer_barrier = {
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = access_mask,
+            .buffer = buffer,
+            .offset = buffer_offset,
+            .size = size
         };
 
         // Add a pipeline barrier for the region modified
-        cmdbuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_to_block,
-                                vk::DependencyFlagBits::eByRegion,
-                                0, nullptr, 1, &barrier, 0, nullptr);
+        command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, stage_mask,
+                                       vk::DependencyFlagBits::eByRegion, {}, buffer_barrier, {});
 
-        buffer_pos += size;
     }
+
+    buffer_offset += size;
 }
 
 }

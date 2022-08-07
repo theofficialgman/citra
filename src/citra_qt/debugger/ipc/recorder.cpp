@@ -76,7 +76,7 @@ void IPCRecorderWidget::OnEntryUpdated(IPCDebugger::RequestRecord record) {
     QTreeWidgetItem entry{
         {QString::number(record.id), GetStatusStr(record), service, GetFunctionName(record)}};
 
-    const int row_id = record.id - id_offset;
+    const std::size_t row_id = record.id - id_offset;
     if (ui->main->invisibleRootItem()->childCount() > row_id) {
         records[row_id] = record;
         (*ui->main->invisibleRootItem()->child(row_id)) = entry;

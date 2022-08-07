@@ -2,232 +2,185 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#define VULKAN_HPP_NO_CONSTRUCTORS
+#include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_state.h"
-#include "video_core/renderer_vulkan/vk_swapchain.h"
-#include "common/assert.h"
-#include "common/thread.h"
+#include "video_core/renderer_vulkan/vk_buffer.h"
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
 
-TaskScheduler::~TaskScheduler() {
+// 16MB should be enough for a single frame
+constexpr BufferInfo STAGING_INFO = {
+    .capacity = 16 * 1024 * 1024,
+    .usage = BufferUsage::Staging
+};
+
+CommandScheduler::CommandScheduler(Instance& instance) : instance(instance) {
+
+}
+
+CommandScheduler::~CommandScheduler() {
     // Destroy Vulkan resources
-    auto device = g_vk_instace->GetDevice();
-    device.waitIdle();
+    vk::Device device = instance.GetDevice();
+    VmaAllocator allocator = instance.GetAllocator();
 
-    for (auto& task : tasks) {
-        task.staging.Destroy();
-        device.destroyDescriptorPool(task.pool);
+    for (auto& command : commands) {
+        device.destroyFence(command.fence);
+
+        // Clean up any scheduled resources
+        for (auto& func : command.cleanups) {
+            func(device, allocator);
+        }
     }
 
-    SyncToGPU();
     device.destroyCommandPool(command_pool);
-    device.destroySemaphore(timeline);
 }
 
-std::tuple<u8*, u32> TaskScheduler::RequestStaging(u32 size) {
-    auto& task = tasks[current_task];
-    if (size > STAGING_BUFFER_SIZE - task.current_offset) {
-        // If we run out of space, allocate a new buffer.
-        // The old one will be safely destroyed when the task finishes
-        task.staging.Recreate();
-        task.current_offset = 0;
-
-        return std::make_tuple(task.staging.GetHostPointer(), 0);
-    }
-
-    u8* ptr = task.staging.GetHostPointer() + task.current_offset;
-    std::memset(ptr, 0, size);
-
-    task.current_offset += size;
-    return std::make_tuple(ptr, task.current_offset - size);
-}
-
-Buffer& TaskScheduler::GetStaging() {
-    return tasks[current_task].staging;
-}
-
-bool TaskScheduler::Create() {
-    auto device = g_vk_instace->GetDevice();
-
-    // Create command pool
-    vk::CommandPoolCreateInfo pool_info(vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-                                        g_vk_instace->GetGraphicsQueueFamilyIndex());
-    command_pool = device.createCommandPool(pool_info);
-
-    // Create timeline semaphore for syncronization
-    vk::SemaphoreTypeCreateInfo timeline_info{vk::SemaphoreType::eTimeline, 0};
-    vk::SemaphoreCreateInfo semaphore_info{{}, &timeline_info};
-
-    timeline = device.createSemaphore(semaphore_info);
-
-    Buffer::Info staging_info{
-        .size = STAGING_BUFFER_SIZE,
-        .properties = vk::MemoryPropertyFlagBits::eHostVisible |
-                      vk::MemoryPropertyFlagBits::eHostCoherent,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc |
-                vk::BufferUsageFlagBits::eTransferDst
+bool CommandScheduler::Create() {
+    vk::Device device = instance.GetDevice();
+    const vk::CommandPoolCreateInfo pool_info = {
+        .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+        .queueFamilyIndex = instance.GetGraphicsQueueFamilyIndex()
     };
 
-    // Should be enough for a single frame
-    const vk::DescriptorPoolSize pool_size{vk::DescriptorType::eCombinedImageSampler, 64};
-    vk::DescriptorPoolCreateInfo pool_create_info{{}, 1024, pool_size};
+    // Create command pool
+    command_pool = device.createCommandPool(pool_info);
 
-    for (auto& task : tasks) {
-        // Create command buffers
-        vk::CommandBufferAllocateInfo buffer_info{command_pool, vk::CommandBufferLevel::ePrimary, 2};
-        auto buffers = device.allocateCommandBuffers(buffer_info);
-        std::ranges::copy_n(buffers.begin(), 2, task.command_buffers.begin());
+    vk::CommandBufferAllocateInfo buffer_info = {
+        .commandPool = command_pool,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 2 * SCHEDULER_COMMAND_COUNT
+    };
 
-        // Create staging buffer
-        task.staging.Create(staging_info);
+    // Allocate all command buffers
+    const auto command_buffers = device.allocateCommandBuffers(buffer_info);
 
-        // Create descriptor pool
-        task.pool = device.createDescriptorPool(pool_create_info);
+    // Initialize command slots
+    for (std::size_t i = 0; i < commands.size(); i++) {
+        commands[i] = CommandSlot{
+            .render_command_buffer = command_buffers[2 * i],
+            .upload_command_buffer = command_buffers[2 * i + 1],
+            .fence = device.createFence({}),
+            .upload_buffer = std::make_unique<Buffer>(instance, *this, STAGING_INFO)
+        };
     }
 
     return true;
 }
 
-vk::CommandBuffer TaskScheduler::GetRenderCommandBuffer() const {
-    const auto& task = tasks[current_task];
-    return task.command_buffers[1];
-}
-
-vk::CommandBuffer TaskScheduler::GetUploadCommandBuffer() {
-    auto& task = tasks[current_task];
-    if (!task.use_upload_buffer) {
-        auto& cmdbuffer = task.command_buffers[0];
-        cmdbuffer.begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-        task.use_upload_buffer = true;
-    }
-
-    return task.command_buffers[0];
-}
-
-vk::DescriptorPool TaskScheduler::GetDescriptorPool() const {
-    const auto& task = tasks[current_task];
-    return task.pool;
-}
-
-void TaskScheduler::SyncToGPU(u64 task_index) {
-    // No need to sync if the GPU already has finished the task
-    auto tick = GetGPUTick();
-    if (tasks[task_index].task_id <= tick) {
+void CommandScheduler::Synchronize() {
+    // Don't synchronize the same command twicec
+    CommandSlot& command = commands[current_command];
+    if (command.fence_counter <= completed_fence_counter) {
         return;
     }
 
-    // Wait for the task to complete
-    vk::SemaphoreWaitInfo wait_info{{}, timeline, tasks[task_index].task_id};
-    auto result = g_vk_instace->GetDevice().waitSemaphores(wait_info, UINT64_MAX);
-
-    if (result != vk::Result::eSuccess) {
-        LOG_CRITICAL(Render_Vulkan, "Failed waiting for timeline semaphore!");
+    // Wait for this command buffer to be completed.
+    vk::Device device = instance.GetDevice();
+    if (device.waitForFences(command.fence, true, UINT64_MAX) != vk::Result::eSuccess) {
+        LOG_ERROR(Render_Vulkan, "Waiting for fences failed!");
     }
+
+    // Cleanup resources for command buffers that have completed along with the current one
+    const u64 now_fence_counter = command.fence_counter;
+    VmaAllocator allocator = instance.GetAllocator();
+    for (CommandSlot& command : commands) {
+        if (command.fence_counter < now_fence_counter &&
+            command.fence_counter > completed_fence_counter) {
+            for (auto& func: command.cleanups) {
+                func(device, allocator);
+            }
+
+            command.cleanups.clear();
+        }
+    }
+
+    completed_fence_counter = now_fence_counter;
 }
 
-void TaskScheduler::SyncToGPU() {
-    SyncToGPU(current_task);
-}
-
-u64 TaskScheduler::GetCPUTick() const {
-    return current_task_id;
-}
-
-u64 TaskScheduler::GetGPUTick() const {
-    auto device = g_vk_instace->GetDevice();
-    return device.getSemaphoreCounterValue(timeline);
-}
-
-void TaskScheduler::Submit(bool wait_completion, bool present, Swapchain* swapchain) {
-    // End the current task recording.
-    auto& task = tasks[current_task];
+void CommandScheduler::Submit(bool wait_completion,
+                              vk::Semaphore wait_semaphore,
+                              vk::Semaphore signal_semaphore) {
+    const CommandSlot& command = commands[current_command];
 
     // End command buffers
-    task.command_buffers[1].end();
-    if (task.use_upload_buffer) {
-        task.command_buffers[0].end();
+    command.render_command_buffer.end();
+    if (command.use_upload_buffer) {
+        command.upload_command_buffer.end();
     }
 
-    const u32 num_signal_semaphores = present ? 2U : 1U;
-    const std::array signal_values{task.task_id, u64(0)};
-    std::array signal_semaphores{timeline, vk::Semaphore{}};
-
-    const u32 num_wait_semaphores = present ? 2U : 1U;
-    const std::array wait_values{task.task_id - 1, u64(1)};
-    std::array wait_semaphores{timeline, vk::Semaphore{}};
-
-    // When the task completes the timeline will increment to the task id
-    const vk::TimelineSemaphoreSubmitInfoKHR timeline_si{num_wait_semaphores, wait_values.data(),
-                                                         num_signal_semaphores, signal_values.data()};
-
-    static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks{
+    constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks{
         vk::PipelineStageFlagBits::eAllCommands,
         vk::PipelineStageFlagBits::eColorAttachmentOutput,
     };
 
-    const u32 cmdbuffer_count = task.use_upload_buffer ? 2u : 1u;
-    const vk::SubmitInfo submit_info{num_wait_semaphores, wait_semaphores.data(), wait_stage_masks.data(), cmdbuffer_count,
-                                     &task.command_buffers[2 - cmdbuffer_count], num_signal_semaphores, signal_semaphores.data(),
-                                     &timeline_si};
+    const u32 signal_semaphore_count = signal_semaphore ? 1u : 0u;
+    const u32 wait_semaphore_count = wait_semaphore ? 1u : 0u;
+    const u32 command_buffer_count = command.use_upload_buffer ? 2u : 1u;
+    const std::array command_buffers = { command.render_command_buffer,
+                                         command.upload_command_buffer };
 
-    // Wait for new swapchain image
-    if (present) {
-        signal_semaphores[1] = swapchain->GetRenderSemaphore();
-        wait_semaphores[1] = swapchain->GetAvailableSemaphore();
-    }
+    // Prepeare submit info
+    const vk::SubmitInfo submit_info = {
+        .waitSemaphoreCount = wait_semaphore_count,
+        .pWaitSemaphores = &wait_semaphore,
+        .pWaitDstStageMask = wait_stage_masks.data(),
+        .commandBufferCount = command_buffer_count,
+        .pCommandBuffers = command_buffers.data(),
+        .signalSemaphoreCount = signal_semaphore_count,
+        .pSignalSemaphores = &signal_semaphore,
+    };
 
     // Submit the command buffer
-    auto queue = g_vk_instace->GetGraphicsQueue();
-    queue.submit(submit_info);
-
-    // Present the image when rendering has finished
-    if (present) {
-        swapchain->Present();
-    }
+    vk::Queue queue = instance.GetGraphicsQueue();
+    queue.submit(submit_info, command.fence);
 
     // Block host until the GPU catches up
     if (wait_completion) {
-        SyncToGPU();
+        Synchronize();
     }
 
     // Switch to next cmdbuffer.
-    BeginTask();
+    SwitchSlot();
 }
 
-void TaskScheduler::Schedule(std::function<void()> func) {
-    auto& task = tasks[current_task];
-    task.cleanups.push_back(func);
+void CommandScheduler::Schedule(Deleter&& func) {
+    auto& command = commands[current_command];
+    command.cleanups.push_back(func);
 }
 
-void TaskScheduler::BeginTask() {
-    u32 next_task_index = (current_task + 1) % TASK_COUNT;
-    auto& task = tasks[next_task_index];
-    auto device = g_vk_instace->GetDevice();
+vk::CommandBuffer CommandScheduler::GetUploadCommandBuffer() {
+    CommandSlot& command = commands[current_command];
+    if (!command.use_upload_buffer) {
+        const vk::CommandBufferBeginInfo begin_info = {
+            .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+        };
 
-    // Wait for the GPU to finish with all resources for this task.
-    SyncToGPU(next_task_index);
-
-    // Delete all resources that can be freed now
-    for (auto& func : task.cleanups) {
-        func();
+        command.upload_command_buffer.begin(begin_info);
+        command.use_upload_buffer = true;
     }
 
-    device.resetDescriptorPool(task.pool);
-    task.command_buffers[1].begin({vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-
-    // Move to the next command buffer.
-    current_task = next_task_index;
-    task.task_id = ++current_task_id;
-    task.current_offset = 0;
-    task.use_upload_buffer = false;
-    task.cleanups.clear();
-
-    auto& state = VulkanState::Get();
-    state.InitDescriptorSets();
+    return command.upload_command_buffer;
 }
 
-std::unique_ptr<TaskScheduler> g_vk_task_scheduler;
+void CommandScheduler::SwitchSlot() {
+    current_command = (current_command + 1) % SCHEDULER_COMMAND_COUNT;
+    CommandSlot& command = commands[current_command];
+
+    // Wait for the GPU to finish with all resources for this command.
+    Synchronize();
+
+    const vk::CommandBufferBeginInfo begin_info = {
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    };
+
+    // Move to the next command buffer.
+    vk::Device device = instance.GetDevice();
+    device.resetFences(command.fence);
+    command.render_command_buffer.begin(begin_info);
+    command.fence_counter = next_fence_counter++;
+    command.use_upload_buffer = false;
+}
 
 }  // namespace Vulkan

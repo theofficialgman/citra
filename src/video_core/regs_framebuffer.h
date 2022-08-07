@@ -14,80 +14,80 @@
 
 namespace Pica {
 
+enum class FragmentOperationMode : u32 {
+    Default = 0,
+    Gas = 1,
+    Shadow = 3,
+};
+
+enum class LogicOp : u32 {
+    Clear = 0,
+    And = 1,
+    AndReverse = 2,
+    Copy = 3,
+    Set = 4,
+    CopyInverted = 5,
+    NoOp = 6,
+    Invert = 7,
+    Nand = 8,
+    Or = 9,
+    Nor = 10,
+    Xor = 11,
+    Equiv = 12,
+    AndInverted = 13,
+    OrReverse = 14,
+    OrInverted = 15,
+};
+
+enum class BlendEquation : u32 {
+    Add = 0,
+    Subtract = 1,
+    ReverseSubtract = 2,
+    Min = 3,
+    Max = 4,
+};
+
+enum class BlendFactor : u32 {
+    Zero = 0,
+    One = 1,
+    SourceColor = 2,
+    OneMinusSourceColor = 3,
+    DestColor = 4,
+    OneMinusDestColor = 5,
+    SourceAlpha = 6,
+    OneMinusSourceAlpha = 7,
+    DestAlpha = 8,
+    OneMinusDestAlpha = 9,
+    ConstantColor = 10,
+    OneMinusConstantColor = 11,
+    ConstantAlpha = 12,
+    OneMinusConstantAlpha = 13,
+    SourceAlphaSaturate = 14,
+};
+
+enum class CompareFunc : u32 {
+    Never = 0,
+    Always = 1,
+    Equal = 2,
+    NotEqual = 3,
+    LessThan = 4,
+    LessThanOrEqual = 5,
+    GreaterThan = 6,
+    GreaterThanOrEqual = 7,
+};
+
+enum class StencilAction : u32 {
+    Keep = 0,
+    Zero = 1,
+    Replace = 2,
+    Increment = 3,
+    Decrement = 4,
+    Invert = 5,
+    IncrementWrap = 6,
+    DecrementWrap = 7,
+};
+
 struct FramebufferRegs {
-    enum class FragmentOperationMode : u32 {
-        Default = 0,
-        Gas = 1,
-        Shadow = 3,
-    };
-
-    enum class LogicOp : u32 {
-        Clear = 0,
-        And = 1,
-        AndReverse = 2,
-        Copy = 3,
-        Set = 4,
-        CopyInverted = 5,
-        NoOp = 6,
-        Invert = 7,
-        Nand = 8,
-        Or = 9,
-        Nor = 10,
-        Xor = 11,
-        Equiv = 12,
-        AndInverted = 13,
-        OrReverse = 14,
-        OrInverted = 15,
-    };
-
-    enum class BlendEquation : u32 {
-        Add = 0,
-        Subtract = 1,
-        ReverseSubtract = 2,
-        Min = 3,
-        Max = 4,
-    };
-
-    enum class BlendFactor : u32 {
-        Zero = 0,
-        One = 1,
-        SourceColor = 2,
-        OneMinusSourceColor = 3,
-        DestColor = 4,
-        OneMinusDestColor = 5,
-        SourceAlpha = 6,
-        OneMinusSourceAlpha = 7,
-        DestAlpha = 8,
-        OneMinusDestAlpha = 9,
-        ConstantColor = 10,
-        OneMinusConstantColor = 11,
-        ConstantAlpha = 12,
-        OneMinusConstantAlpha = 13,
-        SourceAlphaSaturate = 14,
-    };
-
-    enum class CompareFunc : u32 {
-        Never = 0,
-        Always = 1,
-        Equal = 2,
-        NotEqual = 3,
-        LessThan = 4,
-        LessThanOrEqual = 5,
-        GreaterThan = 6,
-        GreaterThanOrEqual = 7,
-    };
-
-    enum class StencilAction : u32 {
-        Keep = 0,
-        Zero = 1,
-        Replace = 2,
-        Increment = 3,
-        Decrement = 4,
-        Invert = 5,
-        IncrementWrap = 6,
-        DecrementWrap = 7,
-    };
-
     struct {
         union {
             BitField<0, 2, FragmentOperationMode> fragment_operation_mode;

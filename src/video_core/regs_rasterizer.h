@@ -6,21 +6,20 @@
 
 #include <array>
 #include "common/bit_field.h"
-#include "common/common_funcs.h"
-#include "common/common_types.h"
+#include "common/vector_math.h"
 #include "video_core/pica_types.h"
 
 namespace Pica {
 
-struct RasterizerRegs {
-    enum class CullMode : u32 {
-        // Select which polygons are considered to be "frontfacing".
-        KeepAll = 0,
-        KeepClockWise = 1,
-        KeepCounterClockWise = 2,
-        // TODO: What does the third value imply?
-    };
+// Select which polygons are considered to be "frontfacing".
+enum class CullMode : u32 {
+    KeepAll = 0,
+    KeepClockWise = 1,
+    KeepCounterClockWise = 2,
+    KeepAll2 = 3 // Same as KeepAll
+};
 
+struct RasterizerRegs {
     union {
         BitField<0, 2, CullMode> cull_mode;
     };

@@ -2,60 +2,69 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#define VULKAN_HPP_NO_CONSTRUCTORS
 #include <array>
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
 
-Swapchain::Swapchain(vk::SurfaceKHR surface_) : surface(surface_) {
+Swapchain::Swapchain(Instance& instance, vk::SurfaceKHR surface) :
+    instance(instance), surface(surface) {
 
 }
 
 Swapchain::~Swapchain() {
-    auto device = g_vk_instace->GetDevice();
-    auto instance = g_vk_instace->GetInstance();
-    device.waitIdle();
-
+    // Destroy swapchain resources
+    vk::Device device = instance.GetDevice();
     device.destroySemaphore(render_finished);
     device.destroySemaphore(image_available);
     device.destroySwapchainKHR(swapchain);
-    instance.destroySurfaceKHR(surface);
 }
 
-bool Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
+void Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
     is_outdated = false;
     is_suboptimal = false;
 
     // Fetch information about the provided surface
-    PopulateSwapchainDetails(surface, width, height);
+    Configure(width, height);
 
-    const std::array indices {
-        g_vk_instace->GetGraphicsQueueFamilyIndex(),
-        g_vk_instace->GetPresentQueueFamilyIndex(),
+    const std::array queue_family_indices = {
+        instance.GetGraphicsQueueFamilyIndex(),
+        instance.GetPresentQueueFamilyIndex(),
     };
 
+    const bool exclusive = queue_family_indices[0] == queue_family_indices[1];
+    const u32 queue_family_indices_count = exclusive ? 2u : 1u;
+    const vk::SharingMode sharing_mode = exclusive ? vk::SharingMode::eExclusive :
+                                                     vk::SharingMode::eConcurrent;
+
     // Now we can actually create the swapchain
-    vk::SwapchainCreateInfoKHR swapchain_info{{}, surface, details.image_count, details.format.format,
-                details.format.colorSpace, details.extent, 1, vk::ImageUsageFlagBits::eColorAttachment,
-                vk::SharingMode::eExclusive, 1, indices.data(), details.transform,
-                vk::CompositeAlphaFlagBitsKHR::eOpaque, details.present_mode, true, swapchain};
+    const vk::SwapchainCreateInfoKHR swapchain_info = {
+        .surface = surface,
+        .minImageCount = image_count,
+        .imageFormat = surface_format.format,
+        .imageColorSpace = surface_format.colorSpace,
+        .imageExtent = extent,
+        .imageArrayLayers = 1,
+        .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+        .imageSharingMode = sharing_mode,
+        .queueFamilyIndexCount = queue_family_indices_count,
+        .pQueueFamilyIndices   = queue_family_indices.data(),
+        .preTransform = transform,
+        .presentMode = present_mode,
+        .clipped = true,
+        .oldSwapchain = swapchain
+    };
 
-    // For dedicated present queues, select concurrent sharing mode
-    if (indices[0] != indices[1]) {
-        swapchain_info.imageSharingMode = vk::SharingMode::eConcurrent;
-        swapchain_info.queueFamilyIndexCount = 2;
-    }
-
-    auto device = g_vk_instace->GetDevice();
-    auto new_swapchain = device.createSwapchainKHR(swapchain_info);
+    vk::Device device = instance.GetDevice();
+    vk::SwapchainKHR new_swapchain = device.createSwapchainKHR(swapchain_info);
 
     // If an old swapchain exists, destroy it and move the new one to its place.
-    if (swapchain) {
-        device.destroy(swapchain);
+    if (vk::SwapchainKHR old_swapchain = std::exchange(swapchain, new_swapchain); old_swapchain) {
+        device.destroySwapchainKHR(old_swapchain);
     }
-    swapchain = new_swapchain;
 
     // Create sync objects if not already created
     if (!image_available) {
@@ -67,19 +76,17 @@ bool Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
     }
 
     // Create framebuffer and image views
-    swapchain_images.clear();
-    SetupImages();
-
-    return true;
+    images = device.getSwapchainImagesKHR(swapchain);
 }
 
 // Wait for maximum of 1 second
 constexpr u64 ACQUIRE_TIMEOUT = 1000000000;
 
 void Swapchain::AcquireNextImage() {
-    auto result = g_vk_instace->GetDevice().acquireNextImageKHR(swapchain, ACQUIRE_TIMEOUT,
-                                                                image_available, VK_NULL_HANDLE,
-                                                                &image_index);
+    vk::Device device = instance.GetDevice();
+    vk::Result result = device.acquireNextImageKHR(swapchain, ACQUIRE_TIMEOUT,
+                                                   image_available, VK_NULL_HANDLE,
+                                                   &current_image);
     switch (result) {
     case vk::Result::eSuccess:
         break;
@@ -90,15 +97,21 @@ void Swapchain::AcquireNextImage() {
         is_outdated = true;
         break;
     default:
-        LOG_ERROR(Render_Vulkan, "acquireNextImageKHR returned unknown result");
+        LOG_ERROR(Render_Vulkan, "vkAcquireNextImageKHR returned unknown result");
         break;
     }
 }
 
 void Swapchain::Present() {
-    const auto present_queue = g_vk_instace->GetPresentQueue();
+    const vk::PresentInfoKHR present_info = {
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &render_finished,
+        .swapchainCount = 1,
+        .pSwapchains = &swapchain,
+        .pImageIndices = &current_image
+    };
 
-    vk::PresentInfoKHR present_info(render_finished, swapchain, image_index);
+    vk::Queue present_queue = instance.GetPresentQueue();
     vk::Result result = present_queue.presentKHR(present_info);
 
     switch (result) {
@@ -115,91 +128,68 @@ void Swapchain::Present() {
         break;
     }
 
-    frame_index = (frame_index + 1) % swapchain_images.size();
+    current_frame = (current_frame + 1) % images.size();
 }
 
-void Swapchain::PopulateSwapchainDetails(vk::SurfaceKHR surface, u32 width, u32 height) {
-    auto gpu = g_vk_instace->GetPhysicalDevice();
+void Swapchain::Configure(u32 width, u32 height) {
+    vk::PhysicalDevice physical = instance.GetPhysicalDevice();
 
     // Choose surface format
-    auto formats = gpu.getSurfaceFormatsKHR(surface);
-    details.format = formats[0];
+    auto formats = physical.getSurfaceFormatsKHR(surface);
+    surface_format = formats[0];
 
     if (formats.size() == 1 && formats[0].format == vk::Format::eUndefined) {
-        details.format = { vk::Format::eB8G8R8A8Unorm };
-    }
-    else {
-        for (const auto& format : formats) {
-            if (format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear &&
-                format.format == vk::Format::eB8G8R8A8Unorm) {
-                details.format = format;
-                break;
-            }
+        surface_format = vk::SurfaceFormatKHR{
+            .format = vk::Format::eB8G8R8A8Unorm
+        };
+    } else {
+        auto iter = std::find_if(formats.begin(), formats.end(), [](vk::SurfaceFormatKHR format) -> bool {
+            return format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear &&
+                format.format == vk::Format::eB8G8R8A8Unorm;
+        });
+
+        if (iter == formats.end()) {
+            LOG_CRITICAL(Render_Vulkan, "Unable to find required swapchain format!");
         }
     }
 
     // Checks if a particular mode is supported, if it is, returns that mode.
-    auto modes = gpu.getSurfacePresentModesKHR(surface);
-    auto ModePresent = [&modes](vk::PresentModeKHR check_mode) {
-        auto it = std::find_if(modes.begin(), modes.end(), [check_mode](const auto& mode) {
-                return check_mode == mode;
-        });
-
-        return it != modes.end();
-    };
+    auto modes = physical.getSurfacePresentModesKHR(surface);
 
     // FIFO is guaranteed by the Vulkan standard to be available
-    details.present_mode = vk::PresentModeKHR::eFifo;
+    present_mode = vk::PresentModeKHR::eFifo;
+
+    auto iter = std::find_if(modes.begin(), modes.end(), [](vk::PresentModeKHR mode) {
+        return vk::PresentModeKHR::eMailbox == mode;
+    });
 
     // Prefer Mailbox if present for lowest latency
-    if (ModePresent(vk::PresentModeKHR::eMailbox)) {
-        details.present_mode = vk::PresentModeKHR::eMailbox;
+    if (iter != modes.end()) {
+        present_mode = vk::PresentModeKHR::eMailbox;
     }
 
     // Query surface extent
-    auto capabilities = gpu.getSurfaceCapabilitiesKHR(surface);
-    details.extent = capabilities.currentExtent;
+    auto capabilities = physical.getSurfaceCapabilitiesKHR(surface);
+    extent = capabilities.currentExtent;
 
     if (capabilities.currentExtent.width == std::numeric_limits<u32>::max()) {
-        details.extent.width = std::clamp(width, capabilities.minImageExtent.width,
+        extent.width = std::clamp(width, capabilities.minImageExtent.width,
                                           capabilities.maxImageExtent.width);
-        details.extent.height = std::clamp(height, capabilities.minImageExtent.height,
+        extent.height = std::clamp(height, capabilities.minImageExtent.height,
                                            capabilities.maxImageExtent.height);
     }
 
     // Select number of images in swap chain, we prefer one buffer in the background to work on
-    details.image_count = capabilities.minImageCount + 1;
+    image_count = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0) {
-        details.image_count = std::min(details.image_count, capabilities.maxImageCount);
+        image_count = std::min(image_count, capabilities.maxImageCount);
     }
 
     // Prefer identity transform if possible
-    details.transform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
-    if (!(capabilities.supportedTransforms & details.transform)) {
-        details.transform = capabilities.currentTransform;
+    transform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
+    if (!(capabilities.supportedTransforms & transform)) {
+        transform = capabilities.currentTransform;
     }
 }
 
-void Swapchain::SetupImages() {
-    // Get the swap chain images
-    auto device = g_vk_instace->GetDevice();
-    auto images = device.getSwapchainImagesKHR(swapchain);
-
-    Texture::Info image_info{
-        .width = details.extent.width,
-        .height = details.extent.height,
-        .format = details.format.format,
-        .type = vk::ImageType::e2D,
-        .view_type = vk::ImageViewType::e2D,
-        .usage = vk::ImageUsageFlagBits::eColorAttachment
-    };
-
-    // Create the swapchain buffers containing the image and imageview
-    swapchain_images.resize(images.size());
-    for (int i = 0; i < swapchain_images.size(); i++) {
-        // Wrap swapchain images with Texture
-        swapchain_images[i].Adopt(image_info, images[i]);
-    }
-}
-
-} // namespace Vulkan
+} // namespace VideoCore::Vulkan

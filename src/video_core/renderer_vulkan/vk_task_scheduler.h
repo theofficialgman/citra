@@ -4,68 +4,81 @@
 
 #pragma once
 
+#include <memory>
 #include <array>
-#include "video_core/renderer_vulkan/vk_buffer.h"
+#include <functional>
+#include "common/common_types.h"
+#include "video_core/renderer_vulkan/vk_common.h"
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
 
-constexpr u32 TASK_COUNT = 5;
-constexpr u32 STAGING_BUFFER_SIZE = 16 * 1024 * 1024;
+constexpr u32 SCHEDULER_COMMAND_COUNT = 4;
 
-class Swapchain;
+using Deleter = std::function<void(vk::Device, VmaAllocator)>;
 
-/// Wrapper class around command buffer execution. Handles an arbitrary
-/// number of tasks that can be submitted concurrently. This allows the host
-/// to start recording the next frame while the GPU is working on the
-/// current one. Larger values can be used with caution, as they can cause
-/// frame latency if the CPU is too far ahead of the GPU
-class TaskScheduler {
+class Buffer;
+class Instance;
+
+class CommandScheduler {
 public:
-    TaskScheduler() = default;
-    ~TaskScheduler();
+    CommandScheduler(Instance& instance);
+    ~CommandScheduler();
 
     /// Create and initialize the work scheduler
     bool Create();
 
-    /// Retrieve either of the current frame's command buffers
-    vk::CommandBuffer GetRenderCommandBuffer() const;
+    /// Block host until the current command completes execution
+    void Synchronize();
+
+    /// Defer operation until the current command completes execution
+    void Schedule(Deleter&& func);
+
+    /// Submits the current command to the graphics queue
+    void Submit(bool wait_completion = false, vk::Semaphore wait = VK_NULL_HANDLE,
+                vk::Semaphore signal = VK_NULL_HANDLE);
+
+    /// Returns the command buffer used for early upload operations.
+    /// This is useful for vertex/uniform buffer uploads that happen once per frame
     vk::CommandBuffer GetUploadCommandBuffer();
-    vk::DescriptorPool GetDescriptorPool() const;
 
-    /// Access the staging buffer of the current task
-    std::tuple<u8*, u32> RequestStaging(u32 size);
-    Buffer& GetStaging();
+    /// Returns the command buffer used for rendering
+    inline vk::CommandBuffer GetRenderCommandBuffer() const {
+        const CommandSlot& command = commands[current_command];
+        return command.render_command_buffer;
+    }
 
-    /// Query and/or synchronization CPU and GPU
-    u64 GetCPUTick() const;
-    u64 GetGPUTick() const;
-    void SyncToGPU();
-    void SyncToGPU(u64 task_index);
+    /// Returns the upload buffer of the active command slot
+    inline Buffer& GetCommandUploadBuffer() {
+        CommandSlot& command = commands[current_command];
+        return *command.upload_buffer;
+    }
 
-    void Schedule(std::function<void()> func);
-    void Submit(bool wait_completion = false, bool present = false, Swapchain* swapchain = nullptr);
-
-    void BeginTask();
+    /// Returns the index of the current command slot
+    inline u32 GetCurrentSlotIndex() const {
+        return current_command;
+    }
 
 private:
-    struct Task {
+    /// Activates the next command slot and optionally waits for its completion
+    void SwitchSlot();
+
+private:
+    Instance& instance;
+    u64 next_fence_counter = 1;
+    u64 completed_fence_counter = 0;
+
+    struct CommandSlot {
         bool use_upload_buffer = false;
-        u64 current_offset = 0, task_id = 0;
-        std::array<vk::CommandBuffer, 2> command_buffers;
-        std::vector<std::function<void()>> cleanups;
-        vk::DescriptorPool pool;
-        Buffer staging;
+        u64 fence_counter = 0;
+        vk::CommandBuffer render_command_buffer, upload_command_buffer;
+        vk::Fence fence = VK_NULL_HANDLE;
+        std::unique_ptr<Buffer> upload_buffer;
+        std::vector<Deleter> cleanups;
     };
 
-    vk::Semaphore timeline;
-    vk::CommandPool command_pool;
-    u64 current_task_id = 0;
-
-    // Each task contains unique resources
-    std::array<Task, TASK_COUNT> tasks;
-    u64 current_task = -1;
+    vk::CommandPool command_pool = VK_NULL_HANDLE;
+    std::array<CommandSlot, SCHEDULER_COMMAND_COUNT> commands;
+    u32 current_command = 0;
 };
-
-extern std::unique_ptr<TaskScheduler> g_vk_task_scheduler;
 
 }  // namespace Vulkan

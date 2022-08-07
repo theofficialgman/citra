@@ -157,6 +157,7 @@ set(REQUIRED_LIBRARIES
     inih
     lodepng
     glslang
+    robin-hood-hashing
     zstd
 )
 
@@ -297,6 +298,7 @@ set(REQUIRED_PACKAGES
     zstd
     unofficial-enet
     lodepng
+    robin_hood
 )
 
 foreach(PACKAGE ${REQUIRED_PACKAGES})

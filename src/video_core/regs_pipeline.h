@@ -12,6 +12,13 @@
 
 namespace Pica {
 
+enum class TriangleTopology : u32 {
+    List = 0,
+    Strip = 1,
+    Fan = 2,
+    Shader = 3, // Programmable setup unit implemented in a geometry shader
+};
+
 struct PipelineRegs {
     enum class VertexAttributeFormat : u32 {
         BYTE = 0,
@@ -249,13 +256,6 @@ struct PipelineRegs {
     u32 variable_vertex_main_num_minus_1;
 
     INSERT_PADDING_WORDS(0x9);
-
-    enum class TriangleTopology : u32 {
-        List = 0,
-        Strip = 1,
-        Fan = 2,
-        Shader = 3, // Programmable setup unit implemented in a geometry shader
-    };
 
     BitField<8, 2, TriangleTopology> triangle_topology;
 

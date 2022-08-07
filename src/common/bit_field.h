@@ -36,6 +36,18 @@
 #include "common/common_funcs.h"
 #include "common/swap.h"
 
+// User defined types to need to specialize this
+template <typename T>
+struct MakeUnsigned {
+    using type = std::make_unsigned_t<T>;
+};
+
+// Ensure that user defined types are sane
+template <class T>
+concept ValidType = requires(T t) {
+    static_cast<typename MakeUnsigned<T>::type>(t);
+};
+
 /*
  * Abstract bitfield class
  *
@@ -110,6 +122,7 @@
  */
 #pragma pack(1)
 template <std::size_t Position, std::size_t Bits, typename T, typename EndianTag = LETag>
+    requires ValidType<T>
 struct BitField {
 private:
     // UnderlyingType is T for non-enum types and the underlying type of T if
@@ -120,7 +133,7 @@ private:
                                                        std::enable_if<true, T>>::type;
 
     // We store the value as the unsigned type to avoid undefined behaviour on value shifting
-    using StorageType = std::make_unsigned_t<UnderlyingType>;
+    using StorageType = typename MakeUnsigned<UnderlyingType>::type;
 
     using StorageTypeWithEndian = typename AddEndian<StorageType, EndianTag>::type;
 
@@ -199,3 +212,38 @@ private:
 
 template <std::size_t Position, std::size_t Bits, typename T>
 using BitFieldBE = BitField<Position, Bits, T, BETag>;
+
+/**
+ * Abstract bit flag class. This is basically a specialization  of BitField for single-bit fields.
+ * Instead of being cast to the underlying type, it acts like a boolean.
+ */
+#pragma pack(1)
+template <std::size_t Position, typename T, typename EndianTag = LETag>
+struct BitFlag : protected BitField<Position, 1, T, EndianTag> {
+private:
+    BitFlag(T val) = delete;
+
+    using ParentType = BitField<Position, 1, T>;
+
+public:
+    BitFlag() = default;
+    BitFlag& operator=(const BitFlag&) = delete;
+
+    constexpr BitFlag& operator=(bool val) {
+        Assign(val);
+        return *this;
+    }
+
+    constexpr void Assign(bool value) {
+        ParentType::Assign(value);
+    }
+
+    [[nodiscard]] constexpr operator bool() const {
+        return Value();
+    }
+
+    [[nodiscard]] constexpr bool Value() const {
+        return ParentType::Value() != 0;
+    }
+};
+#pragma pack()

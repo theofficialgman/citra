@@ -60,6 +60,7 @@ add_library(common STATIC
     detached_tasks.cpp
     detached_tasks.h
     bit_field.h
+    bit_field_array.h
     bit_set.h
     cityhash.cpp
     cityhash.h
@@ -72,6 +73,7 @@ add_library(common STATIC
     file_util.h
     flag.h
     hash.h
+    intrusive_ptr.h
     linear_disk_cache.h
     logging/backend.cpp
     logging/backend.h
@@ -87,6 +89,8 @@ add_library(common STATIC
     microprofile.h
     microprofileui.h
     misc.cpp
+    object_pool.cpp
+    object_pool.h
     param_package.cpp
     param_package.h
     quaternion.h

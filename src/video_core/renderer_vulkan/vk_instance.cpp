@@ -2,52 +2,148 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <fstream>
+#define VULKAN_HPP_NO_CONSTRUCTORS
+#include <span>
 #include <array>
-#include "common/logging/log.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
 
-std::unique_ptr<Instance> g_vk_instace;
+Instance::Instance(Frontend::EmuWindow& window) {
+    auto window_info = window.GetWindowInfo();
+
+    // Enable the instance extensions the backend uses
+    auto extensions = GetInstanceExtensions(window_info.type, true);
+
+    // We require a Vulkan 1.1 driver
+    const u32 available_version = vk::enumerateInstanceVersion();
+    if (available_version < VK_API_VERSION_1_1) {
+        LOG_CRITICAL(Render_Vulkan, "Vulkan 1.0 is not supported, 1.1 is required!");
+    }
+
+    const vk::ApplicationInfo application_info = {
+        .pApplicationName = "Citra",
+        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
+        .pEngineName = "Citra Vulkan",
+        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+        .apiVersion = available_version
+    };
+
+    const std::array layers = {"VK_LAYER_KHRONOS_validation"};
+    const vk::InstanceCreateInfo instance_info = {
+        .pApplicationInfo = &application_info,
+        .enabledLayerCount = static_cast<u32>(layers.size()),
+        .ppEnabledLayerNames = layers.data(),
+        .enabledExtensionCount = static_cast<u32>(extensions.size()),
+        .ppEnabledExtensionNames = extensions.data()
+    };
+
+    // Create VkInstance
+    instance = vk::createInstance(instance_info);
+    surface = CreateSurface(instance, window);
+
+    // TODO: GPU select dialog
+    physical_device = instance.enumeratePhysicalDevices()[0];
+    device_limits = physical_device.getProperties().limits;
+
+    // Create logical device
+    CreateDevice(true);
+}
 
 Instance::~Instance() {
     device.waitIdle();
-
     device.destroy();
     instance.destroy();
 }
 
-bool Instance::Create(vk::Instance new_instance, vk::PhysicalDevice gpu,
-                        vk::SurfaceKHR surface, bool enable_validation_layer) {
-    instance = new_instance;
-    physical_device = gpu;
-
-    // Get physical device limits
-    device_limits = physical_device.getProperties().limits;
-
+bool Instance::CreateDevice(bool validation_enabled) {
     // Determine required extensions and features
-    if (!FindExtensions() || !FindFeatures())
-        return false;
+    auto feature_chain = physical_device.getFeatures2<vk::PhysicalDeviceFeatures2,
+                                                      vk::PhysicalDeviceDynamicRenderingFeaturesKHR,
+                                                      vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
+                                                      vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>();
 
-    // Create logical device
-    return CreateDevice(surface, enable_validation_layer);
-}
+    // Not having geometry shaders or wide lines will cause issues with rendering.
+    const vk::PhysicalDeviceFeatures available = feature_chain.get().features;
+    if (!available.geometryShader && !available.wideLines) {
+        LOG_WARNING(Render_Vulkan, "Geometry shaders not availabe! Accelerated rendering not possible!");
+    }
 
-bool Instance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
-    // Can't create an instance without a valid surface
-    if (!surface) {
-        LOG_CRITICAL(Render_Vulkan, "Invalid surface provided during instance creation!");
+    // Enable some common features other emulators like Dolphin use
+    const vk::PhysicalDeviceFeatures2 features = {
+        .features = {
+            .robustBufferAccess = available.robustBufferAccess,
+            .geometryShader = available.geometryShader,
+            .sampleRateShading = available.sampleRateShading,
+            .dualSrcBlend = available.dualSrcBlend,
+            .logicOp = available.logicOp,
+            .depthClamp = available.depthClamp,
+            .largePoints = available.largePoints,
+            .samplerAnisotropy = available.samplerAnisotropy,
+            .occlusionQueryPrecise = available.occlusionQueryPrecise,
+            .fragmentStoresAndAtomics = available.fragmentStoresAndAtomics,
+            .shaderStorageImageMultisample = available.shaderStorageImageMultisample,
+            .shaderClipDistance = available.shaderClipDistance
+        }
+    };
+
+    // Enable newer Vulkan features
+    auto enabled_features = vk::StructureChain{
+        features,
+        feature_chain.get<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>(),
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>(),
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>()
+    };
+
+    auto extension_list = physical_device.enumerateDeviceExtensionProperties();
+    if (extension_list.empty()) {
+        LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
         return false;
     }
 
+    // List available device extensions
+    for (const auto& extension : extension_list) {
+        LOG_INFO(Render_Vulkan, "Vulkan extension: {}", extension.extensionName);
+    }
+
+    // Helper lambda for adding extensions
+    std::array<const char*, 6> enabled_extensions;
+    u32 enabled_extension_count = 0;
+
+    auto AddExtension = [&](std::string_view name, bool required) -> bool {
+        auto result = std::find_if(extension_list.begin(), extension_list.end(), [&](const auto& prop) {
+            return name.compare(prop.extensionName.data());
+        });
+
+        if (result != extension_list.end()) {
+            LOG_INFO(Render_Vulkan, "Enabling extension: {}", name);
+            enabled_extensions[enabled_extension_count++] = name.data();
+            return true;
+        }
+
+        if (required) {
+            LOG_ERROR(Render_Vulkan, "Unable to find required extension {}.", name);
+        }
+
+        return false;
+    };
+
+    // Add required extensions
+    AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true);
+
+    // Check for optional features
+    dynamic_rendering = AddExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, false);
+    extended_dynamic_state = AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, false);
+    push_descriptors = AddExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, false);
+
+    // Search queue families for graphics and present queues
     auto family_properties = physical_device.getQueueFamilyProperties();
     if (family_properties.empty()) {
         LOG_CRITICAL(Render_Vulkan, "Vulkan physical device reported no queues.");
         return false;
     }
 
-    // Search queue families for graphics and present queues
     graphics_queue_family_index = -1;
     present_queue_family_index = -1;
     for (int i = 0; i < family_properties.size(); i++) {
@@ -68,24 +164,35 @@ bool Instance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
         }
     }
 
-    if (graphics_queue_family_index == -1 ||
-        present_queue_family_index == -1) {
+    if (graphics_queue_family_index == -1 || present_queue_family_index == -1) {
         LOG_CRITICAL(Render_Vulkan, "Unable to find graphics and/or present queues.");
         return false;
     }
 
     static constexpr float queue_priorities[] = {1.0f};
 
-    const std::array layers{"VK_LAYER_KHRONOS_validation"};
-    const std::array queue_infos{
-        vk::DeviceQueueCreateInfo{{}, graphics_queue_family_index, 1, queue_priorities},
-        vk::DeviceQueueCreateInfo{{}, present_queue_family_index, 1, queue_priorities}
+    const std::array layers = {"VK_LAYER_KHRONOS_validation"};
+    const std::array queue_infos = {
+        vk::DeviceQueueCreateInfo{
+            .queueFamilyIndex = graphics_queue_family_index,
+            .queueCount = 1,
+            .pQueuePriorities = queue_priorities
+        },
+        vk::DeviceQueueCreateInfo{
+            .queueFamilyIndex = present_queue_family_index,
+            .queueCount = 1,
+            .pQueuePriorities = queue_priorities
+        }
     };
 
-    vk::DeviceCreateInfo device_info({}, 1, queue_infos.data(), 0, nullptr,
-                extensions.size(), extensions.data(), nullptr, &features);
+    vk::DeviceCreateInfo device_info = {
+        .pNext = &enabled_features,
+        .queueCreateInfoCount = 1,
+        .pQueueCreateInfos = queue_infos.data(),
+        .enabledExtensionCount = enabled_extension_count,
+        .ppEnabledExtensionNames = enabled_extensions.data(),
+    };
 
-    // Create queue create info structs
     if (graphics_queue_family_index != present_queue_family_index) {
         device_info.queueCreateInfoCount = 2;
     }
@@ -104,87 +211,67 @@ bool Instance::CreateDevice(vk::SurfaceKHR surface, bool validation_enabled) {
     graphics_queue = device.getQueue(graphics_queue_family_index, 0);
     present_queue = device.getQueue(present_queue_family_index, 0);
 
-    return true;
-}
-
-bool Instance::FindFeatures() {
-    auto available = physical_device.getFeatures();
-
-    // Not having geometry shaders or wide lines will cause issues with rendering.
-    if (!available.geometryShader && !available.wideLines) {
-        LOG_WARNING(Render_Vulkan, "Geometry shaders not availabe! Rendering will be limited");
-    }
-
-    // Enable some common features other emulators like Dolphin use
-    vk_features.dualSrcBlend = available.dualSrcBlend;
-    vk_features.geometryShader = available.geometryShader;
-    vk_features.samplerAnisotropy = available.samplerAnisotropy;
-    vk_features.logicOp = available.logicOp;
-    vk_features.fragmentStoresAndAtomics = available.fragmentStoresAndAtomics;
-    vk_features.sampleRateShading = available.sampleRateShading;
-    vk_features.largePoints = available.largePoints;
-    vk_features.shaderStorageImageMultisample = available.shaderStorageImageMultisample;
-    vk_features.occlusionQueryPrecise = available.occlusionQueryPrecise;
-    vk_features.shaderClipDistance = available.shaderClipDistance;
-    vk_features.depthClamp = available.depthClamp;
-    vk_features.textureCompressionBC = available.textureCompressionBC;
-
-    // Enable newer Vulkan features
-    vk12_features.timelineSemaphore = true;
-    vk13_features.dynamicRendering = true;
-    dynamic_state_features.extendedDynamicState = true;
-    dynamic_state2_features.extendedDynamicState2 = true;
-
-    // Include features in device creation
-    vk12_features.pNext = &vk13_features;
-    vk13_features.pNext = &dynamic_state_features;
-    dynamic_state_features.pNext = &dynamic_state2_features;
-    features = vk::PhysicalDeviceFeatures2{vk_features, &vk12_features};
+    // Create the VMA allocator
+    CreateAllocator();
 
     return true;
 }
 
-bool Instance::FindExtensions() {
-    auto available = physical_device.enumerateDeviceExtensionProperties();
-    if (available.empty()) {
-        LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
-        return false;
-    }
-
-    // List available device extensions
-    for (const auto& prop : available) {
-        LOG_INFO(Render_Vulkan, "Vulkan extension: {}", prop.extensionName);
-    }
-
-    // Helper lambda for adding extensions
-    auto AddExtension = [&](const char* name, bool required) {
-        auto result = std::find_if(available.begin(), available.end(), [&](const auto& prop) {
-            return !std::strcmp(name, prop.extensionName);
-        });
-
-        if (result != available.end()) {
-            LOG_INFO(Render_Vulkan, "Enabling extension: {}", name);
-            extensions.push_back(name);
-            return true;
-        }
-
-        if (required) {
-            LOG_ERROR(Render_Vulkan, "Unable to find required extension {}.", name);
-        }
-
-        return false;
+void Instance::CreateAllocator() {
+    VmaVulkanFunctions functions = {
+        .vkGetInstanceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr,
+        .vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr
     };
 
-    // Add required extensions
-    if (!AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true) ||
-        !AddExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, true) ||
-        !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, true) ||
-        !AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, true) ||
-        !AddExtension(VK_EXT_COLOR_WRITE_ENABLE_EXTENSION_NAME, true)) {
-        return false;
+    VmaAllocatorCreateInfo allocator_info = {
+        .physicalDevice = physical_device,
+        .device = device,
+        .pVulkanFunctions = &functions,
+        .instance = instance,
+        .vulkanApiVersion = VK_API_VERSION_1_1
+    };
+
+    vmaCreateAllocator(&allocator_info, &allocator);
+}
+
+bool Instance::IsFormatSupported(vk::Format format, vk::FormatFeatureFlags usage) const {
+    static std::unordered_map<vk::Format, vk::FormatProperties> supported;
+    if (auto iter = supported.find(format); iter != supported.end()) {
+        return (iter->second.optimalTilingFeatures & usage) == usage;
     }
 
-    return true;
+    // Cache format properties so we don't have to query the driver all the time
+    const vk::FormatProperties properties = physical_device.getFormatProperties(format);
+    supported.insert(std::make_pair(format, properties));
+
+    return (properties.optimalTilingFeatures & usage) == usage;
+}
+
+vk::Format Instance::GetFormatAlternative(vk::Format format) const {
+    vk::FormatFeatureFlags features = GetFormatFeatures(GetImageAspect(format));
+    if (IsFormatSupported(format, features)) {
+       return format;
+    }
+
+    // Return the most supported alternative format preferably with the
+    // same block size according to the Vulkan spec.
+    // See 43.3. Required Format Support of the Vulkan spec
+    switch (format) {
+    case vk::Format::eD24UnormS8Uint:
+        return vk::Format::eD32SfloatS8Uint;
+    case vk::Format::eX8D24UnormPack32:
+        return vk::Format::eD32Sfloat;
+    case vk::Format::eR5G5B5A1UnormPack16:
+        return vk::Format::eA1R5G5B5UnormPack16;
+    case vk::Format::eR4G4B4A4UnormPack16:
+        return vk::Format::eB4G4R4A4UnormPack16;
+    case vk::Format::eR8G8B8Unorm:
+        return vk::Format::eR8G8B8A8Unorm;
+    default:
+        LOG_WARNING(Render_Vulkan, "Unable to find compatible alternative to format = {} with usage {}",
+                                    vk::to_string(format), vk::to_string(features));
+        return vk::Format::eR8G8B8A8Unorm;
+    }
 }
 
 } // namespace Vulkan

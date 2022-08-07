@@ -7,9 +7,9 @@
 #include <array>
 #include <bitset>
 #include "video_core/regs.h"
+#include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_shader_state.h"
 #include "video_core/renderer_vulkan/vk_pipeline_builder.h"
-#include "video_core/renderer_vulkan/vk_texture.h"
 
 namespace Vulkan {
 
@@ -69,7 +69,7 @@ public:
     bool StencilTestEnabled() const { return stencil_enabled && stencil_writes; }
 
     /// Configure drawing state
-    void SetVertexBuffer(const Buffer& buffer, vk::DeviceSize offset);
+    void SetVertexBuffer(const StreamBuffer& buffer, vk::DeviceSize offset);
     void SetViewport(vk::Viewport viewport);
     void SetScissor(vk::Rect2D scissor);
     void SetCullMode(vk::CullModeFlags flags);
@@ -100,9 +100,9 @@ public:
     void EndRendering();
 
     /// Configure shader resources
-    void SetUniformBuffer(u32 binding, u32 offset, u32 size, const Buffer& buffer);
+    void SetUniformBuffer(u32 binding, u32 offset, u32 size, const StreamBuffer& buffer);
     void SetTexture(u32 binding,  const Texture& texture);
-    void SetTexelBuffer(u32 binding, u32 offset, u32 size, const Buffer& buffer, u32 view_index);
+    void SetTexelBuffer(u32 binding, u32 offset, u32 size, const StreamBuffer& buffer, u32 view_index);
     void SetPresentTextures(vk::ImageView view0, vk::ImageView view1, vk::ImageView view2);
     void SetPresentData(DrawInfo data);
     void SetPlaceholderColor(u8 red, u8 green, u8 blue, u8 alpha);

@@ -16,19 +16,11 @@
 #include <boost/range/iterator_range.hpp>
 #include "common/alignment.h"
 #include "common/bit_field.h"
-#include "common/color.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
-#include "common/scope_exit.h"
-#include "common/texture.h"
 #include "common/vector_math.h"
-#include "core/core.h"
-#include "core/frontend/emu_window.h"
-#include "core/hle/kernel/process.h"
 #include "core/memory.h"
-#include "core/settings.h"
 #include "video_core/pica_state.h"
-#include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_rasterizer_cache.h"
 #include "video_core/renderer_vulkan/vk_format_reinterpreter.h"
@@ -375,7 +367,7 @@ static vk::Rect2D FromRect(Common::Rectangle<u32> rect) {
 
 // Allocate an uninitialized texture of appropriate size and format for the surface
 void RasterizerCacheVulkan::AllocateTexture(Texture& target, SurfaceType type, vk::Format format,
-                                                        u32 width, u32 height) {
+                                                        u32 width, u32 height, bool framebuffer) {
     // First check if the texture can be recycled
     auto recycled_tex = host_texture_recycler.find({format, width, height});
     if (recycled_tex != host_texture_recycler.end()) {
@@ -384,30 +376,31 @@ void RasterizerCacheVulkan::AllocateTexture(Texture& target, SurfaceType type, v
         return;
     }
 
-    auto GetUsage = [](SurfaceType type) {
+    auto GetUsage = [framebuffer](SurfaceType type) {
         auto usage = vk::ImageUsageFlagBits::eSampled |
                 vk::ImageUsageFlagBits::eTransferDst |
                 vk::ImageUsageFlagBits::eTransferSrc;
 
-        switch (type) {
-        case SurfaceType::Color:
-        case SurfaceType::Fill:
-        case SurfaceType::Texture:
-            usage |= vk::ImageUsageFlagBits::eColorAttachment;
-            break;
-        case SurfaceType::Depth:
-        case SurfaceType::DepthStencil:
-            usage |= vk::ImageUsageFlagBits::eDepthStencilAttachment;
-            break;
-        default:
-            break;
+        if (framebuffer) {
+            switch (type) {
+            case SurfaceType::Color:
+            case SurfaceType::Fill:
+            case SurfaceType::Texture:
+                usage |= vk::ImageUsageFlagBits::eColorAttachment;
+                break;
+            case SurfaceType::Depth:
+            case SurfaceType::DepthStencil:
+                usage |= vk::ImageUsageFlagBits::eDepthStencilAttachment;
+                break;
+            default:
+                break;
+            }
         }
-
         return usage;
     };
 
     // Otherwise create a brand new texture
-    u32 levels = std::log2(std::max(width, height)) + 1;
+    u32 levels = static_cast<u32>(std::log2(std::max(width, height))) + 1;
     Texture::Info texture_info{
         .width = width,
         .height = height,
@@ -516,8 +509,9 @@ void CachedSurface::LoadGPUBuffer(PAddr load_start, PAddr load_end) {
     const bool need_swap = (pixel_format == PixelFormat::RGBA8 || pixel_format == PixelFormat::RGB8);
 
     const u8* const texture_src_data = VideoCore::g_memory->GetPhysicalPointer(addr);
-    if (texture_src_data == nullptr)
+    if (texture_src_data == nullptr) {
         return;
+    }
 
     if (vk_buffer.empty()) {
         vk_buffer.resize(width * height * GetBytesPerPixel(pixel_format));
@@ -660,9 +654,9 @@ void CachedSurface::UploadGPUTexture(Common::Rectangle<u32> rect) {
     // Load data from memory to the surface
     auto buffer_offset = (rect.bottom * stride + rect.left) * GetBytesPerPixel(pixel_format);
     auto update_size = rect.GetWidth() * rect.GetHeight() * GetBytesPerPixel(pixel_format);
-    std::span<u8> memory(vk_buffer.data() + buffer_offset, update_size);
+    std::span<const u8> memory{vk_buffer.data() + buffer_offset, update_size};
 
-    texture.Upload(0, 0, stride, FromRect(rect), memory);
+    texture.Upload(0, 0, stride, memory);
 
     InvalidateAllWatcher();
 }
@@ -867,7 +861,8 @@ Surface RasterizerCacheVulkan::GetSurface(const SurfaceParams& params, ScaleMatc
 
 SurfaceRect_Tuple RasterizerCacheVulkan::GetSurfaceSubRect(const SurfaceParams& params,
                                                            ScaleMatch match_res_scale,
-                                                           bool load_if_create) {
+                                                           bool load_if_create,
+                                                           bool framebuffer) {
     if (params.addr == 0 || params.height * params.width == 0) {
         return std::make_tuple(nullptr, Common::Rectangle<u32>{});
     }
@@ -887,7 +882,7 @@ SurfaceRect_Tuple RasterizerCacheVulkan::GetSurfaceSubRect(const SurfaceParams& 
             SurfaceParams new_params = *surface;
             new_params.res_scale = params.res_scale;
 
-            surface = CreateSurface(new_params);
+            surface = CreateSurface(new_params, framebuffer);
             RegisterSurface(surface);
         }
     }
@@ -1077,8 +1072,7 @@ SurfaceSurfaceRect_Tuple RasterizerCacheVulkan::GetFramebufferSurfaces(
     // Make sure that framebuffers don't overlap if both color and depth are being used
     if (using_color_fb && using_depth_fb &&
         boost::icl::length(color_vp_interval & depth_vp_interval)) {
-        LOG_CRITICAL(Render_OpenGL, "Color and depth framebuffer memory regions overlap; "
-                                    "overlapping framebuffers not supported!");
+        LOG_CRITICAL(Render_Vulkan, "Color and depth framebuffer memory regions overlap!");
         using_depth_fb = false;
     }
 
@@ -1086,13 +1080,13 @@ SurfaceSurfaceRect_Tuple RasterizerCacheVulkan::GetFramebufferSurfaces(
     Surface color_surface = nullptr;
     if (using_color_fb)
         std::tie(color_surface, color_rect) =
-            GetSurfaceSubRect(color_params, ScaleMatch::Exact, false);
+            GetSurfaceSubRect(color_params, ScaleMatch::Exact, false, true);
 
     Common::Rectangle<u32> depth_rect{};
     Surface depth_surface = nullptr;
     if (using_depth_fb)
         std::tie(depth_surface, depth_rect) =
-            GetSurfaceSubRect(depth_params, ScaleMatch::Exact, false);
+            GetSurfaceSubRect(depth_params, ScaleMatch::Exact, false, true);
 
     Common::Rectangle<u32> fb_rect{};
     if (color_surface != nullptr && depth_surface != nullptr) {
@@ -1450,13 +1444,13 @@ void RasterizerCacheVulkan::InvalidateRegion(PAddr addr, u32 size, const Surface
     remove_surfaces.clear();
 }
 
-Surface RasterizerCacheVulkan::CreateSurface(const SurfaceParams& params) {
+Surface RasterizerCacheVulkan::CreateSurface(const SurfaceParams& params, bool framebuffer) {
     Surface surface = std::make_shared<CachedSurface>(*this);
     static_cast<SurfaceParams&>(*surface) = params;
 
     surface->invalid_regions.insert(surface->GetInterval());
     AllocateTexture(surface->texture, params.type, GetFormatTuple(surface->pixel_format),
-                    surface->GetScaledWidth(), surface->GetScaledHeight());
+                    surface->GetScaledWidth(), surface->GetScaledHeight(), framebuffer);
     return surface;
 }
 

@@ -2,22 +2,6 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-// Enable vulkan platforms
-#if defined(ANDROID) || defined (__ANDROID__)
-  #define VK_USE_PLATFORM_ANDROID_KHR 1
-#elif defined(_WIN32)
-  #define VK_USE_PLATFORM_WIN32_KHR 1
-#elif defined(__APPLE__)
-  #define VK_USE_PLATFORM_MACOS_MVK 1
-  #define VK_USE_PLATFORM_METAL_EXT 1
-#else
-  #ifdef WAYLAND_DISPLAY
-    #define VK_USE_PLATFORM_WAYLAND_KHR 1
-  #else // wayland
-    #define VK_USE_PLATFORM_XLIB_KHR 1
-  #endif
-#endif
-
 #include <glm/gtc/matrix_transform.hpp>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -55,83 +39,6 @@
 #endif
 
 namespace Vulkan {
-
-vk::SurfaceKHR CreateSurface(const vk::Instance& instance,
-                             const Frontend::EmuWindow& emu_window) {
-    const auto& window_info = emu_window.GetWindowInfo();
-    vk::SurfaceKHR surface;
-
-#if VK_USE_PLATFORM_WIN32_KHR
-    if (window_info.type == Frontend::WindowSystemType::Windows) {
-        const HWND hWnd = static_cast<HWND>(window_info.render_surface);
-        const vk::Win32SurfaceCreateInfoKHR win32_ci{{}, nullptr, hWnd};
-        if (instance.createWin32SurfaceKHR(&win32_ci, nullptr, &surface) != vk::Result::eSuccess) {
-            LOG_ERROR(Render_Vulkan, "Failed to initialize Win32 surface");
-            UNREACHABLE();
-        }
-    }
-#elif VK_USE_PLATFORM_XLIB_KHR
-    if (window_info.type == Frontend::WindowSystemType::X11) {
-        const vk::XlibSurfaceCreateInfoKHR xlib_ci{{},
-            static_cast<Display*>(window_info.display_connection),
-            reinterpret_cast<Window>(window_info.render_surface)};
-        if (instance.createXlibSurfaceKHR(&xlib_ci, nullptr, &surface) != vk::Result::eSuccess) {
-            LOG_ERROR(Render_Vulkan, "Failed to initialize Xlib surface");
-            UNREACHABLE();
-        }
-    }
-
-#elif VK_USE_PLATFORM_WAYLAND_KHR
-    if (window_info.type == Frontend::WindowSystemType::Wayland) {
-        const vk::WaylandSurfaceCreateInfoKHR wayland_ci{{},
-            static_cast<wl_display*>(window_info.display_connection),
-            static_cast<wl_surface*>(window_info.render_surface)};
-        if (instance.createWaylandSurfaceKHR(&wayland_ci, nullptr, &surface) != vk::Result::eSuccess) {
-            LOG_ERROR(Render_Vulkan, "Failed to initialize Wayland surface");
-            UNREACHABLE();
-        }
-    }
-#endif
-    if (!surface) {
-        LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
-        UNREACHABLE();
-    }
-
-    return surface;
-}
-
-std::vector<const char*> RequiredExtensions(Frontend::WindowSystemType window_type, bool enable_debug_utils) {
-    std::vector<const char*> extensions;
-    extensions.reserve(6);
-    switch (window_type) {
-    case Frontend::WindowSystemType::Headless:
-        break;
-#ifdef _WIN32
-    case Frontend::WindowSystemType::Windows:
-        extensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
-        break;
-#endif
-#if !defined(_WIN32) && !defined(__APPLE__)
-    case Frontend::WindowSystemType::X11:
-        extensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
-        break;
-    case Frontend::WindowSystemType::Wayland:
-        extensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
-        break;
-#endif
-    default:
-        LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
-        break;
-    }
-    if (window_type != Frontend::WindowSystemType::Headless) {
-        extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-    }
-    if (enable_debug_utils) {
-        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
-    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-    return extensions;
-}
 
 RendererVulkan::RendererVulkan(Frontend::EmuWindow& window)
     : RendererBase{window} {

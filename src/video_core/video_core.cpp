@@ -46,7 +46,6 @@ ResultStatus Init(Frontend::EmuWindow& emu_window, Memory::MemorySystem& memory)
 
     OpenGL::GLES = Settings::values.use_gles;
 
-    //g_renderer = std::make_unique<OpenGL::RendererOpenGL>(emu_window);
     g_renderer = std::make_unique<Vulkan::RendererVulkan>(emu_window);
     ResultStatus result = g_renderer->Init();
 

@@ -2,288 +2,229 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <fstream>
-#include <iostream>
+#define VULKAN_HPP_NO_CONSTRUCTORS
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/renderer_vulkan/pica_to_vulkan.h"
+#include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
-#include "video_core/renderer_vulkan/vk_task_scheduler.h"
-#include "video_core/renderer_vulkan/vk_state.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_task_scheduler.h"
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
 
-static int BytesPerPixel(vk::Format format) {
+inline vk::Format ToVkFormat(TextureFormat format) {
     switch (format) {
-    case vk::Format::eD32SfloatS8Uint:
-        return 5;
-    case vk::Format::eD32Sfloat:
-    case vk::Format::eB8G8R8A8Unorm:
-    case vk::Format::eR8G8B8A8Uint:
-    case vk::Format::eR8G8B8A8Unorm:
-    case vk::Format::eD24UnormS8Uint:
-        return 4;
-    case vk::Format::eR8G8B8Unorm:
-    case vk::Format::eR8G8B8Srgb:
-        return 3;
-    case vk::Format::eR5G6B5UnormPack16:
-    case vk::Format::eR5G5B5A1UnormPack16:
-    case vk::Format::eR4G4B4A4UnormPack16:
-    case vk::Format::eD16Unorm:
-        return 2;
+    case TextureFormat::RGBA8:
+        return vk::Format::eR8G8B8A8Unorm;
+    case TextureFormat::RGB8:
+        return vk::Format::eR8G8B8Unorm;
+    case TextureFormat::RGB5A1:
+        return vk::Format::eR5G5B5A1UnormPack16;
+    case TextureFormat::RGB565:
+        return vk::Format::eR5G6B5UnormPack16;
+    case TextureFormat::RGBA4:
+        return vk::Format::eR4G4B4A4UnormPack16;
+    case TextureFormat::D16:
+        return vk::Format::eD16Unorm;
+    case TextureFormat::D24:
+        return vk::Format::eX8D24UnormPack32;
+    case TextureFormat::D24S8:
+        return vk::Format::eD24UnormS8Uint;
     default:
-        UNREACHABLE();
+        LOG_ERROR(Render_Vulkan, "Unknown texture format {}!", format);
+        return vk::Format::eUndefined;
     }
 }
 
-vk::ImageAspectFlags GetImageAspect(vk::Format format) {
-    vk::ImageAspectFlags flags;
-    switch (format) {
-    case vk::Format::eD16UnormS8Uint:
-    case vk::Format::eD24UnormS8Uint:
-    case vk::Format::eD32SfloatS8Uint:
-        flags = vk::ImageAspectFlagBits::eStencil | vk::ImageAspectFlagBits::eDepth;
-        break;
-    case vk::Format::eD16Unorm:
-    case vk::Format::eD32Sfloat:
-        flags = vk::ImageAspectFlagBits::eDepth;
-        break;
+inline vk::ImageType ToVkImageType(TextureType type) {
+    switch (type) {
+    case TextureType::Texture1D:
+        return vk::ImageType::e1D;
+    case TextureType::Texture2D:
+        return vk::ImageType::e2D;
+    case TextureType::Texture3D:
+        return vk::ImageType::e3D;
     default:
-        flags = vk::ImageAspectFlagBits::eColor;
+        LOG_ERROR(Render_Vulkan, "Unknown texture type {}!", type);
+        return vk::ImageType::e2D;
     }
+}
 
-    return flags;
+inline vk::ImageViewType ToVkImageViewType(TextureViewType view_type) {
+    switch (view_type) {
+    case TextureViewType::View1D:
+        return vk::ImageViewType::e1D;
+    case TextureViewType::View2D:
+        return vk::ImageViewType::e2D;
+    case TextureViewType::View3D:
+        return vk::ImageViewType::e3D;
+    case TextureViewType::ViewCube:
+        return vk::ImageViewType::eCube;
+    case TextureViewType::View1DArray:
+        return vk::ImageViewType::e1DArray;
+    case TextureViewType::View2DArray:
+        return vk::ImageViewType::e2DArray;
+    case TextureViewType::ViewCubeArray:
+        return vk::ImageViewType::eCubeArray;
+    default:
+        LOG_ERROR(Render_Vulkan, "Unknown texture view type {}!", view_type);
+        return vk::ImageViewType::e2D;
+    }
+}
+
+Texture::Texture(Instance& instance, CommandScheduler& scheduler) :
+    instance(instance), scheduler(scheduler) {}
+
+Texture::Texture(Instance& instance, CommandScheduler& scheduler,
+                 const TextureInfo& info) : TextureBase(info),
+    instance(instance), scheduler(scheduler) {
+
+    // Convert the input format to another that supports attachments
+    advertised_format = ToVkFormat(info.format);
+    internal_format = instance.GetFormatAlternative(advertised_format);
+    aspect = GetImageAspect(advertised_format);
+
+    vk::Device device = instance.GetDevice();
+    const vk::ImageCreateInfo image_info = {
+        .flags = info.view_type == TextureViewType::ViewCube ?
+                 vk::ImageCreateFlagBits::eCubeCompatible :
+                 vk::ImageCreateFlags{},
+        .imageType = ToVkImageType(info.type),
+        .format = internal_format,
+        .extent = {info.width, info.height, 1},
+        .mipLevels = info.levels,
+        .arrayLayers = info.view_type == TextureViewType::ViewCube ? 6u : 1u,
+        .samples = vk::SampleCountFlagBits::e1,
+        .usage = GetImageUsage(aspect),
+    };
+
+    const VmaAllocationCreateInfo alloc_info = {
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE
+    };
+
+    VkImage unsafe_image = VK_NULL_HANDLE;
+    VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
+    VmaAllocator allocator = instance.GetAllocator();
+
+    // Allocate texture memory
+    vmaCreateImage(allocator, &unsafe_image_info, &alloc_info, &unsafe_image, &allocation, nullptr);
+    image = vk::Image{unsafe_image};
+
+    const vk::ImageViewCreateInfo view_info = {
+        .image = image,
+        .viewType = ToVkImageViewType(info.view_type),
+        .format = internal_format,
+        .subresourceRange = {aspect, 0, info.levels, 0, 1}
+    };
+
+    // Create image view
+    image_view = device.createImageView(view_info);
+}
+
+Texture::Texture(Instance& instance, CommandScheduler& scheduler,
+                 vk::Image image, const TextureInfo& info) : TextureBase(info),
+    instance(instance), scheduler(scheduler), image(image),
+    is_texture_owned(false) {
+
+    const vk::ImageViewCreateInfo view_info = {
+        .image = image,
+        .viewType = ToVkImageViewType(info.view_type),
+        .format = internal_format,
+        .subresourceRange = {aspect, 0, info.levels, 0, 1}
+    };
+
+    // Create image view
+    vk::Device device = instance.GetDevice();
+    image_view = device.createImageView(view_info);
 }
 
 Texture::~Texture() {
-    Destroy();
-}
-
-Texture::Texture(Texture&& other) noexcept {
-    info = std::exchange(other.info, Info{});
-    texture = std::exchange(other.texture, VK_NULL_HANDLE);
-    aspect = std::exchange(other.aspect, vk::ImageAspectFlagBits::eNone);
-    view = std::exchange(other.view, VK_NULL_HANDLE);
-    memory = std::exchange(other.memory, VK_NULL_HANDLE);
-    image_size = std::exchange(other.image_size, 0);
-    adopted = std::exchange(other.adopted, false);
-    is_rgb = std::exchange(other.is_rgb, false);
-    is_d24s8 = std::exchange(other.is_d24s8, false);
-}
-
-Texture& Texture::operator=(Texture&& other) noexcept {
-    Destroy();
-    info = std::exchange(other.info, Info{});
-    texture = std::exchange(other.texture, VK_NULL_HANDLE);
-    aspect = std::exchange(other.aspect, vk::ImageAspectFlagBits::eNone);
-    view = std::exchange(other.view, VK_NULL_HANDLE);
-    memory = std::exchange(other.memory, VK_NULL_HANDLE);
-    image_size = std::exchange(other.image_size, 0);
-    adopted = std::exchange(other.adopted, false);
-    is_rgb = std::exchange(other.is_rgb, false);
-    is_d24s8 = std::exchange(other.is_d24s8, false);
-    return *this;
-}
-
-void Texture::Create(const Info& create_info) {
-    auto device = g_vk_instace->GetDevice();
-    info = create_info;
-
-    // Emulate RGB8 format with RGBA8
-    is_rgb = false;
-    if (info.format == vk::Format::eR8G8B8Unorm) {
-        is_rgb = true;
-        info.format = vk::Format::eR8G8B8A8Unorm;
-    }
-
-    is_d24s8 = false;
-    if (info.format == vk::Format::eD24UnormS8Uint) {
-        is_d24s8 = true;
-        info.format = vk::Format::eD32SfloatS8Uint;
-    }
-
-    // Create the texture
-    image_size = info.width * info.height * BytesPerPixel(info.format);
-    aspect = GetImageAspect(info.format);
-
-    vk::ImageCreateFlags flags{};
-    if (info.view_type == vk::ImageViewType::eCube) {
-        flags = vk::ImageCreateFlagBits::eCubeCompatible;
-    }
-
-    vk::ImageCreateInfo image_info {
-        flags, info.type, info.format,
-        { info.width, info.height, 1 }, info.levels, info.layers,
-        static_cast<vk::SampleCountFlagBits>(info.multisamples),
-        vk::ImageTiling::eOptimal, info.usage
-    };
-
-    texture = device.createImage(image_info);
-
-    // Create texture memory
-    auto requirements = device.getImageMemoryRequirements(texture);
-    auto memory_index = Buffer::FindMemoryType(requirements.memoryTypeBits,
-                                                 vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk::MemoryAllocateInfo alloc_info(requirements.size, memory_index);
-
-    memory = device.allocateMemory(alloc_info);
-    device.bindImageMemory(texture, memory, 0);
-
-    // Create texture view
-    vk::ImageViewCreateInfo view_info {
-        {}, texture, info.view_type, info.format, {},
-        {aspect, 0, info.levels, 0, info.layers}
-    };
-
-    view = device.createImageView(view_info);
-}
-
-void Texture::Create(Texture& other) {
-    auto info = other.info;
-    Create(info);
-
-    // Copy the buffer contents
-    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-    Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
-
-    auto old_layout = other.GetLayout();
-    other.Transition(cmdbuffer, vk::ImageLayout::eTransferSrcOptimal);
-
-    u32 copy_count = 0;
-    std::array<vk::ImageCopy, 16> copy_regions;
-
-    for (u32 i = 0; i < info.levels; i++) {
-        copy_regions[copy_count++] = vk::ImageCopy{
-            vk::ImageSubresourceLayers{aspect, i, 0, 1}, {0},
-            vk::ImageSubresourceLayers{aspect, i, 0, 1}, {0},
-            {info.width, info.height, 0}
-        };
-    }
-
-    cmdbuffer.copyImage(other.GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
-                        texture, vk::ImageLayout::eTransferDstOptimal, copy_count,
-                        copy_regions.data());
-
-    Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
-    other.Transition(cmdbuffer, old_layout);
-}
-
-void Texture::Adopt(const Info& create_info, vk::Image image) {
-    info = create_info;
-    image_size = info.width * info.height * BytesPerPixel(info.format);
-    aspect = GetImageAspect(info.format);
-    texture = image;
-
-    // Create texture view
-    vk::ImageViewCreateInfo view_info {
-        {}, texture, info.view_type, info.format, {},
-        {aspect, 0, info.levels, 0, info.layers}
-    };
-
-    auto device = g_vk_instace->GetDevice();
-    view = device.createImageView(view_info);
-    adopted = true;
-}
-
-void Texture::Destroy() {
-    if (texture && !adopted) {
-        // Make sure to unbind the texture before destroying it
-        auto& state = VulkanState::Get();
-        state.UnbindTexture(*this);
-
-        auto deleter = [texture = texture,
-                        view = view,
-                        memory = memory]() {
-            auto device = g_vk_instace->GetDevice();
-            if (texture) {
-                device.destroyImage(texture);
-                device.destroyImageView(view);
-                device.freeMemory(memory);
-            }
-        };
-
-        // Schedule deletion of the texture after it's no longer used
-        // by the GPU
-        g_vk_task_scheduler->Schedule(deleter);
-    }
-
-    // If the image was adopted (probably from the swapchain) then only
-    // destroy the view
-    if (adopted) {
-        g_vk_task_scheduler->Schedule([view = view](){
-            auto device = g_vk_instace->GetDevice();
+    if (image && is_texture_owned) {
+        auto deleter = [image = image, allocation = allocation,
+                        view = image_view](vk::Device device, VmaAllocator allocator) {
             device.destroyImageView(view);
-        });
+            vmaDestroyImage(allocator, static_cast<VkImage>(image), allocation);
+        };
+
+        // Schedule deletion of the texture after it's no longer used by the GPU
+        scheduler.Schedule(deleter);
+    } else if (!is_texture_owned) {
+        // If the texture is not owning, destroy the view immediately as
+        // synchronization is the caller's responsibility
+        vk::Device device = instance.GetDevice();
+        device.destroyImageView(image_view);
     }
 }
 
-void Texture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout) {
-    Transition(cmdbuffer, new_layout, 0, info.levels, 0, info.layers);
-}
+void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout,
+                         u32 level, u32 level_count) {
+    ASSERT(level + level_count < TEXTURE_MAX_LEVELS);
 
-void Texture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout,
-                           u32 start_level, u32 level_count, u32 start_layer, u32 layer_count) {
-    if (new_layout == layout) {
+    // Ensure all miplevels in the range have the same layout
+    vk::ImageLayout old_layout = layouts[level];
+    if (old_layout != vk::ImageLayout::eUndefined) {
+        for (u32 i = 0; i < level_count; i++) {
+            ASSERT(layouts[level + i] == old_layout);
+        }
+    }
+
+    // Don't do anything if the image is already in the wanted layout
+    if (new_layout == old_layout) {
         return;
     }
 
     struct LayoutInfo {
-        vk::ImageLayout layout;
         vk::AccessFlags access;
         vk::PipelineStageFlags stage;
     };
 
     // Get optimal transition settings for every image layout. Settings taken from Dolphin
-    auto layout_info = [](vk::ImageLayout layout) -> LayoutInfo {
-        LayoutInfo info{ .layout = layout };
+    auto GetLayoutInfo = [](vk::ImageLayout layout) -> LayoutInfo {
+        LayoutInfo info;
         switch (layout) {
         case vk::ImageLayout::eUndefined:
             // Layout undefined therefore contents undefined, and we don't care what happens to it.
             info.access = vk::AccessFlagBits::eNone;
             info.stage = vk::PipelineStageFlagBits::eTopOfPipe;
             break;
-
         case vk::ImageLayout::ePreinitialized:
             // Image has been pre-initialized by the host, so ensure all writes have completed.
             info.access = vk::AccessFlagBits::eHostWrite;
             info.stage = vk::PipelineStageFlagBits::eHost;
             break;
-
         case vk::ImageLayout::eColorAttachmentOptimal:
             // Image was being used as a color attachment, so ensure all writes have completed.
-            info.access = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite;
+            info.access = vk::AccessFlagBits::eColorAttachmentRead |
+                    vk::AccessFlagBits::eColorAttachmentWrite;
             info.stage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
             break;
-
         case vk::ImageLayout::eDepthStencilAttachmentOptimal:
             // Image was being used as a depthstencil attachment, so ensure all writes have completed.
-            info.access = vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-            info.stage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
+            info.access = vk::AccessFlagBits::eDepthStencilAttachmentRead |
+                    vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+            info.stage = vk::PipelineStageFlagBits::eEarlyFragmentTests |
+                    vk::PipelineStageFlagBits::eLateFragmentTests;
             break;
-
         case vk::ImageLayout::ePresentSrcKHR:
             info.access = vk::AccessFlagBits::eNone;
             info.stage = vk::PipelineStageFlagBits::eBottomOfPipe;
             break;
-
         case vk::ImageLayout::eShaderReadOnlyOptimal:
             // Image was being used as a shader resource, make sure all reads have finished.
             info.access = vk::AccessFlagBits::eShaderRead;
             info.stage = vk::PipelineStageFlagBits::eFragmentShader;
             break;
-
         case vk::ImageLayout::eTransferSrcOptimal:
             // Image was being used as a copy source, ensure all reads have finished.
             info.access = vk::AccessFlagBits::eTransferRead;
             info.stage = vk::PipelineStageFlagBits::eTransfer;
             break;
-
         case vk::ImageLayout::eTransferDstOptimal:
             // Image was being used as a copy destination, ensure all writes have finished.
             info.access = vk::AccessFlagBits::eTransferWrite;
             info.stage = vk::PipelineStageFlagBits::eTransfer;
             break;
-
         default:
             LOG_CRITICAL(Render_Vulkan, "Unhandled vulkan image layout {}\n", layout);
             UNREACHABLE();
@@ -292,220 +233,286 @@ void Texture::Transition(vk::CommandBuffer cmdbuffer, vk::ImageLayout new_layout
         return info;
     };
 
+    LayoutInfo source = GetLayoutInfo(old_layout);
+    LayoutInfo dest = GetLayoutInfo(new_layout);
+
+    const vk::ImageMemoryBarrier barrier = {
+        .srcAccessMask = source.access,
+        .dstAccessMask = dest.access,
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        .image = image,
+        .subresourceRange = {aspect, level, level_count, 0, 1}
+    };
+
     // Submit pipeline barrier
-    LayoutInfo source = layout_info(layout), dst = layout_info(new_layout);
-    vk::ImageMemoryBarrier barrier {
-        source.access, dst.access,
-        source.layout, dst.layout,
-        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        texture,
-        vk::ImageSubresourceRange{aspect, start_level, level_count, start_layer, layer_count}
+    command_buffer.pipelineBarrier(source.stage, dest.stage,
+                                   vk::DependencyFlagBits::eByRegion,
+                                   {}, {}, barrier);
+
+    // Update layouts
+    SetLayout(new_layout, level, level_count);
+}
+
+void Texture::SetLayout(vk::ImageLayout new_layout, u32 level, u32 level_count) {
+    std::fill_n(layouts.begin() + level, level_count, new_layout);
+}
+
+void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32 level) {
+    const u64 byte_count = data.size();
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+
+    // If the adverised format supports blitting then use GPU accelerated
+    // format conversion.
+    if (internal_format != advertised_format &&
+        instance.IsFormatSupported(advertised_format,
+                                   vk::FormatFeatureFlagBits::eBlitSrc)) {
+        // Creating a new staging texture for each upload/download is expensive
+        // but this path is not common. TODO: Profile this
+        StagingTexture staging{instance, scheduler, info};
+
+        const std::array offsets = {
+            vk::Offset3D{rectangle.x, rectangle.y, 0},
+            vk::Offset3D{static_cast<s32>(rectangle.x + rectangle.width),
+                         static_cast<s32>(rectangle.y + rectangle.height), 0}
+        };
+
+        const vk::ImageBlit image_blit = {
+            .srcSubresource = {aspect, level, 0, 1},
+            .srcOffsets = offsets,
+            .dstSubresource = {aspect, level, 0, 1},
+            .dstOffsets = offsets
+        };
+
+        // Copy data to staging texture
+        std::memcpy(staging.GetMappedPtr(), data.data(), byte_count);
+        staging.Commit(byte_count);
+
+        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal, level);
+
+        // Blit
+        command_buffer.blitImage(staging.GetHandle(), vk::ImageLayout::eGeneral,
+                                 image, vk::ImageLayout::eTransferDstOptimal,
+                                 image_blit, vk::Filter::eNearest);
+
+    // Otherwise use normal staging buffer path with possible CPU conversion
+    } else {
+        Buffer& staging = scheduler.GetCommandUploadBuffer();
+        const u64 staging_offset = staging.GetCurrentOffset();
+
+        // Copy pixels to the staging buffer
+        auto slice = staging.Map(byte_count);
+        std::memcpy(slice.data(), data.data(), byte_count);
+        staging.Commit(byte_count);
+
+        // TODO: Handle depth and stencil uploads
+        ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
+               advertised_format == internal_format);
+
+        const vk::BufferImageCopy copy_region = {
+            .bufferOffset = staging_offset,
+            .bufferRowLength = stride,
+            .bufferImageHeight = rectangle.height,
+            .imageSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = level,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageOffset = {rectangle.x, rectangle.y, 0},
+            .imageExtent = {rectangle.width, rectangle.height, 1}
+        };
+
+        vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal, level);
+
+        // Copy staging buffer to the texture
+        command_buffer.copyBufferToImage(staging.GetHandle(), image,
+                                         vk::ImageLayout::eTransferDstOptimal,
+                                         copy_region);
+    }
+
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 level) {
+    const u64 byte_count = data.size();
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+
+    // If the adverised format supports blitting then use GPU accelerated
+    // format conversion.
+    if (internal_format != advertised_format &&
+        instance.IsFormatSupported(advertised_format,
+                                   vk::FormatFeatureFlagBits::eBlitDst)) {
+        // Creating a new staging texture for each upload/download is expensive
+        // but this path is not common. TODO: Profile this
+        StagingTexture staging{instance, scheduler, info};
+
+        const std::array offsets = {
+            vk::Offset3D{rectangle.x, rectangle.y, 0},
+            vk::Offset3D{static_cast<s32>(rectangle.x + rectangle.width),
+                         static_cast<s32>(rectangle.y + rectangle.height), 0}
+        };
+
+        const vk::ImageBlit image_blit = {
+            .srcSubresource = {aspect, level, 0, 1},
+            .srcOffsets = offsets,
+            .dstSubresource = {aspect, level, 0, 1},
+            .dstOffsets = offsets
+        };
+
+        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal, level);
+
+        // Blit
+        command_buffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
+                                 staging.GetHandle(), vk::ImageLayout::eGeneral,
+                                 image_blit, vk::Filter::eNearest);
+
+        // TODO: Async downloads
+        scheduler.Submit(true);
+
+        // Copy data to the destination
+        staging.Commit(byte_count);
+        std::memcpy(data.data(), staging.GetMappedPtr(), byte_count);
+
+    // Otherwise use normal staging buffer path with possible CPU conversion
+    } else {
+        Buffer& staging = scheduler.GetCommandUploadBuffer();
+        const u64 staging_offset = staging.GetCurrentOffset();
+
+        const vk::BufferImageCopy copy_region = {
+            .bufferOffset = staging_offset,
+            .bufferRowLength = stride,
+            .bufferImageHeight = rectangle.height,
+            .imageSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = level,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .imageOffset = {rectangle.x, rectangle.y, 0},
+            .imageExtent = {rectangle.width, rectangle.height, 1}
+        };
+
+        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal, level);
+
+        // Copy pixel data to the staging buffer
+        command_buffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal,
+                                         staging.GetHandle(), copy_region);
+
+        Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+        // TODO: Async downloads
+        scheduler.Submit(true);
+
+        // Copy data to the destination
+        auto memory = staging.Map(byte_count);
+        std::memcpy(data.data(), memory.data(), byte_count);
+    }
+}
+
+StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler,
+                               const TextureInfo& info) :
+    TextureBase(info), instance(instance), scheduler(scheduler) {
+
+    format = ToVkFormat(info.format);
+    const vk::ImageCreateInfo image_info = {
+        .flags = info.view_type == TextureViewType::ViewCube ?
+                 vk::ImageCreateFlagBits::eCubeCompatible :
+                 vk::ImageCreateFlags{},
+        .imageType = ToVkImageType(info.type),
+        .format = format,
+        .extent = {info.width, info.height, 1},
+        .mipLevels = info.levels,
+        .arrayLayers = info.view_type == TextureViewType::ViewCube ? 6u : 1u,
+        .samples = vk::SampleCountFlagBits::e1,
+        .usage = vk::ImageUsageFlagBits::eTransferSrc |
+                 vk::ImageUsageFlagBits::eTransferDst,
     };
 
-    cmdbuffer.pipelineBarrier(source.stage, dst.stage, vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
-    layout = new_layout;
-}
-
-void Texture::OverrideImageLayout(vk::ImageLayout new_layout) {
-    layout = new_layout;
-}
-
-void Texture::Upload(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> pixels) {
-    u32 request_size = is_rgb ? (pixels.size() / 3) * 4 :
-                       (is_d24s8 ? (pixels.size() / 4) * 5 : pixels.size());
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
-    if (!buffer) {
-        LOG_ERROR(Render_Vulkan, "Cannot upload pixels without staging buffer!");
-    }
-
-    // Copy pixels to staging buffer
-    auto& state = VulkanState::Get();
-    state.EndRendering();
-
-    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-
-    // Automatically convert RGB to RGBA
-    if (is_rgb) {
-        auto data = RGBToRGBA(pixels);
-        std::memcpy(buffer, data.data(), data.size());
-    }
-    else if (is_d24s8) {
-        auto data = D24S8ToD32S8(pixels);
-        std::memcpy(buffer, data.data(), data.size() * sizeof(data[0]));
-    }
-    else {
-        std::memcpy(buffer, pixels.data(), pixels.size());
-    }
-
-    std::array<vk::BufferImageCopy, 2> copy_regions;
-    u32 region_count = 1;
-
-    copy_regions[0] = vk::BufferImageCopy{
-        offset, row_length, region.extent.height,
-        {aspect, level, layer, 1},
-        {region.offset.x, region.offset.y, 0},
-        {region.extent.width, region.extent.height, 1}
+    const VmaAllocationCreateInfo alloc_create_info = {
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO
     };
 
-    if (aspect & vk::ImageAspectFlagBits::eDepth &&
-            aspect & vk::ImageAspectFlagBits::eStencil) {
-        // Copying both depth and stencil requires two seperate regions
-        copy_regions[1] = copy_regions[0];
-        copy_regions[0].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
-        copy_regions[1].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+    VkImage unsafe_image = VK_NULL_HANDLE;
+    VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
+    VmaAllocationInfo alloc_info;
+    VmaAllocator allocator = instance.GetAllocator();
 
-        region_count++;
-    }
+    // Allocate texture memory
+    vmaCreateImage(allocator, &unsafe_image_info, &alloc_create_info,
+                   &unsafe_image, &allocation, &alloc_info);
+    image = vk::Image{unsafe_image};
 
-    // Transition image to transfer format
-    Transition(cmdbuffer, vk::ImageLayout::eTransferDstOptimal);
+    // Map memory
+    mapped_ptr = alloc_info.pMappedData;
 
-    cmdbuffer.copyBufferToImage(g_vk_task_scheduler->GetStaging().GetBuffer(),
-                                texture, vk::ImageLayout::eTransferDstOptimal, region_count,
-                                copy_regions.data());
-
-    // Prepare image for shader reads
-    Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
-}
-
-void Texture::Download(u32 level, u32 layer, u32 row_length, vk::Rect2D region, std::span<u8> memory) {
-    u32 request_size = is_rgb ? (memory.size() / 3) * 4 :
-                       (is_d24s8 ? (memory.size() / 4) * 8 : memory.size());
-    auto [buffer, offset] = g_vk_task_scheduler->RequestStaging(request_size);
-    if (!buffer) {
-        LOG_ERROR(Render_Vulkan, "Cannot download texture without staging buffer!");
-    }
-
-    auto& state = VulkanState::Get();
-    state.EndRendering();
-
-    auto cmdbuffer = g_vk_task_scheduler->GetRenderCommandBuffer();
-
-    std::array<vk::BufferImageCopy, 2> copy_regions;
-    u32 region_count = 1;
-
-    copy_regions[0] = vk::BufferImageCopy{
-        offset, row_length, region.extent.height,
-        {aspect, level, layer, 1},
-        {region.offset.x, region.offset.y, 0},
-        {region.extent.width, region.extent.height, 1}
+    // Transition image to VK_IMAGE_LAYOUT_GENERAL. This layout is convenient
+    // for staging textures since it allows for well defined host access and
+    // works with vkCmdBlitImage, thus eliminating the need for layout transitions
+    const vk::ImageMemoryBarrier barrier = {
+        .srcAccessMask = vk::AccessFlagBits::eNone,
+        .dstAccessMask = vk::AccessFlagBits::eNone,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = image,
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, info.levels, 0, 1}
     };
 
-    if (aspect & vk::ImageAspectFlagBits::eDepth &&
-            aspect & vk::ImageAspectFlagBits::eStencil) {
-        // Copying both depth and stencil requires two seperate regions
-        copy_regions[1] = copy_regions[0];
-        copy_regions[0].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
-        copy_regions[1].imageSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+    vk::CommandBuffer command_buffer = scheduler.GetUploadCommandBuffer();
+    command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eBottomOfPipe,
+                                   vk::PipelineStageFlagBits::eTransfer,
+                                   vk::DependencyFlagBits::eByRegion,
+                                   {}, {}, barrier);
+}
 
-        region_count++;
-    }
+StagingTexture::~StagingTexture() {
+    if (image) {
+        auto deleter = [allocation = allocation,
+                        image = image](vk::Device device, VmaAllocator allocator) {
+            vmaDestroyImage(allocator, static_cast<VkImage>(image), allocation);
+        };
 
-    // Transition image to transfer format
-    auto old_layout = GetLayout();
-    Transition(cmdbuffer, vk::ImageLayout::eTransferSrcOptimal);
-
-    cmdbuffer.copyImageToBuffer(texture, vk::ImageLayout::eTransferSrcOptimal,
-                                g_vk_task_scheduler->GetStaging().GetBuffer(),
-                                region_count, copy_regions.data());
-
-    // Restore layout
-    Transition(cmdbuffer, old_layout);
-
-    // Wait for the data to be available
-    // NOTE: This is really slow and should be reworked
-    g_vk_task_scheduler->Submit(true);
-
-    // Automatically convert RGB to RGBA
-    if (is_rgb) {
-        auto data = RGBAToRGB(std::span(buffer, request_size));
-        std::memcpy(memory.data(), data.data(), memory.size());
-    }
-    else if (is_d24s8) {
-        auto data = D32S8ToD24S8(std::span(buffer, request_size));
-        std::memcpy(memory.data(), data.data(), memory.size());
-    }
-    else {
-        std::memcpy(memory.data(), buffer, memory.size());
+        // Schedule deletion of the texture after it's no longer used by the GPU
+        scheduler.Schedule(deleter);
     }
 }
 
-template <typename Out, typename In>
-std::span<Out> SpanCast(std::span<In> span) {
-    return std::span(reinterpret_cast<Out*>(span.data()), span.size_bytes() / sizeof(Out));
+void StagingTexture::Commit(u32 size) {
+    VmaAllocator allocator = instance.GetAllocator();
+    vmaFlushAllocation(allocator, allocation, 0, size);
 }
 
-std::vector<u8> Texture::RGBToRGBA(std::span<u8> data) {
-    ASSERT(data.size() % 3 == 0);
+Sampler::Sampler(Instance& instance, SamplerInfo info) :
+    SamplerBase(info), instance(instance) {
 
-    u32 new_size = (data.size() / 3) * 4;
-    std::vector<u8> rgba(new_size);
+    auto properties = instance.GetPhysicalDevice().getProperties();
+    const auto filtering = PicaToVK::TextureFilterMode(info.mag_filter,
+                                                       info.min_filter,
+                                                       info.mip_filter);
+    const vk::SamplerCreateInfo sampler_info = {
+        .magFilter = filtering.mag_filter,
+        .minFilter = filtering.min_filter,
+        .mipmapMode = filtering.mip_mode,
+        .addressModeU = PicaToVK::WrapMode(info.wrap_s),
+        .addressModeV = PicaToVK::WrapMode(info.wrap_t),
+        .anisotropyEnable = true,
+        .maxAnisotropy = properties.limits.maxSamplerAnisotropy,
+        .compareEnable = false,
+        .compareOp = vk::CompareOp::eAlways,
+        .borderColor = vk::BorderColor::eIntOpaqueBlack,
+        .unnormalizedCoordinates = false
+    };
 
-    u32 dst_pos = 0;
-    for (u32 i = 0; i < data.size(); i += 3) {
-        std::memcpy(rgba.data() + dst_pos, data.data() + i, 3);
-        rgba[dst_pos + 3] = 255u;
-        dst_pos += 4;
-    }
-
-    return rgba;
+    vk::Device device = instance.GetDevice();
+    sampler = device.createSampler(sampler_info);
 }
 
-std::vector<u64> Texture::D24S8ToD32S8(std::span<u8> data) {
-    ASSERT(data.size() % 4 == 0);
-
-    std::vector<u64> d32s8;
-    std::span<u32> d24s8 = SpanCast<u32>(data);
-
-    d32s8.reserve(data.size() * 2);
-    std::ranges::transform(d24s8, std::back_inserter(d32s8), [](u32 comp) -> u64 {
-        // Convert normalized 24bit depth component to floating point
-        float fdepth = static_cast<float>(comp & 0xFFFFFF) / 0xFFFFFF;
-        u64 result = static_cast<u64>(comp) << 8;
-
-        // Use std::memcpy to avoid the unsafe casting required to preserve the floating
-        // point bits
-        std::memcpy(&result, &fdepth, 4);
-        return result;
-    });
-
-    return d32s8;
-}
-
-std::vector<u8> Texture::RGBAToRGB(std::span<u8> data) {
-    ASSERT(data.size() % 4 == 0);
-
-    u32 new_size = (data.size() / 4) * 3;
-    std::vector<u8> rgb(new_size);
-
-    u32 dst_pos = 0;
-    for (u32 i = 0; i < data.size(); i += 4) {
-        std::memcpy(rgb.data() + dst_pos, data.data() + i, 3);
-        dst_pos += 3;
-    }
-
-    return rgb;
-}
-
-std::vector<u32> Texture::D32S8ToD24S8(std::span<u8> data) {
-    ASSERT(data.size() % 8 == 0);
-
-    std::vector<u32> d24s8;
-    std::span<u64> d32s8 = SpanCast<u64>(data);
-
-    d24s8.reserve(data.size() / 2);
-    std::ranges::transform(d32s8, std::back_inserter(d24s8), [](u64 comp) -> u32 {
-        // Convert floating point to 24bit normalized depth
-        float fdepth = 0.f;
-        u32 depth = comp & 0xFFFFFFFF;
-        std::memcpy(&fdepth, &depth, 4);
-
-        u32 stencil = (comp >> 32) & 0xFF;
-        u64 result = static_cast<u32>(fdepth * 0xFFFFFF) | (stencil << 24);
-        return result;
-    });
-
-    return d24s8;
+Sampler::~Sampler() {
+    vk::Device device = instance.GetDevice();
+    device.destroySampler(sampler);
 }
 
 } // namespace Vulkan

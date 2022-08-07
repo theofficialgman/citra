@@ -56,9 +56,9 @@ struct OutputVertex {
     Common::Vec2<float24> tc0;
     Common::Vec2<float24> tc1;
     float24 tc0_w;
-    INSERT_PADDING_WORDS(1);
+    INSERT_PADDING_WORDS_NOINIT(1);
     Common::Vec3<float24> view;
-    INSERT_PADDING_WORDS(1);
+    INSERT_PADDING_WORDS_NOINIT(1);
     Common::Vec2<float24> tc2;
 
     static void ValidateSemantics(const RasterizerRegs& regs);

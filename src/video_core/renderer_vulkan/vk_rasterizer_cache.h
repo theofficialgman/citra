@@ -14,6 +14,7 @@
 #include <boost/icl/interval_set.hpp>
 #include <unordered_map>
 #include <boost/functional/hash.hpp>
+#include <robin_hood.h>
 #include "common/assert.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -21,6 +22,10 @@
 #include "video_core/renderer_vulkan/vk_surface_params.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 #include "video_core/texture/texture_decode.h"
+
+// Can be changed later here
+template <typename Key, typename T, typename Hash = typename Key::Hash>
+using HashMap = robin_hood::unordered_flat_map<Key, T, Hash>;
 
 namespace Vulkan {
 
@@ -31,32 +36,25 @@ class FormatReinterpreterVulkan;
 vk::Format GetFormatTuple(SurfaceParams::PixelFormat pixel_format);
 
 struct HostTextureTag {
-    vk::Format format;
-    u32 width;
-    u32 height;
-    bool operator==(const HostTextureTag& rhs) const noexcept {
-        return std::tie(format, width, height) == std::tie(rhs.format, rhs.width, rhs.height);
-    };
+    vk::Format format = vk::Format::eUndefined;
+    u32 width = 0, height = 0;
+
+    // Enable comparisons
+    auto operator<=>(const HostTextureTag& other) const = default;
 };
 
 struct TextureCubeConfig {
-    PAddr px;
-    PAddr nx;
-    PAddr py;
-    PAddr ny;
-    PAddr pz;
-    PAddr nz;
-    u32 width;
+    PAddr px = 0;
+    PAddr nx = 0;
+    PAddr py = 0;
+    PAddr ny = 0;
+    PAddr pz = 0;
+    PAddr nz = 0;
+    u32 width = 0;
     Pica::TexturingRegs::TextureFormat format;
 
-    bool operator==(const TextureCubeConfig& rhs) const {
-        return std::tie(px, nx, py, ny, pz, nz, width, format) ==
-               std::tie(rhs.px, rhs.nx, rhs.py, rhs.ny, rhs.pz, rhs.nz, rhs.width, rhs.format);
-    }
-
-    bool operator!=(const TextureCubeConfig& rhs) const {
-        return !(*this == rhs);
-    }
+    // Enable comparisons
+    auto operator<=>(const TextureCubeConfig& other) const = default;
 };
 
 } // namespace Vulkan
@@ -98,6 +96,7 @@ using SurfaceRegions = boost::icl::interval_set<PAddr, std::less, SurfaceInterva
 using SurfaceMap =
     boost::icl::interval_map<PAddr, Surface, boost::icl::partial_absorber, std::less,
                              boost::icl::inplace_plus, boost::icl::inter_section, SurfaceInterval>;
+
 using SurfaceCache =
     boost::icl::interval_map<PAddr, SurfaceSet, boost::icl::partial_absorber, std::less,
                              boost::icl::inplace_plus, boost::icl::inter_section, SurfaceInterval>;
@@ -108,8 +107,6 @@ static_assert(std::is_same<SurfaceRegions::interval_type, SurfaceCache::interval
 
 using SurfaceRect_Tuple = std::tuple<Surface, Common::Rectangle<u32>>;
 using SurfaceSurfaceRect_Tuple = std::tuple<Surface, Surface, Common::Rectangle<u32>>;
-
-using PageMap = boost::icl::interval_map<u32, int>;
 
 enum class ScaleMatch {
     Exact,   // only accept same res scale
@@ -265,7 +262,7 @@ public:
     /// Attempt to find a subrect (resolution scaled) of a surface, otherwise loads a texture from
     /// 3DS memory to OpenGL and caches it (if not already cached)
     SurfaceRect_Tuple GetSurfaceSubRect(const SurfaceParams& params, ScaleMatch match_res_scale,
-                                        bool load_if_create);
+                                        bool load_if_create, bool framebuffer = false);
 
     /// Get a surface based on the texture configuration
     Surface GetTextureSurface(const Pica::TexturingRegs::FullTextureConfig& config);
@@ -306,9 +303,9 @@ private:
     void ValidateSurface(const Surface& surface, PAddr addr, u32 size);
 
     // Returns false if there is a surface in the cache at the interval with the same bit-width,
-    bool NoUnimplementedReinterpretations(const Vulkan::Surface& surface,
-                                          Vulkan::SurfaceParams& params,
-                                          const Vulkan::SurfaceInterval& interval);
+    bool NoUnimplementedReinterpretations(const Surface& surface,
+                                          SurfaceParams& params,
+                                          const SurfaceInterval& interval);
 
     // Return true if a surface with an invalid pixel format exists at the interval
     bool IntervalHasInvalidPixelFormat(SurfaceParams& params, const SurfaceInterval& interval);
@@ -318,7 +315,7 @@ private:
                                     const SurfaceInterval& interval);
 
     /// Create a new surface
-    Surface CreateSurface(const SurfaceParams& params);
+    Surface CreateSurface(const SurfaceParams& params, bool framebuffer = false);
 
     /// Register surface into the cache
     void RegisterSurface(const Surface& surface);
@@ -330,20 +327,20 @@ private:
     void UpdatePagesCachedCount(PAddr addr, u32 size, int delta);
 
     SurfaceCache surface_cache;
-    PageMap cached_pages;
+    boost::icl::interval_map<u32, int> cached_pages;
     SurfaceMap dirty_regions;
     SurfaceSet remove_surfaces;
 
     u16 resolution_scale_factor;
 
+    // Texture cube cache
     std::unordered_map<TextureCubeConfig, CachedTextureCube> texture_cube_cache;
 
     std::recursive_mutex mutex;
 
 public:
     void AllocateTexture(Texture& target, SurfaceParams::SurfaceType type, vk::Format format,
-                                     u32 width, u32 height);
-    std::unique_ptr<FormatReinterpreterVulkan> format_reinterpreter;
+                                     u32 width, u32 height, bool framebuffer);
 };
 
-} // namespace OpenGL
+} // namespace Vulkan

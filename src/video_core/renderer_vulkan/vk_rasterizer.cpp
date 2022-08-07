@@ -5,15 +5,10 @@
 #include <algorithm>
 #include <memory>
 #include <string>
-#include <tuple>
 #include <utility>
-#include <glad/glad.h>
 #include "common/alignment.h"
-#include "common/assert.h"
-#include "common/logging/log.h"
 #include "common/math_util.h"
 #include "common/microprofile.h"
-#include "common/scope_exit.h"
 #include "common/vector_math.h"
 #include "core/hw/gpu.h"
 #include "video_core/pica_state.h"
@@ -21,27 +16,45 @@
 #include "video_core/regs_rasterizer.h"
 #include "video_core/regs_texturing.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
-#include "video_core/renderer_opengl/gl_shader_gen.h"
 #include "video_core/renderer_vulkan/vk_surface_params.h"
 #include "video_core/renderer_vulkan/pica_to_vulkan.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
-#include "video_core/video_core.h"
 
 namespace Vulkan {
+
+MICROPROFILE_DEFINE(Vulkan_VS, "Vulkan", "Vertex Shader Setup", MP_RGB(192, 128, 128));
+MICROPROFILE_DEFINE(Vulkan_GS, "Vulkan", "Geometry Shader Setup", MP_RGB(128, 192, 128));
+MICROPROFILE_DEFINE(Vulkan_Drawing, "Vulkan", "Drawing", MP_RGB(128, 128, 192));
+MICROPROFILE_DEFINE(Vulkan_Blits, "Vulkan", "Blits", MP_RGB(100, 100, 255));
+MICROPROFILE_DEFINE(Vulkan_CacheManagement, "Vulkan", "Cache Management", MP_RGB(100, 255, 100));
 
 using PixelFormat = SurfaceParams::PixelFormat;
 using SurfaceType = SurfaceParams::SurfaceType;
 
-MICROPROFILE_DEFINE(OpenGL_VAO, "OpenGL", "Vertex Array Setup", MP_RGB(255, 128, 0));
-MICROPROFILE_DEFINE(OpenGL_VS, "OpenGL", "Vertex Shader Setup", MP_RGB(192, 128, 128));
-MICROPROFILE_DEFINE(OpenGL_GS, "OpenGL", "Geometry Shader Setup", MP_RGB(128, 192, 128));
-MICROPROFILE_DEFINE(OpenGL_Drawing, "OpenGL", "Drawing", MP_RGB(128, 128, 192));
-MICROPROFILE_DEFINE(OpenGL_Blits, "OpenGL", "Blits", MP_RGB(100, 100, 255));
-MICROPROFILE_DEFINE(OpenGL_CacheManagement, "OpenGL", "Cache Mgmt", MP_RGB(100, 255, 100));
+// They shall be big enough for about one frame.
+constexpr u32 VERTEX_BUFFER_SIZE = 64 * 1024 * 1024;
+constexpr u32 INDEX_BUFFER_SIZE = 16 * 1024 * 1024;
+constexpr u32 UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
+constexpr u32 TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
 
-RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
+constexpr std::array LUT_LF_VIEWS = {
+    vk::Format::eR32G32Sfloat
+};
+
+constexpr std::array LUT_VIEWS = {
+    vk::Format::eR32G32Sfloat,
+    vk::Format::eR32G32B32A32Sfloat
+};
+
+RasterizerVulkan::RasterizerVulkan(CommandScheduler& scheduler, Frontend::EmuWindow& emu_window) :
+    scheduler(scheduler), vertex_buffer(scheduler, VERTEX_BUFFER_SIZE, BufferUsage::Vertex),
+    index_buffer(scheduler, INDEX_BUFFER_SIZE, BufferUsage::Index),
+    uniform_buffer(scheduler, UNIFORM_BUFFER_SIZE, BufferUsage::Uniform),
+    texture_buffer_lut_lf(scheduler, TEXTURE_BUFFER_SIZE, BufferUsage::UniformTexel, LUT_LF_VIEWS),
+    texture_buffer_lut(scheduler, TEXTURE_BUFFER_SIZE, BufferUsage::UniformTexel, LUT_VIEWS) {
+
     // Implement shadow
     allow_shadow = false;
 
@@ -65,29 +78,6 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
                                                            uniform_buffer_alignment);
     uniform_size_aligned_fs = Common::AlignUp<std::size_t>(sizeof(UniformData),
                                                            uniform_buffer_alignment);
-    // Allocate texture buffer LUTs
-    Buffer::Info texel_buffer_info = {
-        .size = TEXTURE_BUFFER_SIZE,
-        .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eUniformTexelBuffer |
-        vk::BufferUsageFlagBits::eTransferDst,
-    };
-
-    texel_buffer_info.view_formats[0] = vk::Format::eR32G32Sfloat;
-    texture_buffer_lut_lf.Create(texel_buffer_info);
-
-    texel_buffer_info.view_formats[1] = vk::Format::eR32G32B32A32Sfloat;
-    texture_buffer_lut.Create(texel_buffer_info);
-
-    // Create and bind uniform buffers
-    Buffer::Info uniform_info = {
-        .size = UNIFORM_BUFFER_SIZE,
-        .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eUniformBuffer |
-        vk::BufferUsageFlagBits::eTransferDst
-    };
-
-    uniform_buffer.Create(uniform_info);
     auto& state = VulkanState::Get();
     state.SetUniformBuffer(0, 0, uniform_size_aligned_vs, uniform_buffer);
     state.SetUniformBuffer(1, uniform_size_aligned_vs, uniform_size_aligned_fs, uniform_buffer);
@@ -97,26 +87,8 @@ RasterizerVulkan::RasterizerVulkan(Frontend::EmuWindow& emu_window) {
     state.SetTexelBuffer(1, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 0);
     state.SetTexelBuffer(2, 0, TEXTURE_BUFFER_SIZE, texture_buffer_lut, 1);
 
-    // Create vertex and index buffers
-    Buffer::Info vertex_info = {
-        .size = VERTEX_BUFFER_SIZE,
-        .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eVertexBuffer |
-                 vk::BufferUsageFlagBits::eTransferDst
-    };
-
-    Buffer::Info index_info = {
-        .size = INDEX_BUFFER_SIZE,
-        .properties = vk::MemoryPropertyFlagBits::eDeviceLocal,
-        .usage = vk::BufferUsageFlagBits::eIndexBuffer |
-        vk::BufferUsageFlagBits::eTransferDst
-    };
-
-    vertex_buffer.Create(vertex_info);
-    index_buffer.Create(index_info);
-
     // Set clear texture color
-    state.SetPlaceholderColor(255, 0, 0, 255);
+    state.SetPlaceholderColor(255, 255, 255, 255);
 
     SyncEntireState();
 }
@@ -238,7 +210,7 @@ void RasterizerVulkan::DrawTriangles() {
 }
 
 bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
-    MICROPROFILE_SCOPE(OpenGL_Drawing);
+    MICROPROFILE_SCOPE(Vulkan_Drawing);
     const auto& regs = Pica::g_state.regs;
     auto& state = VulkanState::Get();
 
@@ -252,6 +224,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     const bool using_color_fb =
         regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress() != 0;
+
     const bool using_depth_fb =
         !shadow_rendering && regs.framebuffer.framebuffer.GetDepthBufferPhysicalAddress() != 0 &&
         (write_depth_fb || regs.framebuffer.output_merger.depth_test_enable != 0);
@@ -304,15 +277,15 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     // Scissor checks are window-, not viewport-relative, which means that if the cached texture
     // sub-rect changes, the scissor bounds also need to be updated.
-    GLint scissor_x1 =
-        static_cast<GLint>(surfaces_rect.left + regs.rasterizer.scissor_test.x1 * res_scale);
-    GLint scissor_y1 =
-        static_cast<GLint>(surfaces_rect.bottom + regs.rasterizer.scissor_test.y1 * res_scale);
+    int scissor_x1 =
+        static_cast<int>(surfaces_rect.left + regs.rasterizer.scissor_test.x1 * res_scale);
+    int scissor_y1 =
+        static_cast<int>(surfaces_rect.bottom + regs.rasterizer.scissor_test.y1 * res_scale);
     // x2, y2 have +1 added to cover the entire pixel area, otherwise you might get cracks when
     // scaling or doing multisampling.
-    GLint scissor_x2 =
-        static_cast<GLint>(surfaces_rect.left + (regs.rasterizer.scissor_test.x2 + 1) * res_scale);
-    GLint scissor_y2 = static_cast<GLint>(surfaces_rect.bottom +
+    int scissor_x2 =
+        static_cast<int>(surfaces_rect.left + (regs.rasterizer.scissor_test.x2 + 1) * res_scale);
+    int scissor_y2 = static_cast<int>(surfaces_rect.bottom +
                                           (regs.rasterizer.scissor_test.y2 + 1) * res_scale);
 
     if (uniform_block_data.data.scissor_x1 != scissor_x1 ||
@@ -419,8 +392,6 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     if (depth_surface) {
         depth_surface->texture.Transition(cmdbuffer, vk::ImageLayout::eShaderReadOnlyOptimal);
     }
-
-    g_vk_task_scheduler->Submit();
 
     return true;
 }
@@ -924,22 +895,22 @@ void RasterizerVulkan::NotifyPicaRegisterChanged(u32 id) {
 }
 
 void RasterizerVulkan::FlushAll() {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
+    MICROPROFILE_SCOPE(Vulkan_CacheManagement);
     res_cache.FlushAll();
 }
 
 void RasterizerVulkan::FlushRegion(PAddr addr, u32 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
+    MICROPROFILE_SCOPE(Vulkan_CacheManagement);
     res_cache.FlushRegion(addr, size);
 }
 
 void RasterizerVulkan::InvalidateRegion(PAddr addr, u32 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
+    MICROPROFILE_SCOPE(Vulkan_CacheManagement);
     res_cache.InvalidateRegion(addr, size, nullptr);
 }
 
 void RasterizerVulkan::FlushAndInvalidateRegion(PAddr addr, u32 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
+    MICROPROFILE_SCOPE(Vulkan_CacheManagement);
     res_cache.FlushRegion(addr, size);
     res_cache.InvalidateRegion(addr, size, nullptr);
 }
@@ -949,7 +920,7 @@ void RasterizerVulkan::ClearAll(bool flush) {
 }
 
 bool RasterizerVulkan::AccelerateDisplayTransfer(const GPU::Regs::DisplayTransferConfig& config) {
-    MICROPROFILE_SCOPE(OpenGL_Blits);
+    MICROPROFILE_SCOPE(Vulkan_Blits);
 
     SurfaceParams src_params;
     src_params.addr = config.GetPhysicalInputAddress();
@@ -1099,7 +1070,7 @@ bool RasterizerVulkan::AccelerateDisplay(const GPU::Regs::FramebufferConfig& con
     if (framebuffer_addr == 0) {
         return false;
     }
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
+    MICROPROFILE_SCOPE(Vulkan_CacheManagement);
 
     SurfaceParams src_params;
     src_params.addr = framebuffer_addr;
@@ -1421,7 +1392,7 @@ void RasterizerVulkan::SyncLightSpotDirection(int light_index) {
 }
 
 void RasterizerVulkan::SyncLightDistanceAttenuationBias(int light_index) {
-    GLfloat dist_atten_bias =
+    float dist_atten_bias =
         Pica::float20::FromRaw(Pica::g_state.regs.lighting.light[light_index].dist_atten_bias)
             .ToFloat32();
 
@@ -1432,7 +1403,7 @@ void RasterizerVulkan::SyncLightDistanceAttenuationBias(int light_index) {
 }
 
 void RasterizerVulkan::SyncLightDistanceAttenuationScale(int light_index) {
-    GLfloat dist_atten_scale =
+    float dist_atten_scale =
         Pica::float20::FromRaw(Pica::g_state.regs.lighting.light[light_index].dist_atten_scale)
             .ToFloat32();
 
@@ -1444,8 +1415,8 @@ void RasterizerVulkan::SyncLightDistanceAttenuationScale(int light_index) {
 
 void RasterizerVulkan::SyncShadowBias() {
     const auto& shadow = Pica::g_state.regs.framebuffer.shadow;
-    GLfloat constant = Pica::float16::FromRaw(shadow.constant).ToFloat32();
-    GLfloat linear = Pica::float16::FromRaw(shadow.linear).ToFloat32();
+    float constant = Pica::float16::FromRaw(shadow.constant).ToFloat32();
+    float linear = Pica::float16::FromRaw(shadow.linear).ToFloat32();
 
     if (constant != uniform_block_data.data.shadow_bias_constant ||
         linear != uniform_block_data.data.shadow_bias_linear) {
@@ -1456,7 +1427,7 @@ void RasterizerVulkan::SyncShadowBias() {
 }
 
 void RasterizerVulkan::SyncShadowTextureBias() {
-    GLint bias = Pica::g_state.regs.texturing.shadow.bias << 1;
+    int bias = Pica::g_state.regs.texturing.shadow.bias << 1;
     if (bias != uniform_block_data.data.shadow_texture_bias) {
         uniform_block_data.data.shadow_texture_bias = bias;
         uniform_block_data.dirty = true;

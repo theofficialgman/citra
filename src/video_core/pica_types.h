@@ -1,4 +1,4 @@
-// Copyright 2015 Citra Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -22,40 +22,44 @@ namespace Pica {
  *
  * @todo Verify on HW if this conversion is sufficiently accurate.
  */
-template <unsigned M, unsigned E>
+template <u32 M, u32 E>
 struct Float {
+    static constexpr u32 width = M + E + 1;
+    static constexpr u32 bias = 128 - (1 << (E - 1));
+    static constexpr u32 exponent_mask = (1 << E) - 1;
+    static constexpr u32 mantissa_mask = (1 << M) - 1;
+    static constexpr u32 sign_mask = 1 << (E + M);
 public:
-    static Float<M, E> FromFloat32(float val) {
-        Float<M, E> ret;
+    static Float FromFloat32(float val) {
+        Float ret;
         ret.value = val;
         return ret;
     }
 
-    static Float<M, E> FromRaw(u32 hex) {
-        Float<M, E> res;
+    static Float FromRaw(u32 hex) {
+        Float res;
 
-        const int width = M + E + 1;
-        const int bias = 128 - (1 << (E - 1));
-        int exponent = (hex >> M) & ((1 << E) - 1);
-        const unsigned mantissa = hex & ((1 << M) - 1);
-        const unsigned sign = (hex >> (E + M)) << 31;
+        u32 exponent = (hex >> M) & exponent_mask;
+        const u32 mantissa = hex & mantissa_mask;
+        const u32 sign = (hex & sign_mask) << (31 - M - E);
 
-        if (hex & ((1 << (width - 1)) - 1)) {
-            if (exponent == (1 << E) - 1)
+        if (hex & (mantissa_mask | (exponent_mask << M))) {
+            if (exponent == exponent_mask) {
                 exponent = 255;
-            else
+            } else {
                 exponent += bias;
+            }
+
             hex = sign | (mantissa << (23 - M)) | (exponent << 23);
         } else {
             hex = sign;
         }
 
         std::memcpy(&res.value, &hex, sizeof(float));
-
         return res;
     }
 
-    static Float<M, E> Zero() {
+    static Float Zero() {
         return FromFloat32(0.f);
     }
 
@@ -64,80 +68,77 @@ public:
         return value;
     }
 
-    Float<M, E> operator*(const Float<M, E>& flt) const {
+    Float operator*(const Float& flt) const {
         float result = value * flt.ToFloat32();
         // PICA gives 0 instead of NaN when multiplying by inf
-        if (std::isnan(result))
-            if (!std::isnan(value) && !std::isnan(flt.ToFloat32()))
-                result = 0.f;
-        return Float<M, E>::FromFloat32(result);
+        if (std::isnan(result) && !std::isnan(value) && !std::isnan(flt.ToFloat32())) {
+            result = 0.f;
+        }
+
+        return Float::FromFloat32(result);
     }
 
-    Float<M, E> operator/(const Float<M, E>& flt) const {
-        return Float<M, E>::FromFloat32(ToFloat32() / flt.ToFloat32());
+    Float operator/(const Float& flt) const {
+        return Float::FromFloat32(ToFloat32() / flt.ToFloat32());
     }
 
-    Float<M, E> operator+(const Float<M, E>& flt) const {
-        return Float<M, E>::FromFloat32(ToFloat32() + flt.ToFloat32());
+    Float operator+(const Float& flt) const {
+        return Float::FromFloat32(ToFloat32() + flt.ToFloat32());
     }
 
-    Float<M, E> operator-(const Float<M, E>& flt) const {
-        return Float<M, E>::FromFloat32(ToFloat32() - flt.ToFloat32());
+    Float operator-(const Float& flt) const {
+        return Float::FromFloat32(ToFloat32() - flt.ToFloat32());
     }
 
-    Float<M, E>& operator*=(const Float<M, E>& flt) {
+    Float& operator*=(const Float& flt) {
         value = operator*(flt).value;
         return *this;
     }
 
-    Float<M, E>& operator/=(const Float<M, E>& flt) {
+    Float& operator/=(const Float& flt) {
         value /= flt.ToFloat32();
         return *this;
     }
 
-    Float<M, E>& operator+=(const Float<M, E>& flt) {
+    Float& operator+=(const Float& flt) {
         value += flt.ToFloat32();
         return *this;
     }
 
-    Float<M, E>& operator-=(const Float<M, E>& flt) {
+    Float& operator-=(const Float& flt) {
         value -= flt.ToFloat32();
         return *this;
     }
 
-    Float<M, E> operator-() const {
-        return Float<M, E>::FromFloat32(-ToFloat32());
+    Float operator-() const {
+        return Float::FromFloat32(-ToFloat32());
     }
 
-    bool operator<(const Float<M, E>& flt) const {
+    bool operator<(const Float& flt) const {
         return ToFloat32() < flt.ToFloat32();
     }
 
-    bool operator>(const Float<M, E>& flt) const {
+    bool operator>(const Float& flt) const {
         return ToFloat32() > flt.ToFloat32();
     }
 
-    bool operator>=(const Float<M, E>& flt) const {
+    bool operator>=(const Float& flt) const {
         return ToFloat32() >= flt.ToFloat32();
     }
 
-    bool operator<=(const Float<M, E>& flt) const {
+    bool operator<=(const Float& flt) const {
         return ToFloat32() <= flt.ToFloat32();
     }
 
-    bool operator==(const Float<M, E>& flt) const {
+    bool operator==(const Float& flt) const {
         return ToFloat32() == flt.ToFloat32();
     }
 
-    bool operator!=(const Float<M, E>& flt) const {
+    bool operator!=(const Float& flt) const {
         return ToFloat32() != flt.ToFloat32();
     }
 
 private:
-    static const unsigned MASK = (1 << (M + E + 1)) - 1;
-    static const unsigned MANTISSA_MASK = (1 << M) - 1;
-    static const unsigned EXPONENT_MASK = (1 << E) - 1;
-
     // Stored as a regular float, merely for convenience
     // TODO: Perform proper arithmetic on this!
     float value;

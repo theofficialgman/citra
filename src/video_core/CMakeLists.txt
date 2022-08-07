@@ -9,12 +9,12 @@ add_library(video_core STATIC
     pica.cpp
     pica.h
     pica_state.h
-    pica_types.h
     primitive_assembly.cpp
     primitive_assembly.h
     rasterizer_interface.h
-    regs.cpp
-    regs.h
+    pica_regs.inc
+    pica.cpp
+    pica.h
     regs_framebuffer.h
     regs_lighting.h
     regs_pipeline.h
@@ -23,6 +23,15 @@ add_library(video_core STATIC
     regs_texturing.h
     renderer_base.cpp
     renderer_base.h
+    common/backend.h
+    common/buffer.h
+    common/framebuffer.h
+    common/pica_types.h
+    common/shader_gen.cpp
+    common/shader_gen.h
+    common/shader.h
+    common/texture.h
+    common/pipeline.h
     renderer_opengl/frame_dumper_opengl.cpp
     renderer_opengl/frame_dumper_opengl.h
     renderer_opengl/gl_rasterizer.cpp
@@ -73,16 +82,21 @@ add_library(video_core STATIC
     renderer_vulkan/pica_to_vulkan.h
     renderer_vulkan/renderer_vulkan.cpp
     renderer_vulkan/renderer_vulkan.h
+    renderer_vulkan/vk_backend.cpp
+    renderer_vulkan/vk_backend.h
     renderer_vulkan/vk_buffer.cpp
     renderer_vulkan/vk_buffer.h
     renderer_vulkan/vk_common.cpp
     renderer_vulkan/vk_common.h
     renderer_vulkan/vk_format_reinterpreter.cpp
     renderer_vulkan/vk_format_reinterpreter.h
+    renderer_vulkan/vk_format_util.cpp
+    renderer_vulkan/vk_format_util.h
     renderer_vulkan/vk_instance.cpp
     renderer_vulkan/vk_instance.h
-    renderer_vulkan/vk_pipeline_builder.cpp
-    renderer_vulkan/vk_pipeline_builder.h
+    renderer_vulkan/vk_pipeline.cpp
+    renderer_vulkan/vk_pipeline.h
+    renderer_vulkan/vk_platform.h
     renderer_vulkan/vk_rasterizer_cache.cpp
     renderer_vulkan/vk_rasterizer_cache.h
     renderer_vulkan/vk_rasterizer.cpp
@@ -90,6 +104,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_state.h
     renderer_vulkan/vk_shader_gen.cpp
     renderer_vulkan/vk_shader_gen.h
+    renderer_vulkan/vk_shader.cpp
+    renderer_vulkan/vk_shader.h
     renderer_vulkan/vk_state.cpp
     renderer_vulkan/vk_state.h
     renderer_vulkan/vk_surface_params.cpp
@@ -180,7 +196,7 @@ target_link_libraries(video_core PRIVATE glad::glad glm::glm nihstro-headers Boo
 # Include Vulkan headers
 target_include_directories(video_core PRIVATE ../../externals/Vulkan-Headers/include)
 target_include_directories(video_core PRIVATE ../../externals/vma/include)
-target_link_libraries(video_core PRIVATE glslang SPIRV glslang-default-resource-limits OGLCompiler)
+target_link_libraries(video_core PRIVATE glslang SPIRV robin_hood::robin_hood)
 
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak::xbyak)

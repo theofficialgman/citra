@@ -45,7 +45,7 @@ private:
     // The offset between record id and row id, assuming record ids are assigned
     // continuously and only the 'Clear' action can be performed, this is enough.
     // The initial value is 1, which means record 1 = row 0.
-    int id_offset = 1;
+    std::size_t id_offset = 1;
     std::vector<IPCDebugger::RequestRecord> records;
 };
 

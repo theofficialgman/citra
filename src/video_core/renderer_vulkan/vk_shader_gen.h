@@ -4,46 +4,23 @@
 
 #pragma once
 
-#include <array>
-#include <cstring>
-#include <functional>
-#include <optional>
-#include <string>
-#include <type_traits>
-#include "common/hash.h"
-#include "video_core/regs.h"
-#include "video_core/shader/shader.h"
-#include "video_core/renderer_vulkan/vk_shader_state.h"
+#include "video_core/common/shader_gen.h"
 
-namespace Vulkan {
+namespace VideoCore::Vulkan {
 
-/**
- * Returns the vertex and fragment shader sources used for presentation
- * @returns String of shader source code
- */
-std::string GetPresentVertexShader();
-std::string GetPresentFragmentShader();
+class ShaderGenerator : public VideoCore::ShaderGeneratorBase {
+public:
+    ShaderGenerator() = default;
+    ~ShaderGenerator() override = default;
 
-/**
- * Generates the GLSL vertex shader program source code that accepts vertices from software shader
- * and directly passes them to the fragment shader.
- * @param separable_shader generates shader that can be used for separate shader object
- * @returns String of the shader source code
- */
-std::string GenerateTrivialVertexShader(bool separable_shader);
+    std::string GenerateTrivialVertexShader(bool separable_shader) override;
 
-/**
- * Generates the GLSL fragment shader program source code for the current Pica state
- * @param config ShaderCacheKey object generated for the current Pica state, used for the shader
- *               configuration (NOTE: Use state in this struct only, not the Pica registers!)
- * @param separable_shader generates shader that can be used for separate shader object
- * @returns String of the shader source code
- */
-std::string GenerateFragmentShader(const PicaFSConfig& config);
+    std::string GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config,
+                                     bool separable_shader) override;
 
-/**
- * Generates a SPRI-V shader module from the provided GLSL source code
- */
-vk::ShaderModule CompileShader(const std::string& source, vk::ShaderStageFlagBits stage);
+    std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config, bool separable_shader) override;
 
-} // namespace Vulkan
+    std::string GenerateFragmentShader(const PicaFSConfig& config, bool separable_shader) override;
+};
+
+} // namespace VideoCore

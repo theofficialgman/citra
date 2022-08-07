@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "video_core/regs_texturing.h"
 namespace Pica {
 
 /// Initialize Pica state

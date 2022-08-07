@@ -13,6 +13,23 @@
 
 namespace Pica {
 
+enum WrapMode : u32 {
+    ClampToEdge = 0,
+    ClampToBorder = 1,
+    Repeat = 2,
+    MirroredRepeat = 3,
+    // Mode 4-7 produces some weird result and may be just invalid:
+    ClampToEdge2 = 4,   // Positive coord: clamp to edge; negative coord: repeat
+    ClampToBorder2 = 5, // Positive coord: clamp to border; negative coord: repeat
+    Repeat2 = 6,        // Same as Repeat
+    Repeat3 = 7,        // Same as Repeat
+};
+
+enum TextureFilter : u32 {
+    Nearest = 0,
+    Linear = 1,
+};
+
 struct TexturingRegs {
     struct TextureConfig {
         enum TextureType : u32 {
@@ -22,23 +39,6 @@ struct TexturingRegs {
             Projection2D = 3,
             ShadowCube = 4,
             Disabled = 5,
-        };
-
-        enum WrapMode : u32 {
-            ClampToEdge = 0,
-            ClampToBorder = 1,
-            Repeat = 2,
-            MirroredRepeat = 3,
-            // Mode 4-7 produces some weird result and may be just invalid:
-            ClampToEdge2 = 4,   // Positive coord: clamp to edge; negative coord: repeat
-            ClampToBorder2 = 5, // Positive coord: clamp to border; negative coord: repeat
-            Repeat2 = 6,        // Same as Repeat
-            Repeat3 = 7,        // Same as Repeat
-        };
-
-        enum TextureFilter : u32 {
-            Nearest = 0,
-            Linear = 1,
         };
 
         union {

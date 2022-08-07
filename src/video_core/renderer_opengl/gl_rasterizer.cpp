@@ -414,7 +414,7 @@ bool RasterizerOpenGL::SetupGeometryShader() {
     MICROPROFILE_SCOPE(OpenGL_GS);
     const auto& regs = Pica::g_state.regs;
 
-    if (regs.pipeline.use_gs != Pica::PipelineRegs::UseGS::No) {
+    if (regs.pipeline.use_gs != Pica::UseGS::No) {
         LOG_ERROR(Render_OpenGL, "Accelerate draw doesn't support geometry shader");
         return false;
     }

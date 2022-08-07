@@ -9,7 +9,7 @@ endif()
 # Configure vcpkg
 set(VCPKG_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/externals/vcpkg")
 if (WIN32)
-    execute_process(COMMAND cmd /C "${VCPKG_DIRECTORY}/bootstrap-vcpkg.bat")
+    #execute_process(COMMAND cmd /C "${VCPKG_DIRECTORY}/bootstrap-vcpkg.bat")
     set(VCPKG_EXECUTABLE "${VCPKG_DIRECTORY}/vcpkg.exe")
 else()
     execute_process(COMMAND bash "${VCPKG_DIRECTORY}/bootstrap-vcpkg.sh")

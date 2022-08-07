@@ -12,6 +12,15 @@
 namespace Common {
 
 /**
+ * Disables rehashing for std::unordered_map
+ */
+struct IdentityHash {
+    u64 operator()(const u64 hash) const {
+        return hash;
+    }
+};
+
+/**
  * Computes a 64-bit hash over the specified block of data
  * @param data Block of data to compute hash over
  * @param len Length of data (in bytes) to compute hash over
@@ -31,6 +40,14 @@ static inline u64 ComputeStructHash64(const T& data) noexcept {
     static_assert(std::is_trivially_copyable_v<T>,
                   "Type passed to ComputeStructHash64 must be trivially copyable");
     return ComputeHash64(&data, sizeof(data));
+}
+
+/**
+ * Combines hash lhs with hash rhs providing a unique result.
+ */
+static inline std::size_t HashCombine(std::size_t lhs, std::size_t rhs) noexcept {
+  lhs ^= rhs + 0x9e3779b9 + (lhs << 6) + (lhs >> 2);
+  return lhs;
 }
 
 /// A helper template that ensures the padding in a struct is initialized by memsetting to 0.

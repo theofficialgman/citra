@@ -944,16 +944,14 @@ void Config::SaveMultiplayerValues() {
     // Write ban list
     qt_config->beginWriteArray(QStringLiteral("username_ban_list"));
     for (std::size_t i = 0; i < UISettings::values.ban_list.first.size(); ++i) {
-        int index = static_cast<int>(i);
-        qt_config->setArrayIndex(index);
+        qt_config->setArrayIndex(static_cast<int>(i));
         WriteSetting(QStringLiteral("username"),
                      QString::fromStdString(UISettings::values.ban_list.first[i]));
     }
     qt_config->endArray();
     qt_config->beginWriteArray(QStringLiteral("ip_ban_list"));
     for (std::size_t i = 0; i < UISettings::values.ban_list.second.size(); ++i) {
-        int index = static_cast<int>(i);
-        qt_config->setArrayIndex(index);
+        qt_config->setArrayIndex(static_cast<int>(i));
         WriteSetting(QStringLiteral("ip"),
                      QString::fromStdString(UISettings::values.ban_list.second[i]));
     }

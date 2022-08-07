@@ -5,21 +5,11 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
-#include <cstring>
-#include <memory>
 #include <vector>
 #include <glm/glm.hpp>
-#include "common/bit_field.h"
 #include "common/common_types.h"
-#include "common/vector_math.h"
-#include "core/hw/gpu.h"
-#include "video_core/pica_state.h"
-#include "video_core/pica_types.h"
 #include "video_core/rasterizer_interface.h"
-#include "video_core/regs_framebuffer.h"
 #include "video_core/regs_lighting.h"
-#include "video_core/regs_rasterizer.h"
 #include "video_core/regs_texturing.h"
 #include "video_core/shader/shader.h"
 #include "video_core/renderer_vulkan/vk_state.h"
@@ -31,7 +21,11 @@ class EmuWindow;
 
 namespace Vulkan {
 
-enum class UniformBindings : u32 { Common, VS, GS };
+enum class UniformBindings : u32 {
+    Common = 0,
+    VertexShader = 1,
+    GeometryShader = 2
+};
 
 struct LightSrc {
     alignas(16) glm::vec3 specular_0;
@@ -79,14 +73,13 @@ struct UniformData {
     alignas(16) glm::vec4 clip_coef;
 };
 
-static_assert(
-    sizeof(UniformData) == 0x4F0,
-    "The size of the UniformData structure has changed, update the structure in the shader");
+static_assert(sizeof(UniformData) == 0x4F0,
+              "The size of the UniformData structure has changed, update the structure in the shader");
 static_assert(sizeof(UniformData) < 16384,
               "UniformData structure must be less than 16kb as per the OpenGL spec");
 
 /// Uniform struct for the Uniform Buffer Object that contains PICA vertex/geometry shader uniforms.
-// NOTE: the same rule from UniformData also applies here.
+/// NOTE: the same rule from UniformData also applies here.
 struct PicaUniformsData {
     void SetFromRegs(const Pica::ShaderRegs& regs, const Pica::Shader::ShaderSetup& setup);
 
@@ -102,17 +95,18 @@ struct PicaUniformsData {
 struct VSUniformData {
     PicaUniformsData uniforms;
 };
-static_assert(
-    sizeof(VSUniformData) == 1856,
-    "The size of the VSUniformData structure has changed, update the structure in the shader");
+
+static_assert(sizeof(VSUniformData) == 1856,
+              "The size of the VSUniformData structure has changed, update the structure in the shader");
 static_assert(sizeof(VSUniformData) < 16384,
               "VSUniformData structure must be less than 16kb as per the OpenGL spec");
 
 struct ScreenInfo;
+class CommandScheduler;
 
 class RasterizerVulkan : public VideoCore::RasterizerInterface {
 public:
-    explicit RasterizerVulkan(Frontend::EmuWindow& emu_window);
+    explicit RasterizerVulkan(CommandScheduler& scheduler, Frontend::EmuWindow& emu_window);
     ~RasterizerVulkan() override;
 
     void LoadDiskResources(const std::atomic_bool& stop_loading,
@@ -252,6 +246,7 @@ private:
     };
 
 private:
+    CommandScheduler& scheduler;
     RasterizerCacheVulkan res_cache;
     std::vector<HardwareVertex> vertex_batch;
     bool shader_dirty = true;
@@ -269,13 +264,7 @@ private:
         bool dirty;
     } uniform_block_data = {};
 
-    // They shall be big enough for about one frame.
-    static constexpr std::size_t VERTEX_BUFFER_SIZE = 64 * 1024 * 1024;
-    static constexpr std::size_t INDEX_BUFFER_SIZE = 16 * 1024 * 1024;
-    static constexpr std::size_t UNIFORM_BUFFER_SIZE = 2 * 1024 * 1024;
-    static constexpr std::size_t TEXTURE_BUFFER_SIZE = 1 * 1024 * 1024;
-
-    Buffer vertex_buffer, index_buffer;
+    StreamBuffer vertex_buffer, index_buffer;
     StreamBuffer uniform_buffer, texture_buffer_lut_lf, texture_buffer_lut;
 
     u32 uniform_buffer_alignment;
@@ -293,4 +282,4 @@ private:
     bool allow_shadow{};
 };
 
-} // namespace OpenGL
+} // namespace Vulkan

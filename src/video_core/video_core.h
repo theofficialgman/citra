@@ -6,8 +6,8 @@
 
 #include <atomic>
 #include <iostream>
-#include <functional>
 #include <memory>
+#include <functional>
 #include "core/frontend/emu_window.h"
 
 namespace Frontend {

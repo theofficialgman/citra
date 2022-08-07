@@ -9,18 +9,17 @@
 #include <tuple>
 #include <utility>
 #include <fmt/format.h>
-#include <nihstro/shader_bytecode.h>
 #include "common/assert.h"
 #include "common/common_types.h"
+#include "video_core/shader_compiler/frontend/opcode.h"
+#include "video_core/shader_compiler/frontned/instruction.h"
+#include "video_core/shader_compiler/frontend/register.h"
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
 
-namespace OpenGL::ShaderDecompiler {
+using Pica::Shader::OpCode;
+using Pica::Shader::DestRegister;
 
-using nihstro::Instruction;
-using nihstro::OpCode;
-using nihstro::RegisterType;
-using nihstro::SourceRegister;
-using nihstro::SwizzlePattern;
+namespace OpenGL::ShaderDecompiler {
 
 constexpr u32 PROGRAM_END = Pica::Shader::MAX_PROGRAM_CODE_LENGTH;
 
