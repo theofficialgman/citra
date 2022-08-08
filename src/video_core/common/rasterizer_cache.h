@@ -233,8 +233,8 @@ public:
     const CachedTextureCube& GetTextureCube(const TextureCubeConfig& config);
 
     // Get the color and depth surfaces based on the framebuffer configuration
-    SurfaceSurfaceRect_Tuple GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
-                                                    const Common::Rectangle<s32>& viewport_rect);
+    FramebufferHandle GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
+                                             Common::Rectangle<s32> viewport_rect);
 
     // Get a surface that matches the fill config
     Surface GetFillSurface(const GPU::Regs::MemoryFillConfig& config);

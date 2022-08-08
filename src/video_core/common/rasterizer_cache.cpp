@@ -252,6 +252,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
         framebuffer_cache.emplace(framebuffer_info, framebuffer);
     }
 
+    framebuffer->SetDrawRect(fill_rect);
     surface->InvalidateAllWatcher();
 
     if (surface->type == SurfaceType::Color || surface->type == SurfaceType::Texture) {
@@ -259,7 +260,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
         tex_info.format = static_cast<Pica::TexturingRegs::TextureFormat>(surface->pixel_format);
         Common::Vec4f color_values = Pica::Texture::LookupTexture(fill_data, 0, 0, tex_info) / 255.f;
 
-        framebuffer->DoClear(fill_rect, color_values, 0.0f, 0);
+        framebuffer->DoClear(color_values, 0.0f, 0);
     } else if (surface->type == SurfaceType::Depth) {
         u32 depth_32bit = 0;
         float depth_float;
@@ -275,7 +276,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
             UNREACHABLE();
         }
 
-        framebuffer->DoClear(fill_rect, {}, depth_float, 0);
+        framebuffer->DoClear({}, depth_float, 0);
     } else if (surface->type == SurfaceType::DepthStencil) {
         u32 value_32bit;
         std::memcpy(&value_32bit, fill_data, sizeof(u32));
@@ -283,7 +284,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
         float depth_float = (value_32bit & 0xFFFFFF) / 16777215.0f; // 2^24 - 1
         u8 stencil_int = (value_32bit >> 24);
 
-        framebuffer->DoClear(fill_rect, {}, depth_float, stencil_int);
+        framebuffer->DoClear({}, depth_float, stencil_int);
     }
     return true;
 }
@@ -1165,10 +1166,9 @@ const CachedTextureCube& RasterizerCache::GetTextureCube(const TextureCubeConfig
     return cube;
 }
 
-SurfaceSurfaceRect_Tuple RasterizerCache::GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
-                                                                 const Common::Rectangle<s32>& viewport_rect) {
-    const auto& regs = Pica::g_state.regs;
-    const auto& config = regs.framebuffer.framebuffer;
+FramebufferHandle RasterizerCache::GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
+                                                          Common::Rectangle<s32> viewport_rect) {
+    const auto& config = Pica::g_state.regs.framebuffer.framebuffer;
 
     // update resolution_scale_factor and reset cache if changed
     /*const bool scale_factor_changed = resolution_scale_factor != VideoCore::GetResolutionScaleFactor();
@@ -1181,14 +1181,14 @@ SurfaceSurfaceRect_Tuple RasterizerCache::GetFramebufferSurfaces(bool using_colo
         texture_cube_cache.clear();
     }*/
 
-    Common::Rectangle<u32> viewport_clamped{
+    Common::Rectangle<u32> viewport_clamped = {
         static_cast<u32>(std::clamp(viewport_rect.left, 0, static_cast<s32>(config.GetWidth()))),
         static_cast<u32>(std::clamp(viewport_rect.top, 0, static_cast<s32>(config.GetHeight()))),
         static_cast<u32>(std::clamp(viewport_rect.right, 0, static_cast<s32>(config.GetWidth()))),
-        static_cast<u32>(
-            std::clamp(viewport_rect.bottom, 0, static_cast<s32>(config.GetHeight())))};
+        static_cast<u32>(std::clamp(viewport_rect.bottom, 0, static_cast<s32>(config.GetHeight())))
+    };
 
-    // get color and depth surfaces
+    // Get color and depth surfaces
     SurfaceParams color_params;
     color_params.is_tiled = true;
     color_params.res_scale = resolution_scale_factor;
@@ -1210,22 +1210,22 @@ SurfaceSurfaceRect_Tuple RasterizerCache::GetFramebufferSurfaces(bool using_colo
     // Make sure that framebuffers don't overlap if both color and depth are being used
     if (using_color_fb && using_depth_fb &&
         boost::icl::length(color_vp_interval & depth_vp_interval)) {
-        LOG_CRITICAL(Render_OpenGL, "Color and depth framebuffer memory regions overlap; "
+        LOG_CRITICAL(Render_Vulkan, "Color and depth framebuffer memory regions overlap; "
                                     "overlapping framebuffers not supported!");
         using_depth_fb = false;
     }
 
     Common::Rectangle<u32> color_rect{};
     Surface color_surface = nullptr;
-    if (using_color_fb)
-        std::tie(color_surface, color_rect) =
-            GetSurfaceSubRect(color_params, ScaleMatch::Exact, false);
+    if (using_color_fb) {
+        std::tie(color_surface, color_rect) = GetSurfaceSubRect(color_params, ScaleMatch::Exact, false);
+    }
 
     Common::Rectangle<u32> depth_rect{};
     Surface depth_surface = nullptr;
-    if (using_depth_fb)
-        std::tie(depth_surface, depth_rect) =
-            GetSurfaceSubRect(depth_params, ScaleMatch::Exact, false);
+    if (using_depth_fb) {
+        std::tie(depth_surface, depth_rect) = GetSurfaceSubRect(depth_params, ScaleMatch::Exact, false);
+    }
 
     Common::Rectangle<u32> fb_rect{};
     if (color_surface != nullptr && depth_surface != nullptr) {
@@ -1243,18 +1243,35 @@ SurfaceSurfaceRect_Tuple RasterizerCache::GetFramebufferSurfaces(bool using_colo
         fb_rect = depth_rect;
     }
 
+    // Validate surfaces before the renderer uses them
     if (color_surface != nullptr) {
         ValidateSurface(color_surface, boost::icl::first(color_vp_interval),
                         boost::icl::length(color_vp_interval));
         color_surface->InvalidateAllWatcher();
     }
+
     if (depth_surface != nullptr) {
         ValidateSurface(depth_surface, boost::icl::first(depth_vp_interval),
                         boost::icl::length(depth_vp_interval));
         depth_surface->InvalidateAllWatcher();
     }
 
-    return std::make_tuple(color_surface, depth_surface, fb_rect);
+    const FramebufferInfo framebuffer_info = {
+        .color = using_color_fb ? color_surface->texture : TextureHandle{},
+        .depth_stencil = using_depth_fb ? depth_surface->texture : TextureHandle{}
+    };
+
+    // Search the framebuffer cache, otherwise create new framebuffer
+    FramebufferHandle framebuffer;
+    if (auto iter = framebuffer_cache.find(framebuffer_info); iter != framebuffer_cache.end()) {
+        framebuffer = iter->second;
+    } else {
+        framebuffer = backend->CreateFramebuffer(framebuffer_info);
+        framebuffer_cache.emplace(framebuffer_info, framebuffer);
+    }
+
+    framebuffer->SetDrawRect(fb_rect);
+    return framebuffer;
 }
 
 Surface RasterizerCache::GetFillSurface(const GPU::Regs::MemoryFillConfig& config) {

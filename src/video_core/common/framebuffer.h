@@ -44,24 +44,30 @@ public:
     FramebufferBase& operator=(const FramebufferBase&) = delete;
 
     // Clears the attachments bound to the framebuffer
-    virtual void DoClear(Common::Rectangle<u32> rect, Common::Vec4f color, float depth, u8 stencil) = 0;
+    virtual void DoClear(Common::Vec4f color, float depth, u8 stencil) = 0;
 
-    /// Returns an immutable reference to the color attachment
-    const TextureHandle& GetColorAttachment() const {
+    // Returns an immutable reference to the color attachment
+    TextureHandle GetColorAttachment() const {
         return info.color;
     }
 
-    /// Returns an immutable reference to the depth/stencil attachment
-    const TextureHandle& GetDepthStencilAttachment() const {
+    // Returns an immutable reference to the depth/stencil attachment
+    TextureHandle GetDepthStencilAttachment() const {
         return info.depth_stencil;
     }
 
-    /// Returns how many samples the framebuffer takes
+    // Sets the area of the framebuffer affected by draw operations
+    void SetDrawRect(Rect2D rect) {
+        draw_rect = rect;
+    }
+
+    // Returns how many samples the framebuffer takes
     MSAASamples GetMSAASamples() const {
         return info.samples;
     }
 
 protected:
+    Rect2D draw_rect;
     FramebufferInfo info;
 };
 

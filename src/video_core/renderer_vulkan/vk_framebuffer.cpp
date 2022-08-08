@@ -57,7 +57,7 @@ Framebuffer::~Framebuffer() {
     device.destroyFramebuffer(framebuffer);
 }
 
-void Framebuffer::DoClear(Common::Rectangle<u32> rect, Common::Vec4f color, float depth, u8 stencil) {
+void Framebuffer::DoClear(Common::Vec4f color, float depth, u8 stencil) {
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
 
     u32 clear_value_count = 0;
@@ -84,7 +84,7 @@ void Framebuffer::DoClear(Common::Rectangle<u32> rect, Common::Vec4f color, floa
     const vk::RenderPassBeginInfo begin_info = {
         .renderPass = clear_renderpass,
         .framebuffer = framebuffer,
-        .renderArea = ToVkRect2D(rect),
+        .renderArea = ToVkRect2D(draw_rect),
         .clearValueCount = clear_value_count,
         .pClearValues = clear_values.data()
     };

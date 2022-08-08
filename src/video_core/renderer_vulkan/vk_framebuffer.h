@@ -18,7 +18,7 @@ public:
                 vk::RenderPass load_renderpass, vk::RenderPass clear_renderpass);
     ~Framebuffer() override;
 
-    void DoClear(Common::Rectangle<u32> rect, Common::Vec4f color, float depth, u8 stencil) override;
+    void DoClear(Common::Vec4f color, float depth, u8 stencil) override;
 
     vk::Framebuffer GetHandle() const {
         return framebuffer;
