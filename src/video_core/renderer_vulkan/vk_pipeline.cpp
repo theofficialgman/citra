@@ -183,8 +183,8 @@ PipelineLayout::~PipelineLayout() {
     }
 }
 
-Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type,
-                   PipelineInfo info, vk::PipelineCache cache) : PipelineBase(type, info),
+Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type, PipelineInfo info,
+                   vk::RenderPass renderpass, vk::PipelineCache cache) : PipelineBase(type, info),
     instance(instance), owner(owner) {
 
     vk::Device device = instance.GetDevice();
@@ -331,7 +331,7 @@ Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type,
             .pColorBlendState = &color_blending,
             .pDynamicState = &dynamic_info,
             .layout = owner.GetLayout(),
-            .renderPass = {}
+            .renderPass = renderpass
         };
 
         if (auto result = device.createGraphicsPipeline(cache, pipeline_info); result.result == vk::Result::eSuccess) {

@@ -10,20 +10,20 @@
 namespace Pica {
 
 template <typename VertexType>
-PrimitiveAssembler<VertexType>::PrimitiveAssembler(PipelineRegs::TriangleTopology topology)
+PrimitiveAssembler<VertexType>::PrimitiveAssembler(Pica::TriangleTopology topology)
     : topology(topology) {}
 
 template <typename VertexType>
 void PrimitiveAssembler<VertexType>::SubmitVertex(const VertexType& vtx,
                                                   const TriangleHandler& triangle_handler) {
     switch (topology) {
-    case PipelineRegs::TriangleTopology::List:
-    case PipelineRegs::TriangleTopology::Shader:
+    case Pica::TriangleTopology::List:
+    case Pica::TriangleTopology::Shader:
         if (buffer_index < 2) {
             buffer[buffer_index++] = vtx;
         } else {
             buffer_index = 0;
-            if (topology == PipelineRegs::TriangleTopology::Shader && winding) {
+            if (topology == Pica::TriangleTopology::Shader && winding) {
                 triangle_handler(buffer[1], buffer[0], vtx);
                 winding = false;
             } else {
@@ -32,8 +32,8 @@ void PrimitiveAssembler<VertexType>::SubmitVertex(const VertexType& vtx,
         }
         break;
 
-    case PipelineRegs::TriangleTopology::Strip:
-    case PipelineRegs::TriangleTopology::Fan:
+    case Pica::TriangleTopology::Strip:
+    case Pica::TriangleTopology::Fan:
         if (strip_ready)
             triangle_handler(buffer[0], buffer[1], vtx);
 
@@ -41,9 +41,9 @@ void PrimitiveAssembler<VertexType>::SubmitVertex(const VertexType& vtx,
 
         strip_ready |= (buffer_index == 1);
 
-        if (topology == PipelineRegs::TriangleTopology::Strip)
+        if (topology == Pica::TriangleTopology::Strip)
             buffer_index = !buffer_index;
-        else if (topology == PipelineRegs::TriangleTopology::Fan)
+        else if (topology == Pica::TriangleTopology::Fan)
             buffer_index = 1;
         break;
 
@@ -66,7 +66,7 @@ void PrimitiveAssembler<VertexType>::Reset() {
 }
 
 template <typename VertexType>
-void PrimitiveAssembler<VertexType>::Reconfigure(PipelineRegs::TriangleTopology topology) {
+void PrimitiveAssembler<VertexType>::Reconfigure(Pica::TriangleTopology topology) {
     Reset();
     this->topology = topology;
 }
@@ -77,7 +77,7 @@ bool PrimitiveAssembler<VertexType>::IsEmpty() const {
 }
 
 template <typename VertexType>
-PipelineRegs::TriangleTopology PrimitiveAssembler<VertexType>::GetTopology() const {
+Pica::TriangleTopology PrimitiveAssembler<VertexType>::GetTopology() const {
     return topology;
 }
 

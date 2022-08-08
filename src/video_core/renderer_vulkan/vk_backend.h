@@ -15,7 +15,8 @@ namespace VideoCore::Vulkan {
 
 class Texture;
 
-constexpr u32 RENDERPASS_COUNT = MAX_COLOR_FORMATS * MAX_DEPTH_FORMATS;
+constexpr u32 RENDERPASS_COUNT = (MAX_COLOR_FORMATS + 1) * (MAX_DEPTH_FORMATS + 1);
+constexpr u32 DESCRIPTOR_BANK_SIZE = 64;
 
 class Backend : public VideoCore::BackendBase {
 public:
@@ -39,7 +40,7 @@ public:
               u32 base_vertex, u32 num_vertices) override;
 
     void DrawIndexed(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
-                     BufferHandle vertex_buffer, BufferHandle index_buffer,
+                     BufferHandle vertex_buffer, BufferHandle index_buffer, AttribType index_type,
                      u32 base_index, u32 num_indices, u32 base_vertex) override;
 
     void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,
@@ -57,6 +58,10 @@ public:
 
 private:
     vk::RenderPass CreateRenderPass(vk::Format color, vk::Format depth) const;
+    vk::RenderPass GetRenderPass(TextureFormat color, TextureFormat depth) const;
+
+    // Allocates and binds descriptor sets for the provided pipeline
+    void BindDescriptorSets(PipelineHandle pipeline);
 
 private:
     Instance instance;
@@ -70,6 +75,9 @@ private:
 
     // Pipeline layout cache
     std::unordered_map<PipelineLayoutInfo, PipelineLayout> pipeline_layouts;
+
+    // Descriptor pools
+    std::array<vk::DescriptorPool, SCHEDULER_COMMAND_COUNT> descriptor_pools;
 };
 
 } // namespace Vulkan

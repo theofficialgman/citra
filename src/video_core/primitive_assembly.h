@@ -21,8 +21,7 @@ struct PrimitiveAssembler {
     using TriangleHandler =
         std::function<void(const VertexType& v0, const VertexType& v1, const VertexType& v2)>;
 
-    explicit PrimitiveAssembler(
-        PipelineRegs::TriangleTopology topology = PipelineRegs::TriangleTopology::List);
+    explicit PrimitiveAssembler(Pica::TriangleTopology topology = Pica::TriangleTopology::List);
 
     /*
      * Queues a vertex, builds primitives from the vertex queue according to the given
@@ -46,7 +45,7 @@ struct PrimitiveAssembler {
     /**
      * Reconfigures the PrimitiveAssembler to use a different triangle topology.
      */
-    void Reconfigure(PipelineRegs::TriangleTopology topology);
+    void Reconfigure(Pica::TriangleTopology topology);
 
     /**
      * Returns whether the PrimitiveAssembler has an empty internal buffer.
@@ -56,10 +55,10 @@ struct PrimitiveAssembler {
     /**
      * Returns the current topology.
      */
-    PipelineRegs::TriangleTopology GetTopology() const;
+    Pica::TriangleTopology GetTopology() const;
 
 private:
-    PipelineRegs::TriangleTopology topology;
+    Pica::TriangleTopology topology;
 
     int buffer_index = 0;
     std::array<VertexType, 2> buffer;

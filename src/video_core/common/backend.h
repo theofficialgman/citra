@@ -46,7 +46,7 @@ public:
 
     // Start an indexed draw operation
     virtual void DrawIndexed(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
-                             BufferHandle vertex_buffer, BufferHandle index_buffer,
+                             BufferHandle vertex_buffer, BufferHandle index_buffer, AttribType index_type,
                              u32 base_index, u32 num_indices, u32 base_vertex) = 0;
 
     // Executes a compute shader

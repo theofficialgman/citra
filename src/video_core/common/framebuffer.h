@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "common/vector_math.h"
 #include "video_core/common/texture.h"
 
 namespace VideoCore {
@@ -22,12 +23,10 @@ struct FramebufferInfo {
     TextureHandle color;
     TextureHandle depth_stencil;
     MSAASamples samples = MSAASamples::x1;
-    Rect2D draw_rect{};
 
-    /// Hashes the framebuffer object and returns a unique identifier
+    // Hashes the framebuffer object and returns a unique identifier
     const u64 Hash() const {
-        // The only member IntrusivePtr has is a pointer to the
-        // handle so it's fine hash it
+        // IntrusivePtr only has a pointer member so it's fine hash it
         return Common::ComputeStructHash64(*this);
     }
 };
@@ -39,6 +38,13 @@ class FramebufferBase : public IntrusivePtrEnabled<FramebufferBase> {
 public:
     FramebufferBase(const FramebufferInfo& info) : info(info) {}
     virtual ~FramebufferBase() = default;
+
+    // Disable copy constructor
+    FramebufferBase(const FramebufferBase&) = delete;
+    FramebufferBase& operator=(const FramebufferBase&) = delete;
+
+    // Clears the attachments bound to the framebuffer
+    virtual void DoClear(Common::Rectangle<u32> rect, Common::Vec4f color, float depth, u8 stencil) = 0;
 
     /// Returns an immutable reference to the color attachment
     const TextureHandle& GetColorAttachment() const {
@@ -53,11 +59,6 @@ public:
     /// Returns how many samples the framebuffer takes
     MSAASamples GetMSAASamples() const {
         return info.samples;
-    }
-
-    /// Returns the rendering area
-    Rect2D GetDrawRectangle() const {
-        return info.draw_rect;
     }
 
 protected:

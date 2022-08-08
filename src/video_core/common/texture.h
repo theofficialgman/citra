@@ -7,6 +7,7 @@
 #include <span>
 #include "common/hash.h"
 #include "common/intrusive_ptr.h"
+#include "common/math_util.h"
 #include "video_core/regs_texturing.h"
 
 namespace VideoCore {
@@ -50,6 +51,12 @@ enum class TextureViewType : u8 {
  * @param width, height are the extent of the rectangle
  */
 struct Rect2D {
+    Rect2D() = default;
+    Rect2D(s32 x, s32 y, u32 width, u32 height) :
+        x(x), y(y), width(width), height(height) {}
+    Rect2D(Common::Rectangle<u32> rect) :
+        x(rect.left), y(rect.bottom), width(rect.GetWidth()), height(rect.GetHeight()) {}
+
     s32 x = 0;
     s32 y = 0;
     u32 width = 0;
@@ -66,6 +73,10 @@ struct TextureInfo {
     TextureType type = TextureType::Undefined;
     TextureViewType view_type = TextureViewType::Undefined;
     TextureFormat format = TextureFormat::Undefined;
+
+    void UpdateMipLevels() {
+        levels = std::log2(std::max(width, height)) + 1;
+    }
 
     const u64 Hash() const {
         return Common::ComputeStructHash64(*this);
@@ -84,39 +95,52 @@ public:
     TextureBase(const TextureInfo& info) : info(info) {}
     virtual ~TextureBase() = default;
 
-    /// Uploads pixel data to the GPU memory
+    // Disable copy constructor
+    TextureBase(const TextureBase&) = delete;
+    TextureBase& operator=(const TextureBase&) = delete;
+
+    // Uploads pixel data to the GPU memory
     virtual void Upload(Rect2D rectangle, u32 stride, std::span<const u8> data,
                         u32 level = 0) {};
 
-    /// Downloads pixel data from GPU memory
+    // Downloads pixel data from GPU memory
     virtual void Download(Rect2D rectangle, u32 stride, std::span<u8> data,
                           u32 level = 0) {};
 
-    /// Copies the rectangle area specified to the destionation texture
-    virtual void BlitTo(TextureHandle dest, Rect2D src_rectangle, Rect2D dest_rect,
-                        u32 src_level = 0, u32 dest_level = 0) {};
+    // Copies the rectangle area specified to the destionation texture
+    virtual void BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect,
+                        u32 src_level = 0, u32 dest_level = 0,
+                        u32 src_layer = 0, u32 dest_layer = 0) {};
 
-    /// Returns the unique texture identifier
+    // Generates all possible mipmaps from the texture
+    virtual void GenerateMipmaps() {};
+
+    // Returns the texture info structure
+    TextureInfo GetInfo() const {
+        return info;
+    }
+
+    // Returns the unique texture identifier
     const u64 GetHash() const {
         return info.Hash();
     }
 
-    /// Returns the width of the texture
+    // Returns the width of the texture
     u16 GetWidth() const {
         return info.width;
     }
 
-    /// Returns the height of the texture
+    // Returns the height of the texture
     u16 GetHeight() const {
         return info.height;
     }
 
-    /// Returns the number of mipmap levels allocated
+    // Returns the number of mipmap levels allocated
     u16 GetMipLevels() const {
         return info.levels;
     }
 
-    /// Returns the pixel format
+    // Returns the pixel format
     TextureFormat GetFormat() const {
         return info.format;
     }
@@ -145,6 +169,10 @@ class SamplerBase : public IntrusivePtrEnabled<SamplerBase> {
 public:
     SamplerBase(SamplerInfo info) : info(info) {}
     virtual ~SamplerBase() = default;
+
+    // Disable copy constructor
+    SamplerBase(const SamplerBase&) = delete;
+    SamplerBase& operator=(const SamplerBase&) = delete;
 
 protected:
     SamplerInfo info{};

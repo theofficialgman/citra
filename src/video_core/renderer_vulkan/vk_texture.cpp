@@ -76,8 +76,7 @@ inline vk::ImageViewType ToVkImageViewType(TextureViewType view_type) {
 Texture::Texture(Instance& instance, CommandScheduler& scheduler) :
     instance(instance), scheduler(scheduler) {}
 
-Texture::Texture(Instance& instance, CommandScheduler& scheduler,
-                 const TextureInfo& info) : TextureBase(info),
+Texture::Texture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info) : TextureBase(info),
     instance(instance), scheduler(scheduler) {
 
     // Convert the input format to another that supports attachments
@@ -122,10 +121,8 @@ Texture::Texture(Instance& instance, CommandScheduler& scheduler,
     image_view = device.createImageView(view_info);
 }
 
-Texture::Texture(Instance& instance, CommandScheduler& scheduler,
-                 vk::Image image, const TextureInfo& info) : TextureBase(info),
-    instance(instance), scheduler(scheduler), image(image),
-    is_texture_owned(false) {
+Texture::Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, const TextureInfo& info) :
+    TextureBase(info), instance(instance), scheduler(scheduler), image(image), is_texture_owned(false) {
 
     const vk::ImageViewCreateInfo view_info = {
         .image = image,
@@ -157,8 +154,7 @@ Texture::~Texture() {
     }
 }
 
-void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout,
-                         u32 level, u32 level_count) {
+void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout, u32 level, u32 level_count) {
     ASSERT(level + level_count < TEXTURE_MAX_LEVELS);
 
     // Ensure all miplevels in the range have the same layout
@@ -411,8 +407,101 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
     }
 }
 
-StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler,
-                               const TextureInfo& info) :
+void Texture::BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect, u32 src_level, u32 dest_level,
+                     u32 src_layer, u32 dest_layer) {
+    Texture* dest_texture = static_cast<Texture*>(dest.Get());
+
+    // Prepare images for transfer
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal);
+    dest_texture->Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal);
+
+    const std::array source_offsets = {
+        vk::Offset3D{source_rect.x, source_rect.y, 0},
+        vk::Offset3D{static_cast<s32>(source_rect.x + source_rect.width),
+                     static_cast<s32>(source_rect.y + source_rect.height), 1}
+    };
+
+    const std::array dest_offsets = {
+        vk::Offset3D{dest_rect.x, dest_rect.y, 0},
+        vk::Offset3D{static_cast<s32>(dest_rect.x + dest_rect.width),
+                     static_cast<s32>(dest_rect.y + dest_rect.height), 1}
+    };
+
+    const vk::ImageBlit blit_area = {
+      .srcSubresource = {
+            .aspectMask = aspect,
+            .mipLevel = src_level,
+            .baseArrayLayer = src_layer,
+            .layerCount = 1
+       },
+      .srcOffsets = source_offsets,
+      .dstSubresource = {
+            .aspectMask = dest_texture->GetAspectFlags(),
+            .mipLevel = dest_level,
+            .baseArrayLayer = dest_layer,
+            .layerCount = 1
+       },
+      .dstOffsets = dest_offsets
+    };
+
+    command_buffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
+                             dest_texture->GetHandle(), vk::ImageLayout::eTransferDstOptimal,
+                             blit_area, vk::Filter::eNearest);
+
+    // Revert changes to the layout
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+    dest_texture->Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
+// TODO: Use AMD single pass downsampler
+void Texture::GenerateMipmaps() {
+    s32 current_width = info.width;
+    s32 current_height = info.height;
+
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    for (u32 i = 1; i < info.levels; i++) {
+        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal, i - 1);
+        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal, i);
+
+        const std::array source_offsets = {
+            vk::Offset3D{0, 0, 0},
+            vk::Offset3D{current_width, current_height, 1}
+        };
+
+        const std::array dest_offsets = {
+            vk::Offset3D{0, 0, 0},
+            vk::Offset3D{current_width > 1 ? current_width / 2 : 1,
+                         current_height > 1 ? current_height / 2 : 1, 1}
+        };
+
+        const vk::ImageBlit blit_area = {
+          .srcSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = i - 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+           },
+          .srcOffsets = source_offsets,
+          .dstSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = i,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+           },
+          .dstOffsets = dest_offsets
+        };
+
+        command_buffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
+                                 image, vk::ImageLayout::eTransferDstOptimal,
+                                 blit_area, vk::Filter::eLinear);
+    }
+
+    // Prepare for shader reads
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal, 0, info.levels);
+}
+
+StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info) :
     TextureBase(info), instance(instance), scheduler(scheduler) {
 
     format = ToVkFormat(info.format);

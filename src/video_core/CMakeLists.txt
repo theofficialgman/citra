@@ -27,9 +27,13 @@ add_library(video_core STATIC
     common/buffer.h
     common/framebuffer.h
     common/pica_types.h
+    common/rasterizer_cache.cpp
+    common/rasterizer_cache.h
     common/shader_gen.cpp
     common/shader_gen.h
     common/shader.h
+    common/surface_params.cpp
+    common/surface_params.h
     common/texture.h
     common/pipeline.h
     renderer_opengl/frame_dumper_opengl.cpp
@@ -92,6 +96,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_format_reinterpreter.h
     renderer_vulkan/vk_format_util.cpp
     renderer_vulkan/vk_format_util.h
+    renderer_vulkan/vk_framebuffer.cpp
+    renderer_vulkan/vk_framebuffer.h
     renderer_vulkan/vk_instance.cpp
     renderer_vulkan/vk_instance.h
     renderer_vulkan/vk_pipeline.cpp
@@ -106,8 +112,6 @@ add_library(video_core STATIC
     renderer_vulkan/vk_shader_gen.h
     renderer_vulkan/vk_shader.cpp
     renderer_vulkan/vk_shader.h
-    renderer_vulkan/vk_state.cpp
-    renderer_vulkan/vk_state.h
     renderer_vulkan/vk_surface_params.cpp
     renderer_vulkan/vk_surface_params.h
     renderer_vulkan/vk_swapchain.cpp

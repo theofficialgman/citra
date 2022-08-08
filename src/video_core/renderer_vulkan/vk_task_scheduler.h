@@ -70,8 +70,9 @@ private:
     struct CommandSlot {
         bool use_upload_buffer = false;
         u64 fence_counter = 0;
-        vk::CommandBuffer render_command_buffer, upload_command_buffer;
         vk::Fence fence = VK_NULL_HANDLE;
+        vk::CommandBuffer render_command_buffer;
+        vk::CommandBuffer upload_command_buffer;
         std::unique_ptr<Buffer> upload_buffer;
         std::vector<Deleter> cleanups;
     };

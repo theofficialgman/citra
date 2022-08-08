@@ -86,7 +86,8 @@ union BlendState {
 enum class AttribType : u8 {
     Float = 0,
     Int = 1,
-    Short = 2
+    Short = 2,
+    Byte = 3
 };
 
 union VertexAttribute {
@@ -113,6 +114,8 @@ struct PipelineInfo {
     BlendState blending{};
     DepthStencilState depth_stencil{};
     RasterizationState rasterization{};
+    TextureFormat color_attachment = TextureFormat::RGBA8;
+    TextureFormat depth_attachment = TextureFormat::D24S8;
 
     const u64 Hash() const {
         return Common::ComputeStructHash64(*this);
@@ -138,6 +141,10 @@ public:
 
     // Binds the sampler in the specified slot
     virtual void BindSampler(u32 group, u32 slot, SamplerHandle handle) = 0;
+
+    PipelineType GetType() const {
+        return type;
+    }
 
     /// Sets the primitive topology
     void SetTopology(Pica::TriangleTopology topology) {

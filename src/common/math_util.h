@@ -39,6 +39,9 @@ struct Rectangle {
         return Rectangle{left, top, static_cast<T>(left + GetWidth() * s),
                          static_cast<T>(top + GetHeight() * s)};
     }
+    [[nodiscard]] Rectangle<T> operator *(const T num) const {
+        return Rectangle{left * num, top * num, right * num, bottom * num};
+    }
 
     auto operator <=> (const Rectangle<T>& other) const = default;
 };

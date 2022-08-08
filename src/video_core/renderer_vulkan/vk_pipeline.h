@@ -38,9 +38,18 @@ public:
         update_data[set][binding] = data;
     }
 
+    // Returns the number of descriptor set layouts
+    u32 GetDescriptorSetLayoutCount() const {
+        return set_layout_count;
+    }
+
     // Returns the most current descriptor update data
     std::span<DescriptorData> GetData(u32 set) {
         return std::span{update_data.at(set).data(), set_layout_count};
+    }
+
+    vk::DescriptorSetLayout* GetDescriptorSetLayouts() {
+        return set_layouts.data();
     }
 
     // Returns the underlying vulkan pipeline layout handle
@@ -67,8 +76,8 @@ private:
 
 class Pipeline : public VideoCore::PipelineBase {
 public:
-    Pipeline(Instance& instance, PipelineLayout& owner,
-             PipelineType type, PipelineInfo info, vk::PipelineCache cache);
+    Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type, PipelineInfo info,
+             vk::RenderPass renderpass, vk::PipelineCache cache);
     ~Pipeline() override;
 
     void BindTexture(u32 group, u32 slot, TextureHandle handle) override;

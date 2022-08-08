@@ -24,33 +24,28 @@ public:
     Texture(Instance& instance, CommandScheduler& scheduler);
 
     // Constructor for texture creation
-    Texture(Instance& instance, CommandScheduler& scheduler,
-            const TextureInfo& info);
+    Texture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info);
 
     // Constructor for not owning textures (swapchain)
-    Texture(Instance& instance, CommandScheduler& scheduler,
-            vk::Image image, const TextureInfo& info);
+    Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, const TextureInfo& info);
 
-    ~Texture();
+    ~Texture() override;
 
-    /// Uploads pixel data to the GPU memory
-    void Upload(Rect2D rectangle, u32 stride, std::span<const u8> data,
-                u32 level = 0) override;
+    void Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32 level = 0) override;
 
-    /// Downloads pixel data from GPU memory
-    void Download(Rect2D rectangle, u32 stride, std::span<u8> data,
-                  u32 level = 0) override;
+    void Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 level = 0) override;
 
-    /// Copies the rectangle area specified to the destionation texture
-    void BlitTo(TextureHandle dest, Rect2D src_rectangle, Rect2D dest_rect,
-                u32 src_level = 0, u32 dest_level = 0) override;
+    void BlitTo(TextureHandle dest, Rect2D src_rectangle, Rect2D dest_rect, u32 src_level = 0,
+                u32 dest_level = 0, u32 src_layer = 0, u32 dest_layer = 0) override;
+
+    void GenerateMipmaps() override;
 
     /// Overrides the layout of provided image subresource
     void SetLayout(vk::ImageLayout new_layout, u32 level = 0, u32 level_count = 1);
 
     /// Transitions part of the image to the provided layout
-    void Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout,
-                    u32 level = 0, u32 level_count = 1);
+    void Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout, u32 level = 0,
+                    u32 level_count = 1);
 
     /// Returns the underlying vulkan image handle
     vk::Image GetHandle() const {
@@ -66,6 +61,10 @@ public:
     /// It may not match the input pixel format.
     vk::Format GetInternalFormat() const {
         return internal_format;
+    }
+
+    vk::ImageAspectFlags GetAspectFlags() const {
+        return aspect;
     }
 
     /// Returns the current image layout
