@@ -27,8 +27,17 @@ add_library(video_core STATIC
     common/buffer.h
     common/framebuffer.h
     common/pica_types.h
+    common/pica_uniforms.cpp
+    common/pica_uniforms.h
+    common/pipeline_cache.cpp
+    common/pipeline_cache.h
+    common/rasterizer.cpp
+    common/rasterizer.h
     common/rasterizer_cache.cpp
     common/rasterizer_cache.h
+    common/shader_runtime_cache.h
+    common/shader_disk_cache.cpp
+    common/shader_disk_cache.h
     common/shader_gen.cpp
     common/shader_gen.h
     common/shader.h

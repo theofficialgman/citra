@@ -36,11 +36,6 @@ public:
     /// Compiles the shader source code
     virtual bool Compile(ShaderOptimization level) = 0;
 
-    /// Returns the API specific shader bytecode
-    std::string_view GetSource() const {
-        return source;
-    }
-
     /// Returns the name given the shader module
     std::string_view GetName() const {
         return name;
@@ -54,7 +49,7 @@ public:
 protected:
     std::string_view name = "None";
     ShaderStage stage = ShaderStage::Undefined;
-    std::string source;
+    std::string source = "";
 };
 
 using ShaderHandle = IntrusivePtr<ShaderBase>;

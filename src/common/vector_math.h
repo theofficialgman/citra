@@ -184,6 +184,8 @@ template <typename T, typename V>
 }
 
 using Vec2f = Vec2<float>;
+using Vec2u = Vec2<unsigned>;
+using Vec2i = Vec2<int>;
 
 template <>
 inline float Vec2<float>::Length() const {
@@ -412,6 +414,8 @@ inline float Vec3<float>::Normalize() {
 }
 
 using Vec3f = Vec3<float>;
+using Vec3u = Vec3<unsigned>;
+using Vec3i = Vec3<int>;
 
 template <typename T>
 class Vec4 {
@@ -623,6 +627,8 @@ template <typename T, typename V>
 }
 
 using Vec4f = Vec4<float>;
+using Vec4u = Vec4<unsigned>;
+using Vec4i = Vec4<int>;
 
 template <typename T>
 constexpr decltype(T{} * T{} + T{} * T{}) Dot(const Vec2<T>& a, const Vec2<T>& b) {

@@ -1,27 +1,17 @@
-// Copyright 2019 yuzu Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
 #pragma once
 
-#include <algorithm>
-#include <array>
-#include <bitset>
 #include <optional>
-#include <string>
-#include <tuple>
+#include <span>
+#include <memory>
+#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
-#include <utility>
 #include <vector>
-
-#include <glad/glad.h>
-
-#include "common/assert.h"
-#include "common/common_types.h"
 #include "video_core/regs.h"
-#include "video_core/renderer_opengl/gl_shader_decompiler.h"
-#include "video_core/renderer_opengl/gl_shader_gen.h"
+#include "video_core/common/shader.h"
 
 namespace Core {
 class System;
@@ -31,41 +21,42 @@ namespace FileUtil {
 class IOFile;
 }
 
-namespace OpenGL {
+namespace VideoCore {
 
-struct ShaderDiskCacheDecompiled;
-struct ShaderDiskCacheDump;
+enum class ProgramType : u32 {
+    VertexShader = 0,
+    GeometryShader = 1,
+    FragmentShader = 2
+};
 
-using RawShaderConfig = Pica::Regs;
-using ProgramCode = std::vector<u32>;
-using ShaderDecompiledMap = std::unordered_map<u64, ShaderDiskCacheDecompiled>;
-using ShaderDumpsMap = std::unordered_map<u64, ShaderDiskCacheDump>;
-
-// Describes a shader how it's used by the guest GPU
+// Describes a shader how it's used by the Pica GPU
 class ShaderDiskCacheRaw {
 public:
     ShaderDiskCacheRaw() = default;
-    ShaderDiskCacheRaw(u64 unique_identifier, ProgramType program_type,
-                       Pica::Regs config, std::vector<u32> program_code) :
-        unique_identifier(unique_identifier), program_type(program_type), config(config),
-        program_code(program_code) {}
+    ShaderDiskCacheRaw(u64 unique_identifier, ProgramType program_type, Pica::Regs config,
+                       std::vector<u32> program_code) : unique_identifier(unique_identifier),
+        program_type(program_type), config(config), program_code(program_code) {}
     ~ShaderDiskCacheRaw() = default;
 
     bool Load(FileUtil::IOFile& file);
     bool Save(FileUtil::IOFile& file) const;
 
+    // Returns the unique hash of the program code and pica registers
     u64 GetUniqueIdentifier() const {
         return unique_identifier;
     }
 
+    // Returns the shader program type
     ProgramType GetProgramType() const {
         return program_type;
     }
 
-    const std::vector<u32>& GetProgramCode() const {
+    // Returns an immutable span to the program code
+    std::span<const u32> GetProgramCode() const {
         return program_code;
     }
 
+    // Returns the pica register state used to generate the program code
     const Pica::Regs& GetRawShaderConfig() const {
         return config;
     }
@@ -77,21 +68,26 @@ private:
     std::vector<u32> program_code{};
 };
 
-/// Contains decompiled data from a shader
+// Contains decompiled data from a shader
 struct ShaderDiskCacheDecompiled {
-    ShaderDecompiler::ProgramResult result;
+    std::string result;
     bool sanitize_mul;
 };
 
-/// Contains an OpenGL dumped binary program
+// Contains an OpenGL dumped binary program
 struct ShaderDiskCacheDump {
-    GLenum binary_format;
+    //GLenum binary_format;
     std::vector<u8> binary;
 };
 
+using ShaderDecompiledMap = std::unordered_map<u64, ShaderDiskCacheDecompiled>;
+using ShaderDumpsMap = std::unordered_map<u64, ShaderDiskCacheDump>;
+
+class BackendBase;
+
 class ShaderDiskCache {
 public:
-    explicit ShaderDiskCache(bool separable);
+    ShaderDiskCache(std::unique_ptr<BackendBase>& backend);
     ~ShaderDiskCache() = default;
 
     /// Loads transferable cache. If file has a old version or on failure, it deletes the file.
@@ -110,14 +106,13 @@ public:
     void SaveRaw(const ShaderDiskCacheRaw& entry);
 
     /// Saves a decompiled entry to the precompiled file. Does not check for collisions.
-    void SaveDecompiled(u64 unique_identifier, const ShaderDecompiler::ProgramResult& code,
-                        bool sanitize_mul);
+    void SaveDecompiled(u64 unique_identifier, const std::string& code, bool sanitize_mul);
 
     /// Saves a dump entry to the precompiled file. Does not check for collisions.
-    void SaveDump(u64 unique_identifier, GLuint program);
+    void SaveDump(u64 unique_identifier, ShaderHandle shader);
 
     /// Saves a dump entry to the precompiled file. Does not check for collisions.
-    void SaveDumpToFile(u64 unique_identifier, GLuint program, bool sanitize_mul);
+    void SaveDumpToFile(u64 unique_identifier, ShaderHandle shader, bool sanitize_mul);
 
     /// Serializes virtual precompiled shader cache file to real file
     void SaveVirtualPrecompiledFile();
@@ -127,17 +122,16 @@ private:
     std::optional<std::pair<ShaderDecompiledMap, ShaderDumpsMap>> LoadPrecompiledFile(
         FileUtil::IOFile& file, bool compressed);
 
-    /// Loads a decompiled cache entry from m_precompiled_cache_virtual_file. Returns empty on
-    /// failure.
+    /// Loads a decompiled cache entry from m_precompiled_cache_virtual_file.
+    /// Returns empty on failure.
     std::optional<ShaderDiskCacheDecompiled> LoadDecompiledEntry();
 
     /// Saves a decompiled entry to the passed file. Does not check for collisions.
     void SaveDecompiledToFile(FileUtil::IOFile& file, u64 unique_identifier,
-                              const ShaderDecompiler::ProgramResult& code, bool sanitize_mul);
+                              const std::string& code, bool sanitize_mul);
 
     /// Saves a decompiled entry to the virtual precompiled cache. Does not check for collisions.
-    bool SaveDecompiledToCache(u64 unique_identifier, const ShaderDecompiler::ProgramResult& code,
-                               bool sanitize_mul);
+    bool SaveDecompiledToCache(u64 unique_identifier, const std::string& code, bool sanitize_mul);
 
     /// Returns if the cache can be used
     bool IsUsable() const;
@@ -207,9 +201,12 @@ private:
         return LoadArrayFromPrecompiled(&object, 1);
     }
 
-    // Stores whole precompiled cache which will be read from or saved to the precompiled cache
-    // file
+private:
+    std::unique_ptr<BackendBase>& backend;
+
+    // Stores whole precompiled cache which will be read from or saved to the precompiled cache file
     std::vector<u8> decompressed_precompiled_cache;
+
     // Stores the current offset of the precompiled cache file for IO purposes
     std::size_t decompressed_precompiled_cache_offset = 0;
 
@@ -218,8 +215,6 @@ private:
 
     // The cache has been loaded at boot
     bool tried_to_load{};
-
-    bool separable{};
 
     u64 program_id{};
     std::string title_id;

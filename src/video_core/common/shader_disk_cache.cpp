@@ -1,13 +1,11 @@
-// Copyright 2019 yuzu Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
 #include <cstring>
 #include <fmt/format.h>
-
 #include "common/assert.h"
 #include "common/common_paths.h"
-#include "common/common_types.h"
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/scm_rev.h"
@@ -15,20 +13,19 @@
 #include "core/core.h"
 #include "core/hle/kernel/process.h"
 #include "core/settings.h"
-#include "video_core/renderer_opengl/gl_shader_disk_cache.h"
+#include "video_core/common/shader_disk_cache.h"
 
-namespace OpenGL {
+namespace VideoCore {
 
-constexpr std::size_t HASH_LENGTH = 64;
-using ShaderCacheVersionHash = std::array<u8, HASH_LENGTH>;
+using ShaderCacheVersionHash = std::array<u8, 64>;
 
 enum class TransferableEntryKind : u32 {
-    Raw,
+    Raw = 0,
 };
 
 enum class PrecompiledEntryKind : u32 {
-    Decompiled,
-    Dump,
+    Decompiled = 0,
+    Dump = 1,
 };
 
 constexpr u32 NativeVersion = 1;
@@ -39,11 +36,6 @@ ShaderCacheVersionHash GetShaderCacheVersionHash() {
     std::memcpy(hash.data(), Common::g_shader_cache_version, length);
     return hash;
 }
-
-ShaderDiskCacheRaw::ShaderDiskCacheRaw(u64 unique_identifier, ProgramType program_type,
-                                       RawShaderConfig config, ProgramCode program_code)
-    : unique_identifier{unique_identifier}, program_type{program_type}, config{config},
-      program_code{std::move(program_code)} {}
 
 bool ShaderDiskCacheRaw::Load(FileUtil::IOFile& file) {
     if (file.ReadBytes(&unique_identifier, sizeof(u64)) != sizeof(u64) ||
@@ -61,7 +53,7 @@ bool ShaderDiskCacheRaw::Load(FileUtil::IOFile& file) {
     }
 
     // Read in type specific configuration
-    if (program_type == ProgramType::VS) {
+    if (program_type == ProgramType::VertexShader) {
         u64 code_len{};
         if (file.ReadBytes(&code_len, sizeof(u64)) != sizeof(u64)) {
             return false;
@@ -91,7 +83,7 @@ bool ShaderDiskCacheRaw::Save(FileUtil::IOFile& file) const {
         return false;
     }
 
-    if (program_type == ProgramType::VS) {
+    if (program_type == ProgramType::VertexShader) {
         const std::size_t code_len = program_code.size();
         if (file.WriteObject(static_cast<u64>(code_len)) != 1) {
             return false;
@@ -103,7 +95,9 @@ bool ShaderDiskCacheRaw::Save(FileUtil::IOFile& file) const {
     return true;
 }
 
-ShaderDiskCache::ShaderDiskCache(bool separable) : separable{separable} {}
+ShaderDiskCache::ShaderDiskCache(std::unique_ptr<BackendBase>& backend) : backend(backend) {
+
+}
 
 std::optional<std::vector<ShaderDiskCacheRaw>> ShaderDiskCache::LoadTransferable() {
     const bool has_title_id = GetProgramID() != 0;
@@ -113,29 +107,29 @@ std::optional<std::vector<ShaderDiskCacheRaw>> ShaderDiskCache::LoadTransferable
     }
     tried_to_load = true;
 
-    FileUtil::IOFile file(GetTransferablePath(), "rb");
+    FileUtil::IOFile file{GetTransferablePath(), "rb"};
     if (!file.IsOpen()) {
-        LOG_INFO(Render_OpenGL, "No transferable shader cache found for game with title id={}",
+        LOG_INFO(Render_Vulkan, "No transferable shader cache found for game with title id={}",
                  GetTitleID());
         return std::nullopt;
     }
 
     u32 version{};
     if (file.ReadBytes(&version, sizeof(version)) != sizeof(version)) {
-        LOG_ERROR(Render_OpenGL,
-                  "Failed to get transferable cache version for title id={} - skipping",
+        LOG_ERROR(Render_Vulkan, "Failed to get transferable cache version for title id={} - skipping",
                   GetTitleID());
         return std::nullopt;
     }
 
     if (version < NativeVersion) {
-        LOG_INFO(Render_OpenGL, "Transferable shader cache is old - removing");
+        LOG_INFO(Render_Vulkan, "Transferable shader cache is old - removing");
         file.Close();
         InvalidateAll();
+
         return std::nullopt;
     }
     if (version > NativeVersion) {
-        LOG_WARNING(Render_OpenGL, "Transferable shader cache was generated with a newer version "
+        LOG_WARNING(Render_Vulkan, "Transferable shader cache was generated with a newer version "
                                    "of the emulator - skipping");
         return std::nullopt;
     }
@@ -145,7 +139,7 @@ std::optional<std::vector<ShaderDiskCacheRaw>> ShaderDiskCache::LoadTransferable
     while (file.Tell() < file.GetSize()) {
         TransferableEntryKind kind{};
         if (file.ReadBytes(&kind, sizeof(u32)) != sizeof(u32)) {
-            LOG_ERROR(Render_OpenGL, "Failed to read transferable file - skipping");
+            LOG_ERROR(Render_Vulkan, "Failed to read transferable file - skipping");
             return std::nullopt;
         }
 
@@ -153,7 +147,7 @@ std::optional<std::vector<ShaderDiskCacheRaw>> ShaderDiskCache::LoadTransferable
         case TransferableEntryKind::Raw: {
             ShaderDiskCacheRaw entry;
             if (!entry.Load(file)) {
-                LOG_ERROR(Render_OpenGL, "Failed to load transferable raw entry - skipping");
+                LOG_ERROR(Render_Vulkan, "Failed to load transferable raw entry - skipping");
                 return std::nullopt;
             }
             transferable.emplace(entry.GetUniqueIdentifier(), ShaderDiskCacheRaw{});
@@ -183,8 +177,8 @@ ShaderDiskCache::LoadPrecompiled(bool compressed) {
         return {};
     }
 
-    const auto result = LoadPrecompiledFile(file, compressed);
-    if (!result) {
+    const std::optional result = LoadPrecompiledFile(file, compressed);
+    if (!result.has_value()) {
         LOG_INFO(Render_OpenGL,
                  "Failed to load precompiled cache for game with title id={} - removing",
                  GetTitleID());
@@ -192,7 +186,8 @@ ShaderDiskCache::LoadPrecompiled(bool compressed) {
         InvalidatePrecompiled();
         return {};
     }
-    return *result;
+
+    return result.value();
 }
 
 std::optional<std::pair<std::unordered_map<u64, ShaderDiskCacheDecompiled>, ShaderDumpsMap>>
@@ -200,9 +195,9 @@ ShaderDiskCache::LoadPrecompiledFile(FileUtil::IOFile& file, bool compressed) {
     // Read compressed file from disk and decompress to virtual precompiled cache file
     std::vector<u8> precompiled_file(file.GetSize());
     file.ReadBytes(precompiled_file.data(), precompiled_file.size());
+
     if (compressed) {
-        const std::vector<u8> decompressed =
-            Common::Compression::DecompressDataZSTD(precompiled_file);
+        const auto decompressed = Common::Compression::DecompressDataZSTD(precompiled_file);
         SaveArrayToPrecompiled(decompressed.data(), decompressed.size());
     } else {
         SaveArrayToPrecompiled(precompiled_file.data(), precompiled_file.size());
@@ -234,10 +229,11 @@ ShaderDiskCache::LoadPrecompiledFile(FileUtil::IOFile& file, bool compressed) {
                 return std::nullopt;
             }
 
-            auto entry = LoadDecompiledEntry();
+            std::optional entry = LoadDecompiledEntry();
             if (!entry) {
                 return std::nullopt;
             }
+
             decompiled.insert({unique_identifier, std::move(*entry)});
             break;
         }
@@ -293,36 +289,37 @@ std::optional<ShaderDiskCacheDecompiled> ShaderDiskCache::LoadDecompiledEntry() 
         return std::nullopt;
     }
 
-    ShaderDiskCacheDecompiled entry;
-    entry.result.code = std::move(code);
-    entry.sanitize_mul = sanitize_mul;
+    const ShaderDiskCacheDecompiled entry = {
+        .result = std::move(code),
+        .sanitize_mul = sanitize_mul
+    };
 
     return entry;
 }
 
 void ShaderDiskCache::SaveDecompiledToFile(FileUtil::IOFile& file, u64 unique_identifier,
-                                           const ShaderDecompiler::ProgramResult& result,
+                                           const std::string& result,
                                            bool sanitize_mul) {
     if (!IsUsable())
         return;
 
     if (file.WriteObject(static_cast<u32>(PrecompiledEntryKind::Decompiled)) != 1 ||
         file.WriteObject(unique_identifier) != 1 || file.WriteObject(sanitize_mul) != 1 ||
-        file.WriteObject(static_cast<u32>(result.code.size())) != 1 ||
-        file.WriteArray(result.code.data(), result.code.size()) != result.code.size()) {
+        file.WriteObject(static_cast<u32>(result.size())) != 1 ||
+        file.WriteArray(result.data(), result.size()) != result.size()) {
         LOG_ERROR(Render_OpenGL, "Failed to save decompiled cache entry - removing");
+
         file.Close();
         InvalidatePrecompiled();
     }
 }
 
-bool ShaderDiskCache::SaveDecompiledToCache(u64 unique_identifier,
-                                            const ShaderDecompiler::ProgramResult& result,
+bool ShaderDiskCache::SaveDecompiledToCache(u64 unique_identifier, const std::string& result,
                                             bool sanitize_mul) {
     if (!SaveObjectToPrecompiled(static_cast<u32>(PrecompiledEntryKind::Decompiled)) ||
         !SaveObjectToPrecompiled(unique_identifier) || !SaveObjectToPrecompiled(sanitize_mul) ||
-        !SaveObjectToPrecompiled(static_cast<u32>(result.code.size())) ||
-        !SaveArrayToPrecompiled(result.code.data(), result.code.size())) {
+        !SaveObjectToPrecompiled(static_cast<u32>(result.size())) ||
+        !SaveArrayToPrecompiled(result.data(), result.size())) {
         return false;
     }
 
@@ -365,12 +362,11 @@ void ShaderDiskCache::SaveRaw(const ShaderDiskCacheRaw& entry) {
         InvalidateAll();
         return;
     }
+
     transferable.insert({id, entry});
 }
 
-void ShaderDiskCache::SaveDecompiled(u64 unique_identifier,
-                                     const ShaderDecompiler::ProgramResult& code,
-                                     bool sanitize_mul) {
+void ShaderDiskCache::SaveDecompiled(u64 unique_identifier, const std::string& code, bool sanitize_mul) {
     if (!IsUsable())
         return;
 
@@ -385,7 +381,7 @@ void ShaderDiskCache::SaveDecompiled(u64 unique_identifier,
     }
 }
 
-void ShaderDiskCache::SaveDump(u64 unique_identifier, GLuint program) {
+void ShaderDiskCache::SaveDump(u64 unique_identifier, ShaderHandle shader) {
     if (!IsUsable())
         return;
 
@@ -408,7 +404,7 @@ void ShaderDiskCache::SaveDump(u64 unique_identifier, GLuint program) {
     }
 }
 
-void ShaderDiskCache::SaveDumpToFile(u64 unique_identifier, GLuint program, bool sanitize_mul) {
+void ShaderDiskCache::SaveDumpToFile(u64 unique_identifier, ShaderHandle shader, bool sanitize_mul) {
     if (!IsUsable())
         return;
 
@@ -491,11 +487,10 @@ FileUtil::IOFile ShaderDiskCache::AppendPrecompiledFile() {
 }
 
 void ShaderDiskCache::SavePrecompiledHeaderToVirtualPrecompiledCache() {
-    const auto hash{GetShaderCacheVersionHash()};
+    const ShaderCacheVersionHash hash = GetShaderCacheVersionHash();
     if (!SaveArrayToPrecompiled(hash.data(), hash.size())) {
-        LOG_ERROR(
-            Render_OpenGL,
-            "Failed to write precompiled cache version hash to virtual precompiled cache file");
+        LOG_ERROR(Render_OpenGL,
+                  "Failed to write precompiled cache version hash to virtual precompiled cache file");
     }
 }
 
@@ -549,10 +544,7 @@ std::string ShaderDiskCache::GetPrecompiledDir() const {
 }
 
 std::string ShaderDiskCache::GetPrecompiledShaderDir() const {
-    if (separable) {
-        return GetPrecompiledDir() + DIR_SEP "separable";
-    }
-    return GetPrecompiledDir() + DIR_SEP "conventional";
+    return GetPrecompiledDir() + DIR_SEP "separable";
 }
 
 std::string ShaderDiskCache::GetBaseDir() const {
@@ -579,4 +571,4 @@ std::string ShaderDiskCache::GetTitleID() {
     return title_id;
 }
 
-} // namespace OpenGL
+} // namespace VideoCore

@@ -87,19 +87,19 @@ enum class AttribType : u8 {
     Float = 0,
     Int = 1,
     Short = 2,
-    Byte = 3
+    Byte = 3,
+    Ubyte = 4
 };
 
 union VertexAttribute {
-    u8 value = 0;
-    BitField<0, 2, AttribType> type;
-    BitField<2, 3, u8> components;
+    BitField<0, 3, AttribType> type;
+    BitField<3, 3, u8> components;
 };
 
 #pragma pack(1)
 struct VertexLayout {
     u8 stride = 0;
-    std::array<VertexAttribute, MAX_VERTEX_ATTRIBUTES> attributes;
+    std::array<VertexAttribute, MAX_VERTEX_ATTRIBUTES> attributes{};
 };
 #pragma pack()
 
@@ -123,6 +123,7 @@ struct PipelineInfo {
 };
 #pragma pack()
 
+// An opaque handle to a backend specific program pipeline
 class PipelineBase : public IntrusivePtrEnabled<PipelineBase> {
 public:
     PipelineBase(PipelineType type, PipelineInfo info) :

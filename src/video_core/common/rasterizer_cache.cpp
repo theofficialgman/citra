@@ -1671,8 +1671,9 @@ void RasterizerCache::UpdatePagesCachedCount(PAddr addr, u32 size, int delta) {
     // Interval maps will erase segments if count reaches 0, so if delta is negative we have to
     // subtract after iterating
     const auto pages_interval = PageMap::interval_type::right_open(page_start, page_end);
-    if (delta > 0)
+    if (delta > 0) {
         cached_pages.add({pages_interval, delta});
+    }
 
     for (const auto& pair : RangeFromInterval(cached_pages, pages_interval)) {
         const auto interval = pair.first & pages_interval;

@@ -393,7 +393,7 @@ bool ShaderProgramManager::UseProgrammableVertexShader(const Pica::Regs& regs,
     // Save VS to the disk cache if its a new shader
     if (result) {
         auto& disk_cache = impl->disk_cache;
-        ProgramCode program_code{setup.program_code.begin(), setup.program_code.end()};
+        std::vector<u32> program_code{setup.program_code.begin(), setup.program_code.end()};
         program_code.insert(program_code.end(), setup.swizzle_data.begin(),
                             setup.swizzle_data.end());
         const u64 unique_identifier = GetUniqueIdentifier(regs, program_code);
@@ -715,6 +715,7 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
         contexts[i] = emu_window.CreateSharedContext();
         threads[i] = std::thread(LoadRawSepareble, contexts[i].get(), start, end);
     }
+
     for (auto& thread : threads) {
         thread.join();
     }

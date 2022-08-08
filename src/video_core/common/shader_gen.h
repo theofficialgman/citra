@@ -199,20 +199,20 @@ public:
      * @param separable_shader generates shader that can be used for separate shader object
      * @returns String of the shader source code
      */
-    virtual std::string GenerateTrivialVertexShader(bool separable_shader) = 0;
+    virtual std::string GenerateTrivialVertexShader() = 0;
 
     /**
      * Generates the GLSL vertex shader program source code for the given VS program
      * @returns String of the shader source code
      */
-    virtual std::string GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config,
-                                             bool separable_shader) = 0;
+    virtual std::string GenerateVertexShader(const Pica::Shader::ShaderSetup& setup,
+                                             const PicaVSConfig& config) = 0;
 
     /**
      * Generates the GLSL fixed geometry shader program source code for non-GS PICA pipeline
      * @returns String of the shader source code
      */
-    virtual std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config, bool separable_shader) = 0;
+    virtual std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config) = 0;
 
     /**
      * Generates the GLSL fragment shader program source code for the current Pica state
@@ -221,7 +221,7 @@ public:
      * @param separable_shader generates shader that can be used for separate shader object
      * @returns String of the shader source code
      */
-    virtual std::string GenerateFragmentShader(const PicaFSConfig& config, bool separable_shader) = 0;
+    virtual std::string GenerateFragmentShader(const PicaFSConfig& config) = 0;
 };
 
 } // namespace VideoCore

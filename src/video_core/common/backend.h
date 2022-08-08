@@ -39,6 +39,9 @@ public:
     // Creates a backend specific sampler object
     virtual SamplerHandle CreateSampler(SamplerInfo info) = 0;
 
+    // Creates a backend specific shader object
+    virtual ShaderHandle CreateShader(ShaderStage stage, std::string_view name, std::string source) = 0;
+
     // Start a draw operation
     virtual void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
                       BufferHandle vertex_buffer,
