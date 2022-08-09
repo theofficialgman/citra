@@ -46,7 +46,7 @@ static_assert(std::is_standard_layout_v<BufferInfo>, "BufferInfo is not a standa
 class BufferBase : public IntrusivePtrEnabled<BufferBase> {
 public:
     BufferBase() = default;
-    BufferBase(const BufferInfo& info) : info(info), bind_range(info.capacity) {}
+    BufferBase(const BufferInfo& info) : info(info) {}
     virtual ~BufferBase() = default;
 
     // Disable copy constructor
@@ -61,23 +61,6 @@ public:
     // Flushes write to buffer memory
     virtual void Commit(u32 size = 0) = 0;
 
-    // Sets the range of the buffer that will be used when bound
-    void SetBindRange(u32 offset, u32 range) {
-        ASSERT(offset < info.capacity && offset + range < info.capacity);
-        bind_offset = offset;
-        bind_range = range;
-    }
-
-    // Returns the bind offset
-    u32 GetBindOffset() const {
-        return bind_offset;
-    }
-
-    // Returns the number of bytes after bind_offset that will be bound
-    u32 GetBindRange() const {
-        return bind_range;
-    }
-
     // Returns the size of the buffer in bytes
     u32 GetCapacity() const {
         return info.capacity;
@@ -89,7 +72,7 @@ public:
     }
 
     // Returns the starting offset of the currently mapped buffer slice
-    u64 GetCurrentOffset() const {
+    u32 GetCurrentOffset() const {
         return buffer_offset;
     }
 
@@ -106,8 +89,6 @@ public:
 
 protected:
     BufferInfo info{};
-    u32 bind_offset = 0;
-    u32 bind_range; // Initialized to capacity
     u32 buffer_offset = 0;
     bool invalid = false;
 };

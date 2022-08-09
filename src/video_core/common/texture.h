@@ -112,6 +112,9 @@ public:
                         u32 src_level = 0, u32 dest_level = 0,
                         u32 src_layer = 0, u32 dest_layer = 0) {};
 
+    // Copies texture data from the source texture
+    virtual void CopyFrom(TextureHandle source) {};
+
     // Generates all possible mipmaps from the texture
     virtual void GenerateMipmaps() {};
 

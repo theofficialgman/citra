@@ -67,6 +67,9 @@ u32 AttribBytes(VertexAttribute attrib) {
         return sizeof(u32) * attrib.components;
     case AttribType::Short:
         return sizeof(u16) * attrib.components;
+    case AttribType::Byte:
+    case AttribType::Ubyte:
+        return sizeof(u8) * attrib.components;
     }
 }
 
@@ -208,6 +211,12 @@ Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type,
 
     // Create a graphics pipeline
     if (type == PipelineType::Graphics) {
+        /**
+         * Most modern graphics APIs don't natively support constant attributes. To avoid duplicating
+         * the data and increasing data bandwith, we reserve the last binding for fixed attributes,
+         * which are always interleaved and specify VK_VERTEX_INPUT_RATE_INSTANCE as the input rate.
+         * Since we are always rendering 1 instance, the shader will always read the single attribute
+         */
         const vk::VertexInputBindingDescription binding_desc = {
             .binding = 0,
             .stride = info.vertex_layout.stride

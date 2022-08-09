@@ -44,6 +44,22 @@ PipelineCache::PipelineCache(Frontend::EmuWindow& emu_window, std::unique_ptr<Ba
     //generator = std::make_unique<ShaderGenerator
 }
 
+PipelineHandle PipelineCache::GetPipeline(PipelineInfo& info) {
+    // Update shader handles
+    info.shaders[static_cast<u32>(ProgramType::VertexShader)] = current_vertex_shader;
+    info.shaders[static_cast<u32>(ProgramType::GeometryShader)] = current_geometry_shader;
+    info.shaders[static_cast<u32>(ProgramType::FragmentShader)] = current_fragment_shader;
+
+    // Search cache
+    if (auto iter = cached_pipelines.find(info); iter != cached_pipelines.end()) {
+        return iter->second;
+    }
+
+    // Create new pipeline
+    auto iter = cached_pipelines.emplace(info, backend->CreatePipeline(PipelineType::Graphics, info)).first;
+    return iter->second;
+}
+
 bool PipelineCache::UsePicaVertexShader(const Pica::Regs& regs, Pica::Shader::ShaderSetup& setup) {
     PicaVSConfig config{regs.vs, setup};
     auto [handle, shader_str] = pica_vertex_shaders.Get(config, setup);

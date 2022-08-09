@@ -57,8 +57,13 @@ public:
     }
 
     // Sets the area of the framebuffer affected by draw operations
-    void SetDrawRect(Rect2D rect) {
+    void SetDrawRect(Common::Rectangle<u32> rect) {
         draw_rect = rect;
+    }
+
+    // Returns the area of the framebuffer affected by draw operations
+    Common::Rectangle<u32> GetDrawRect() {
+        return draw_rect;
     }
 
     // Returns how many samples the framebuffer takes
@@ -67,7 +72,7 @@ public:
     }
 
 protected:
-    Rect2D draw_rect;
+    Common::Rectangle<u32> draw_rect;
     FramebufferInfo info;
 };
 

@@ -72,6 +72,9 @@ public:
         return Vec2{f, f};
     }
 
+    // Default comparison operators
+    [[nodiscard]] auto operator<=>(const Vec2& other) const = default;
+
     [[nodiscard]] constexpr Vec2<decltype(T{} + T{})> operator+(const Vec2& other) const {
         return {x + other.x, y + other.y};
     }
@@ -229,6 +232,9 @@ public:
     [[nodiscard]] static constexpr Vec3 AssignToAll(const T& f) {
         return Vec3(f, f, f);
     }
+
+    // Default comparison operators
+    [[nodiscard]] auto operator<=>(const Vec3& other) const = default;
 
     [[nodiscard]] constexpr Vec3<decltype(T{} + T{})> operator+(const Vec3& other) const {
         return {x + other.x, y + other.y, z + other.z};
@@ -451,6 +457,9 @@ public:
     [[nodiscard]] static constexpr Vec4 AssignToAll(const T& f) {
         return Vec4(f, f, f, f);
     }
+
+    // Default comparison operators
+    [[nodiscard]] auto operator<=>(const Vec4& other) const = default;
 
     [[nodiscard]] constexpr Vec4<decltype(T{} + T{})> operator+(const Vec4& other) const {
         return {x + other.x, y + other.y, z + other.z, w + other.w};

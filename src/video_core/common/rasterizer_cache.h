@@ -4,14 +4,11 @@
 
 #pragma once
 
-#include <array>
 #include <memory>
 #include <tuple>
 #include <boost/icl/interval_map.hpp>
 #include <boost/icl/interval_set.hpp>
 #include <boost/functional/hash.hpp>
-#include "common/assert.h"
-#include "common/math_util.h"
 #include "core/custom_tex_cache.h"
 #include "video_core/common/surface_params.h"
 #include "video_core/common/texture.h"
@@ -233,8 +230,11 @@ public:
     const CachedTextureCube& GetTextureCube(const TextureCubeConfig& config);
 
     // Get the color and depth surfaces based on the framebuffer configuration
-    FramebufferHandle GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
+    SurfaceSurfaceRect_Tuple GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
                                              Common::Rectangle<s32> viewport_rect);
+
+    // Get the framebuffer for the provided color and depth surfaces
+    FramebufferHandle GetFramebuffer(const Surface& color, const Surface& depth_stencil);
 
     // Get a surface that matches the fill config
     Surface GetFillSurface(const GPU::Regs::MemoryFillConfig& config);

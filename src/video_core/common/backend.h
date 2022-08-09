@@ -42,15 +42,19 @@ public:
     // Creates a backend specific shader object
     virtual ShaderHandle CreateShader(ShaderStage stage, std::string_view name, std::string source) = 0;
 
+    // Binds a vertex buffer at a provided offset
+    virtual void BindVertexBuffer(BufferHandle buffer, std::span<const u32> offsets) = 0;
+
+    // Binds an index buffer at provided offset
+    virtual void BindIndexBuffer(BufferHandle buffer, AttribType index_type, u32 offset) = 0;
+
     // Start a draw operation
-    virtual void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
-                      BufferHandle vertex_buffer,
-                      u32 base_vertex, u32 num_vertices) = 0;
+    virtual void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer, u32 base_vertex,
+                      u32 num_vertices) = 0;
 
     // Start an indexed draw operation
-    virtual void DrawIndexed(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
-                             BufferHandle vertex_buffer, BufferHandle index_buffer, AttribType index_type,
-                             u32 base_index, u32 num_indices, u32 base_vertex) = 0;
+    virtual void DrawIndexed(PipelineHandle pipeline, FramebufferHandle draw_framebuffer, u32 base_vertex,
+                             u32 base_index, u32 num_indices) = 0;
 
     // Executes a compute shader
     virtual void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,

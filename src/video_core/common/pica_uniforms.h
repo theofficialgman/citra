@@ -93,4 +93,14 @@ static_assert(sizeof(VSUniformData) == 1856,
               "The size of the VSUniformData structure has changed, update the structure in the shader");
 
 
+inline Common::Vec4f ColorRGBA8(const u32 color) {
+    return Common::Vec4f{(color >> 0 & 0xFF), (color >> 8 & 0xFF),
+                         (color >> 16 & 0xFF), (color >> 24 & 0xFF)} / 255.0f;
+}
+
+inline Common::Vec3f LightColor(const Pica::LightingRegs::LightColor& color) {
+    return Common::Vec3f{color.r, color.g, color.b} / 255.0f;
+}
+
+
 } // namespace VideoCore

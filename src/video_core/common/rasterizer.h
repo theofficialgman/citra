@@ -4,29 +4,27 @@
 
 #pragma once
 
-#include <array>
 #include <vector>
-#include <memory>
-#include "common/vector_math.h"
-#include "video_core/regs_lighting.h"
-#include "video_core/regs_texturing.h"
 #include "video_core/common/rasterizer_cache.h"
+#include "video_core/common/pica_uniforms.h"
 #include "video_core/common/pipeline.h"
-#include "video_core/shader/shader.h"
 
 namespace Frontend {
 class EmuWindow;
 }
 
 namespace VideoCore {
-class ShaderProgramManager;
+class PipelineCache;
 
-/// Structure that the hardware rendered vertices are composed of
+class Callback;
+using DiskLoadCallback = Callback;
+
+// Structure that the hardware rendered vertices are composed of
 struct HardwareVertex {
     HardwareVertex() = default;
     HardwareVertex(const Pica::Shader::OutputVertex& v, bool flip_quaternion);
 
-    // Returns the pipeline vertex layout of the vertex
+    // Returns the pipeline vertex layout of the vertex used with software shaders
     constexpr static VertexLayout GetVertexLayout();
 
     Common::Vec4f position;
@@ -46,8 +44,7 @@ public:
     explicit Rasterizer(Frontend::EmuWindow& emu_window, std::unique_ptr<BackendBase>& backend);
     ~Rasterizer();
 
-    //void LoadDiskResources(const std::atomic_bool& stop_loading,
-    //                       const VideoCore::DiskResourceLoadCallback& callback);
+    void LoadDiskResources(const std::atomic_bool& stop_loading, const DiskLoadCallback& callback);
 
     void AddTriangle(const Pica::Shader::OutputVertex& v0, const Pica::Shader::OutputVertex& v1,
                      const Pica::Shader::OutputVertex& v2);
@@ -58,6 +55,7 @@ public:
     void InvalidateRegion(PAddr addr, u32 size);
     void FlushAndInvalidateRegion(PAddr addr, u32 size);
     void ClearAll(bool flush);
+
     bool AccelerateDisplayTransfer(const GPU::Regs::DisplayTransferConfig& config);
     bool AccelerateTextureCopy(const GPU::Regs::DisplayTransferConfig& config);
     bool AccelerateFill(const GPU::Regs::MemoryFillConfig& config);
@@ -170,13 +168,13 @@ private:
     void SyncAndUploadLUTsLF();
 
     /// Upload the uniform blocks to the uniform buffer object
-    void UploadUniforms(bool accelerate_draw);
+    void UploadUniforms(PipelineHandle pipeline, bool accelerate_draw);
 
     /// Generic draw function for DrawTriangles and AccelerateDrawBatch
     bool Draw(bool accelerate, bool is_indexed);
 
     /// Internal implementation for AccelerateDrawBatch
-    bool AccelerateDrawBatchInternal(bool is_indexed);
+    bool AccelerateDrawBatchInternal(PipelineHandle pipeline, FramebufferHandle framebuffer, bool is_indexed);
 
     struct VertexArrayInfo {
         u32 vs_input_index_min;
@@ -188,7 +186,7 @@ private:
     VertexArrayInfo AnalyzeVertexArray(bool is_indexed);
 
     /// Setup vertex array for AccelerateDrawBatch
-    void SetupVertexArray(u8* array_ptr, u32 buffer_offset, u32 vs_input_index_min, u32 vs_input_index_max);
+    void SetupVertexArray(u32 vs_input_size, u32 vs_input_index_min, u32 vs_input_index_max);
 
 private:
     std::unique_ptr<BackendBase>& backend;
@@ -209,13 +207,17 @@ private:
         bool dirty = true;
     } uniform_block_data{};
 
-    std::unique_ptr<ShaderProgramManager> shader_program_manager;
+    // Pipeline information structure used to identify a rasterizer pipeline
+    // The shader handles are automatically filled by the pipeline cache
+    PipelineInfo raster_info{};
+    std::unique_ptr<PipelineCache> pipeline_cache;
 
     // Clear texture for placeholder purposes
     TextureHandle clear_texture;
 
     // Uniform alignment
     std::array<bool, 16> hw_vao_enabled_attributes{};
+    std::size_t uniform_buffer_alignment;
     std::size_t uniform_size_aligned_vs = 0;
     std::size_t uniform_size_aligned_fs = 0;
 
@@ -229,8 +231,8 @@ private:
     std::array<Common::Vec2f, 128> proctex_noise_lut_data{};
     std::array<Common::Vec2f, 128> proctex_color_map_data{};
     std::array<Common::Vec2f, 128> proctex_alpha_map_data{};
-    std::array<Common::Vec2f, 256> proctex_lut_data{};
-    std::array<Common::Vec2f, 256> proctex_diff_lut_data{};
+    std::array<Common::Vec4f, 256> proctex_lut_data{};
+    std::array<Common::Vec4f, 256> proctex_diff_lut_data{};
 
     // Texture unit sampler cache
     SamplerInfo texture_cube_sampler;

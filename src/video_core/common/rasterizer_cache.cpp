@@ -1166,8 +1166,8 @@ const CachedTextureCube& RasterizerCache::GetTextureCube(const TextureCubeConfig
     return cube;
 }
 
-FramebufferHandle RasterizerCache::GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
-                                                          Common::Rectangle<s32> viewport_rect) {
+SurfaceSurfaceRect_Tuple RasterizerCache::GetFramebufferSurfaces(bool using_color_fb, bool using_depth_fb,
+                                                                 Common::Rectangle<s32> viewport_rect) {
     const auto& config = Pica::g_state.regs.framebuffer.framebuffer;
 
     // update resolution_scale_factor and reset cache if changed
@@ -1256,9 +1256,13 @@ FramebufferHandle RasterizerCache::GetFramebufferSurfaces(bool using_color_fb, b
         depth_surface->InvalidateAllWatcher();
     }
 
+    return std::make_tuple(color_surface, depth_surface, fb_rect);
+}
+
+FramebufferHandle RasterizerCache::GetFramebuffer(const Surface& color, const Surface& depth_stencil) {
     const FramebufferInfo framebuffer_info = {
-        .color = using_color_fb ? color_surface->texture : TextureHandle{},
-        .depth_stencil = using_depth_fb ? depth_surface->texture : TextureHandle{}
+        .color = color ? color->texture : TextureHandle{},
+        .depth_stencil = depth_stencil ? depth_stencil->texture : TextureHandle{}
     };
 
     // Search the framebuffer cache, otherwise create new framebuffer
@@ -1270,7 +1274,6 @@ FramebufferHandle RasterizerCache::GetFramebufferSurfaces(bool using_color_fb, b
         framebuffer_cache.emplace(framebuffer_info, framebuffer);
     }
 
-    framebuffer->SetDrawRect(fb_rect);
     return framebuffer;
 }
 

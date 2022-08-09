@@ -38,6 +38,9 @@ public:
     PipelineCache(Frontend::EmuWindow& emu_window, std::unique_ptr<BackendBase>& backend);
     ~PipelineCache() = default;
 
+    // Searches the cache for pipelines matching the information structure
+    PipelineHandle GetPipeline(PipelineInfo& info);
+
     // Loads backend specific shader binaries from disk
     void LoadDiskCache(const std::atomic_bool& stop_loading, const DiskLoadCallback& callback);
 
