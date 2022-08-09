@@ -1890,10 +1890,9 @@ void Rasterizer::SyncAndUploadLUTsLF() {
     if (uniform_block_data.fog_lut_dirty || invalidate) {
         std::array<Common::Vec2f, 128> new_data;
 
-        std::transform(Pica::g_state.fog.lut.begin(), Pica::g_state.fog.lut.end(), new_data.begin(),
-                       [](const auto& entry) {
-                           return Common::Vec2f{entry.ToFloat(), entry.DiffToFloat()};
-                       });
+        std::ranges::transform(Pica::g_state.fog.lut, new_data.begin(), [](const auto& entry) {
+            return Common::Vec2f{entry.ToFloat(), entry.DiffToFloat()};
+        });
 
         if (new_data != fog_lut_data || invalidate) {
             fog_lut_data = new_data;
@@ -1969,12 +1968,10 @@ void Rasterizer::SyncAndUploadLUTs() {
     if (uniform_block_data.proctex_lut_dirty || invalidate) {
         std::array<Common::Vec4f, 256> new_data;
 
-        std::transform(Pica::g_state.proctex.color_table.begin(),
-                       Pica::g_state.proctex.color_table.end(), new_data.begin(),
-                       [](const auto& entry) {
-                           auto rgba = entry.ToVector() / 255.0f;
-                           return Common::Vec4f{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
-                       });
+        std::ranges::transform(Pica::g_state.proctex.color_table, new_data.begin(), [](const auto& entry) {
+            auto rgba = entry.ToVector() / 255.0f;
+            return Common::Vec4f{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
+        });
 
         if (new_data != proctex_lut_data || invalidate) {
             proctex_lut_data = new_data;
@@ -1984,6 +1981,7 @@ void Rasterizer::SyncAndUploadLUTs() {
             uniform_block_data.dirty = true;
             bytes_used += new_data.size() * sizeof(Common::Vec4f);
         }
+
         uniform_block_data.proctex_lut_dirty = false;
     }
 
@@ -1991,12 +1989,10 @@ void Rasterizer::SyncAndUploadLUTs() {
     if (uniform_block_data.proctex_diff_lut_dirty || invalidate) {
         std::array<Common::Vec4f, 256> new_data;
 
-        std::transform(Pica::g_state.proctex.color_diff_table.begin(),
-                       Pica::g_state.proctex.color_diff_table.end(), new_data.begin(),
-                       [](const auto& entry) {
-                           auto rgba = entry.ToVector() / 255.0f;
-                           return Common::Vec4f{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
-                       });
+        std::ranges::transform(Pica::g_state.proctex.color_diff_table, new_data.begin(), [](const auto& entry) {
+            auto rgba = entry.ToVector() / 255.0f;
+            return Common::Vec4f{rgba.r(), rgba.g(), rgba.b(), rgba.a()};
+        });
 
         if (new_data != proctex_diff_lut_data || invalidate) {
             proctex_diff_lut_data = new_data;
