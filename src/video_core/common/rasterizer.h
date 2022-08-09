@@ -16,8 +16,8 @@ class EmuWindow;
 namespace VideoCore {
 class PipelineCache;
 
-class Callback;
-using DiskLoadCallback = Callback;
+enum class LoadCallbackStage : u8;
+using DiskLoadCallback = std::function<void(LoadCallbackStage, std::size_t, std::size_t)>;
 
 // Structure that the hardware rendered vertices are composed of
 struct HardwareVertex {

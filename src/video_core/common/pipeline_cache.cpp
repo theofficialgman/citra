@@ -126,17 +126,10 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
 
     // Load uncompressed precompiled file for non-separable shaders.
     // Precompiled file for separable shaders is compressed.
-    auto [decompiled, dumps] = disk_cache.LoadPrecompiled(true);
-
+    std::optional decompiled = disk_cache.LoadPrecompiled();
     if (stop_loading) {
         return;
     }
-
-    std::set<GLenum> supported_formats = GetSupportedFormats();
-
-    // Track if precompiled cache was altered during loading to know if we have to serialize the
-    // virtual precompiled cache file back to the hard drive
-    bool precompiled_cache_altered = false;
 
     std::mutex mutex;
     std::atomic_bool compilation_failed = false;
@@ -147,7 +140,7 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
     std::vector<std::size_t> load_raws_index;
     for (u64 i = 0; i < raws.size(); i++) {
         if (stop_loading || compilation_failed) {
-            return;
+            break;
         }
 
         const ShaderDiskCacheRaw& raw = raws[i];
@@ -161,35 +154,42 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
                                      raw.GetUniqueIdentifier(), calculated_hash);
 
             disk_cache.InvalidateAll();
-            return;
+            break;
         }
 
-        const auto dump = dumps.find(unique_identifier);
-        const auto decomp = decompiled.find(unique_identifier);
+        const auto iter = decompiled->find(unique_identifier);
 
         ShaderHandle shader{};
-        if (dump != dumps.end() && decomp != decompiled.end()) {
+        if (iter != decompiled->end()) {
             // Only load the vertex shader if its sanitize_mul setting matches
+            ShaderDiskCacheDecompiled& decomp = iter->second;
             if (raw.GetProgramType() == ProgramType::VertexShader &&
-                decomp->second.sanitize_mul != VideoCore::g_hw_shader_accurate_mul) {
-                continue;
+                decomp.sanitize_mul != VideoCore::g_hw_shader_accurate_mul) {
+                break;
             }
 
-            // If the shader is dumped, attempt to load it
-            shader = GeneratePrecompiledProgram(dump->second, supported_formats);
-            if (!shader.IsValid()) {
-                // If any shader failed, stop trying to compile, delete the cache, and start
-                // loading from raws
-                compilation_failed = true;
-                return;
+            ShaderStage stage;
+            switch (raw.GetProgramType()) {
+            case ProgramType::VertexShader:
+                stage = ShaderStage::Vertex;
+                break;
+            case ProgramType::GeometryShader:
+                stage = ShaderStage::Geometry;
+                break;
+            case ProgramType::FragmentShader:
+                stage = ShaderStage::Fragment;
+                break;
             }
+
+            // Create shader from GLSL source
+            shader = backend->CreateShader(stage, "Precompiled shader", decomp.result);
 
             // We have both the binary shader and the decompiled, so inject it into the
             // cache
             if (raw.GetProgramType() == ProgramType::VertexShader) {
                 auto [conf, setup] = BuildVSConfigFromRaw(raw);
                 std::scoped_lock lock(mutex);
-                pica_vertex_shaders.Inject(conf, decomp->second.result, std::move(shader));
+                pica_vertex_shaders.Inject(conf, decomp.result, std::move(shader));
 
             } else if (raw.GetProgramType() == ProgramType::FragmentShader) {
                 const PicaFSConfig conf{raw.GetRawShaderConfig()};
@@ -200,7 +200,7 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
                 // Unsupported shader type got stored somehow so nuke the cache
                 LOG_CRITICAL(Frontend, "failed to load raw ProgramType {}", raw.GetProgramType());
                 compilation_failed = true;
-                return;
+                break;
             }
         } else {
             // Since precompiled didn't have the dump, we'll load them in the next phase
@@ -218,8 +218,6 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
     bool load_all_raws = false;
     if (compilation_failed) {
         disk_cache.InvalidatePrecompiled();
-        dumps.clear();
-        precompiled_cache_altered = true;
         load_all_raws = true;
     }
 
@@ -292,8 +290,6 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
             // If this is a new separable shader, add it the precompiled cache
             if (result) {
                 disk_cache.SaveDecompiled(unique_identifier, *result, sanitize_mul);
-                disk_cache.SaveDump(unique_identifier, shader);
-                precompiled_cache_altered = true;
             }
 
             if (callback) {
@@ -324,10 +320,6 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
     if (compilation_failed) {
         disk_cache.InvalidateAll();
     }
-
-    if (precompiled_cache_altered) {
-        disk_cache.SaveVirtualPrecompiledFile();
-    }
 }
 
-} // namespace OpenGL
+} // namespace VideoCore

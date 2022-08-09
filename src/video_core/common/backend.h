@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "common/object_pool.h"
 #include "common/vector_math.h"
 #include "video_core/common/pipeline.h"
 #include "video_core/common/framebuffer.h"
@@ -15,7 +14,9 @@ class EmuWindow;
 
 namespace VideoCore {
 
-/// Common interface of a video backend
+class ShaderDiskCache;
+
+// Common interface of a video backend
 class BackendBase {
 public:
     BackendBase(Frontend::EmuWindow& window) : window(window) {}
@@ -59,7 +60,6 @@ public:
     // Executes a compute shader
     virtual void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,
                                  Common::Vec3<u32> groups) = 0;
-
 private:
     Frontend::EmuWindow& window;
 };

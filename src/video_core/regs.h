@@ -1,4 +1,4 @@
-// Copyright 2017 Citra Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -6,8 +6,6 @@
 
 #include <array>
 #include <cstddef>
-#include <string>
-
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "video_core/regs_framebuffer.h"

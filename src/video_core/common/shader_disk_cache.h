@@ -5,11 +5,8 @@
 #pragma once
 
 #include <optional>
-#include <span>
 #include <memory>
-#include <string_view>
 #include <unordered_map>
-#include <vector>
 #include "video_core/regs.h"
 #include "video_core/common/shader.h"
 
@@ -74,14 +71,7 @@ struct ShaderDiskCacheDecompiled {
     bool sanitize_mul;
 };
 
-// Contains an OpenGL dumped binary program
-struct ShaderDiskCacheDump {
-    //GLenum binary_format;
-    std::vector<u8> binary;
-};
-
 using ShaderDecompiledMap = std::unordered_map<u64, ShaderDiskCacheDecompiled>;
-using ShaderDumpsMap = std::unordered_map<u64, ShaderDiskCacheDump>;
 
 class BackendBase;
 
@@ -92,9 +82,6 @@ public:
 
     /// Loads transferable cache. If file has a old version or on failure, it deletes the file.
     std::optional<std::vector<ShaderDiskCacheRaw>> LoadTransferable();
-
-    /// Loads current game's precompiled cache. Invalidates on failure.
-    std::pair<ShaderDecompiledMap, ShaderDumpsMap> LoadPrecompiled(bool compressed);
 
     /// Removes the transferable (and precompiled) cache file.
     void InvalidateAll();
@@ -108,20 +95,10 @@ public:
     /// Saves a decompiled entry to the precompiled file. Does not check for collisions.
     void SaveDecompiled(u64 unique_identifier, const std::string& code, bool sanitize_mul);
 
-    /// Saves a dump entry to the precompiled file. Does not check for collisions.
-    void SaveDump(u64 unique_identifier, ShaderHandle shader);
-
-    /// Saves a dump entry to the precompiled file. Does not check for collisions.
-    void SaveDumpToFile(u64 unique_identifier, ShaderHandle shader, bool sanitize_mul);
-
-    /// Serializes virtual precompiled shader cache file to real file
-    void SaveVirtualPrecompiledFile();
+    /// Loads the transferable cache. Returns empty on failure.
+    std::optional<ShaderDecompiledMap> LoadPrecompiled();
 
 private:
-    /// Loads the transferable cache. Returns empty on failure.
-    std::optional<std::pair<ShaderDecompiledMap, ShaderDumpsMap>> LoadPrecompiledFile(
-        FileUtil::IOFile& file, bool compressed);
-
     /// Loads a decompiled cache entry from m_precompiled_cache_virtual_file.
     /// Returns empty on failure.
     std::optional<ShaderDiskCacheDecompiled> LoadDecompiledEntry();
