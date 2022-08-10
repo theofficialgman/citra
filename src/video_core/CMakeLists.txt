@@ -112,6 +112,8 @@ add_library(video_core STATIC
     renderer_vulkan/vk_pipeline.cpp
     renderer_vulkan/vk_pipeline.h
     renderer_vulkan/vk_platform.h
+    renderer_vulkan/vk_renderpass_cache.cpp
+    renderer_vulkan/vk_renderpass_cache.h
     renderer_vulkan/vk_shader_gen.cpp
     renderer_vulkan/vk_shader_gen.h
     renderer_vulkan/vk_shader.cpp

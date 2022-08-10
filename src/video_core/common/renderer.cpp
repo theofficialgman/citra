@@ -134,7 +134,7 @@ constexpr VertexLayout ScreenRectVertex::GetVertexLayout() {
 }
 
 // Renderer pipeline layout
-static constexpr PipelineLayoutInfo RENDERER_PIPELINE_INFO = {
+static constexpr PipelineLayoutInfo RENDERER_PIPELINE_LAYOUT = {
     .group_count = 2,
     .binding_groups = {
         BindingGroup{
@@ -167,7 +167,7 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
 
     PipelineInfo present_pipeline_info = {
         .vertex_layout = ScreenRectVertex::GetVertexLayout(),
-        .layout = RENDERER_PIPELINE_INFO,
+        .layout = RENDERER_PIPELINE_LAYOUT,
         .color_attachment = TextureFormat::PresentColor,
         .depth_attachment = TextureFormat::Undefined
     };
@@ -333,9 +333,10 @@ void DisplayRenderer::DrawSingleScreen(u32 screen, bool rotate, float x, float y
     const ScreenInfo& screen_info = screen_infos[screen];
     const auto& texcoords = screen_info.display_texcoords;
 
-    // Clear the swapchain framebuffer
+    // Set the swapchain framebuffer to clear mode
     FramebufferHandle display = backend->GetWindowFramebuffer();
-    display->DoClear(clear_color, 0.f, 0);
+    display->SetLoadOp(LoadOp::Clear);
+    display->SetClearValues(clear_color, 0.f, 0);
 
     // Update viewport and scissor
     const auto& color_surface = display->GetColorAttachment();
@@ -360,7 +361,7 @@ void DisplayRenderer::DrawSingleScreen(u32 screen, bool rotate, float x, float y
     }
 
     const u32 size = sizeof(ScreenRectVertex) * vertices.size();
-    const u32 mapped_offset = vertex_buffer->GetCurrentOffset();
+    const u64 mapped_offset = vertex_buffer->GetCurrentOffset();
     auto vertex_data = vertex_buffer->Map(size);
 
     // Copy vertex data

@@ -42,7 +42,7 @@ constexpr vk::IndexType ToVkIndexType(AttribType type) {
 
 Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
     instance(window), swapchain(instance, instance.GetSurface()),
-    scheduler(instance) {
+    scheduler(instance), renderpass_cache(instance, swapchain) {
 
     // TODO: Properly report GPU hardware
     auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
@@ -51,32 +51,9 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
     telemetry_session.AddField(user_system, "GPU_Model", "GTX 1650");
     telemetry_session.AddField(user_system, "GPU_Vulkan_Version", "Vulkan 1.3");
 
-    // Pre-create all needed renderpasses by the renderer
-    constexpr std::array color_formats = {
-        vk::Format::eUndefined,
-        vk::Format::eR8G8B8A8Unorm,
-        vk::Format::eR8G8B8Unorm,
-        vk::Format::eR5G5B5A1UnormPack16,
-        vk::Format::eR5G6B5UnormPack16,
-        vk::Format::eR4G4B4A4UnormPack16
-    };
-
-    constexpr std::array depth_stencil_formats = {
-        vk::Format::eUndefined,
-        vk::Format::eD16Unorm,
-        vk::Format::eX8D24UnormPack32,
-        vk::Format::eD24UnormS8Uint,
-    };
-
-    // Create all required renderpasses
-    for (u32 color = 0; color <= MAX_COLOR_FORMATS; color++) {
-        for (u32 depth = 0; depth <= MAX_DEPTH_FORMATS; depth++) {
-            if (color == 0 && depth == 0) continue;
-
-            u32 index = color * MAX_COLOR_FORMATS + depth;
-            renderpass_cache[index] = CreateRenderPass(color_formats[color], depth_stencil_formats[depth]);
-        }
-    }
+    // Create pipeline cache object
+    vk::Device device = instance.GetDevice();
+    pipeline_cache = device.createPipelineCache({});
 
     constexpr std::array pool_sizes = {
         vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 1024},
@@ -93,7 +70,6 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
     };
 
     // Create descriptor pools
-    vk::Device device = instance.GetDevice();
     for (u32 pool = 0; pool < SCHEDULER_COMMAND_COUNT; pool++) {
         descriptor_pools[pool] = device.createDescriptorPool(pool_info);
     }
@@ -101,8 +77,10 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
 
 Backend::~Backend() {
     vk::Device device = instance.GetDevice();
-    for (auto& renderpass : renderpass_cache) {
-        device.destroyRenderPass(renderpass);
+    device.destroyPipelineCache(pipeline_cache);
+
+    for (u32 pool = 0; pool < SCHEDULER_COMMAND_COUNT; pool++) {
+        device.destroyDescriptorPool(descriptor_pools[pool]);
     }
 }
 
@@ -134,9 +112,10 @@ FramebufferHandle Backend::CreateFramebuffer(FramebufferInfo info) {
     // Get renderpass
     TextureFormat color = info.color.IsValid() ? info.color->GetFormat() : TextureFormat::Undefined;
     TextureFormat depth = info.depth_stencil.IsValid() ? info.depth_stencil->GetFormat() : TextureFormat::Undefined;
-    vk::RenderPass renderpass = GetRenderPass(color, depth);
+    vk::RenderPass load_renderpass = GetRenderPass(color, depth, false);
+    vk::RenderPass clear_renderpass = GetRenderPass(color, depth, true);
 
-    return FramebufferHandle{framebuffer_pool.Allocate(instance, info, renderpass)};
+    return FramebufferHandle{framebuffer_pool.Allocate(instance, info, load_renderpass, clear_renderpass)};
 }
 
 TextureHandle Backend::CreateTexture(TextureInfo info) {
@@ -152,12 +131,14 @@ PipelineHandle Backend::CreatePipeline(PipelineType type, PipelineInfo info) {
 
     // Find an owner first
     if (auto iter = pipeline_owners.find(info.layout); iter != pipeline_owners.end()) {
-        return PipelineHandle{pipeline_pool.Allocate(instance, iter->second, type, info, renderpass, cache)};
+        return PipelineHandle{pipeline_pool.Allocate(instance, iter->second, type, info,
+                                                     renderpass, pipeline_cache)};
     }
 
     // Create the layout
     auto result = pipeline_owners.emplace(info.layout, PipelineOwner{instance, info.layout});
-    return PipelineHandle{pipeline_pool.Allocate(instance, result.first->second, type, info, renderpass, cache)};
+    return PipelineHandle{pipeline_pool.Allocate(instance, result.first->second, type, info,
+                                                 renderpass, pipeline_cache)};
 }
 
 SamplerHandle Backend::CreateSampler(SamplerInfo info) {
@@ -165,30 +146,35 @@ SamplerHandle Backend::CreateSampler(SamplerInfo info) {
     return SamplerHandle{sampler_pool.Allocate(info)};
 }
 
+void Backend::BindVertexBuffer(BufferHandle buffer, std::span<const u64> offsets) {
+    const Buffer* vertex = static_cast<const Buffer*>(buffer.Get());
+
+    std::array<vk::Buffer, 16> buffers;
+    buffers.fill(vertex->GetHandle());
+
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.bindVertexBuffers(0, offsets.size(), buffers.data(), offsets.data());
+}
+
+void Backend::BindIndexBuffer(BufferHandle buffer, AttribType index_type, u64 offset) {
+    const Buffer* index = static_cast<const Buffer*>(buffer.Get());
+
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.bindIndexBuffer(index->GetHandle(), 0, ToVkIndexType(index_type));
+}
+
 void Backend::Draw(PipelineHandle pipeline_handle, FramebufferHandle draw_framebuffer,
                    u32 base_vertex, u32 num_vertices) {
+
     // Bind descriptor sets
-    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     BindDescriptorSets(pipeline_handle);
 
-    // Bind vertex buffer
-    const Buffer* vertex = static_cast<const Buffer*>(vertex_buffer.Get());
-    command_buffer.bindVertexBuffers(0, vertex->GetHandle(), vertex->GetBindOffset());
-
     // Begin renderpass
-    const Framebuffer* framebuffer = static_cast<const Framebuffer*>(draw_framebuffer.Get());
-    const vk::RenderPassBeginInfo renderpass_begin = {
-        .renderPass = framebuffer->GetRenderpass(),
-        .framebuffer = framebuffer->GetHandle(),
-        .renderArea = ToVkRect2D(framebuffer->GetDrawRectangle()),
-        .clearValueCount = 0,
-        .pClearValues = nullptr
-    };
-
-    command_buffer.beginRenderPass(renderpass_begin, vk::SubpassContents::eInline);
+    BeginRenderpass(draw_framebuffer);
 
     // Bind pipeline
     const Pipeline* pipeline = static_cast<const Pipeline*>(pipeline_handle.Get());
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     command_buffer.bindPipeline(ToVkPipelineBindPoint(pipeline->GetType()), pipeline->GetHandle());
 
     // Submit draw
@@ -199,34 +185,16 @@ void Backend::Draw(PipelineHandle pipeline_handle, FramebufferHandle draw_frameb
 }
 
 void Backend::DrawIndexed(PipelineHandle pipeline_handle, FramebufferHandle draw_framebuffer,
-                          BufferHandle vertex_buffer, BufferHandle index_buffer, AttribType index_type,
                           u32 base_index, u32 num_indices, u32 base_vertex) {
     // Bind descriptor sets
-    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     BindDescriptorSets(pipeline_handle);
 
-    // Bind vertex buffer
-    const Buffer* vertex = static_cast<const Buffer*>(vertex_buffer.Get());
-    command_buffer.bindVertexBuffers(0, vertex->GetHandle(), vertex->GetBindOffset());
-
-    // Bind index buffer
-    const Buffer* index = static_cast<const Buffer*>(index_buffer.Get());
-    command_buffer.bindIndexBuffer(index->GetHandle(), index->GetBindOffset(), ToVkIndexType(index_type));
-
     // Begin renderpass
-    const Framebuffer* framebuffer = static_cast<const Framebuffer*>(draw_framebuffer.Get());
-    const vk::RenderPassBeginInfo renderpass_begin = {
-        .renderPass = framebuffer->GetRenderpass(),
-        .framebuffer = framebuffer->GetHandle(),
-        .renderArea = ToVkRect2D(framebuffer->GetDrawRectangle()),
-        .clearValueCount = 0,
-        .pClearValues = nullptr
-    };
-
-    command_buffer.beginRenderPass(renderpass_begin, vk::SubpassContents::eInline);
+    BeginRenderpass(draw_framebuffer);
 
     // Bind pipeline
     const Pipeline* pipeline = static_cast<const Pipeline*>(pipeline_handle.Get());
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     command_buffer.bindPipeline(ToVkPipelineBindPoint(pipeline->GetType()), pipeline->GetHandle());
 
     // Submit draw
@@ -237,106 +205,80 @@ void Backend::DrawIndexed(PipelineHandle pipeline_handle, FramebufferHandle draw
 
 }
 
-
-vk::RenderPass Backend::CreateRenderPass(vk::Format color, vk::Format depth) const {
-    // Define attachments
-    const std::array attachments = {
-        vk::AttachmentDescription{
-            .format = color,
-            .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
-            .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
-            .initialLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .finalLayout = vk::ImageLayout::eColorAttachmentOptimal
-        },
-        vk::AttachmentDescription{
-            .format = depth,
-            .initialLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
-        }
-    };
-
-    // Our renderpasses only defines one color and depth attachment
-    const vk::AttachmentReference color_attachment_ref = {
-        .attachment = 0,
-        .layout = vk::ImageLayout::eColorAttachmentOptimal
-    };
-
-    const vk::AttachmentReference depth_attachment_ref = {
-        .attachment = 1,
-        .layout = vk::ImageLayout::eDepthStencilAttachmentOptimal
-    };
-
-    const vk::SubpassDependency subpass_dependency = {
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .srcAccessMask = vk::AccessFlagBits::eNone,
-        .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
-                         vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-        .dependencyFlags = vk::DependencyFlagBits::eByRegion
-    };
-
-    // We also require only one subpass
-    const vk::SubpassDescription subpass = {
-        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
-        .inputAttachmentCount = 0,
-        .pInputAttachments = nullptr,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &color_attachment_ref,
-        .pResolveAttachments = 0,
-        .pDepthStencilAttachment = &depth_attachment_ref
-    };
-
-    const vk::RenderPassCreateInfo renderpass_info = {
-        .attachmentCount = 2,
-        .pAttachments = attachments.data(),
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &subpass_dependency
-    };
-
-    // Create the renderpass
-    vk::Device device = instance.GetDevice();
-    return device.createRenderPass(renderpass_info);
-}
-
-vk::RenderPass Backend::GetRenderPass(TextureFormat color, TextureFormat depth) const {
-    u32 color_index = color != TextureFormat::Undefined ? static_cast<u32>(color) + 1 : 0;
-    u32 depth_index = depth != TextureFormat::Undefined ? static_cast<u32>(depth) - 4 : 0;
-    return renderpass_cache[color_index * MAX_COLOR_FORMATS + depth_index];
+vk::RenderPass Backend::GetRenderPass(TextureFormat color, TextureFormat depth, bool is_clear) const {
+    if (color == TextureFormat::PresentColor) {
+        return renderpass_cache.GetPresentRenderpass();
+    } else {
+        return renderpass_cache.GetRenderpass(color, depth, is_clear);
+    }
 }
 
 void Backend::BindDescriptorSets(PipelineHandle handle) {
     Pipeline* pipeline = static_cast<Pipeline*>(handle.Get());
-    PipelineLayout& pipeline_layout = pipeline->GetOwner();
+    PipelineOwner& pipeline_owner = pipeline->GetOwner();
 
-    // Allocate required descriptor sets
-    // TODO: Maybe cache them?
-    u32 pool_index = scheduler.GetCurrentSlotIndex();
-    const vk::DescriptorSetAllocateInfo alloc_info = {
-        .descriptorPool = descriptor_pools[pool_index],
-        .descriptorSetCount = pipeline_layout.GetDescriptorSetLayoutCount(),
-        .pSetLayouts = pipeline_layout.GetDescriptorSetLayouts()
-    };
+    std::array<vk::DescriptorSet, MAX_BINDING_GROUPS> bound_sets;
+    const u32 set_count = pipeline_owner.GetDescriptorSetLayoutCount();
+    for (int i = 0; i < set_count; i++) {
+        if (!pipeline_owner.descriptor_dirty[i]) {
+            // Get the ready descriptor if it hasn't been modified
+            bound_sets[i] = pipeline_owner.descriptor_bank[i];
+        } else {
+            // Otherwise allocate a new set and update it with the needed data
+            u32 pool_index = scheduler.GetCurrentSlotIndex();
+            const vk::DescriptorSetAllocateInfo alloc_info = {
+                .descriptorPool = descriptor_pools[pool_index],
+                .descriptorSetCount = 1,
+                .pSetLayouts = &pipeline_owner.GetDescriptorSetLayouts()[i]
+            };
 
-    vk::Device device = instance.GetDevice();
-    auto descriptor_sets = device.allocateDescriptorSets(alloc_info);
+            vk::Device device = instance.GetDevice();
+            vk::DescriptorSet set = device.allocateDescriptorSets(alloc_info)[0];
+            device.updateDescriptorSetWithTemplate(set, pipeline_owner.GetUpdateTemplate(i),
+                                                   pipeline_owner.GetData(i));
 
-    // Write data to the descriptor sets
-    for (u32 set = 0; set < descriptor_sets.size(); set++) {
-        device.updateDescriptorSetWithTemplate(descriptor_sets[set],
-                                               pipeline_layout.GetUpdateTemplate(set),
-                                               pipeline_layout.GetData(set));
+            bound_sets[i] = set;
+            pipeline_owner.descriptor_bank[i] = set;
+            pipeline_owner.descriptor_dirty[i] = false;
+        }
     }
 
     // Bind the descriptor sets
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
-    command_buffer.bindDescriptorSets(ToVkPipelineBindPoint(handle->GetType()), pipeline_layout.GetLayout(),
-                                      0, descriptor_sets, {});
+    command_buffer.bindDescriptorSets(ToVkPipelineBindPoint(handle->GetType()), pipeline_owner.GetLayout(),
+                                      0, set_count, bound_sets.data(), 0, nullptr);
+}
+
+void Backend::BeginRenderpass(FramebufferHandle draw_framebuffer) {
+    const Framebuffer* framebuffer = static_cast<const Framebuffer*>(draw_framebuffer.Get());
+
+    u32 clear_value_count = 0;
+    std::array<vk::ClearValue, 2> clear_values{};
+
+    if (framebuffer->GetColorAttachment().IsValid()) {
+        for (int i = 0; i < 4; i++) {
+            clear_values[clear_value_count++].color.float32[i] = framebuffer->clear_color_value[i];
+        }
+    }
+
+    if (framebuffer->GetDepthStencilAttachment().IsValid()) {
+        clear_values[clear_value_count].depthStencil.depth = framebuffer->clear_depth_value;
+        clear_values[clear_value_count++].depthStencil.stencil = framebuffer->clear_stencil_value;
+    }
+
+    // Use the clear renderpass if the framebuffer was configured so
+    const vk::RenderPassBeginInfo renderpass_begin = {
+        .renderPass = framebuffer->GetLoadOp() == LoadOp::Load ?
+                      framebuffer->GetLoadRenderpass() :
+                      framebuffer->GetClearRenderpass(),
+        .framebuffer = framebuffer->GetHandle(),
+        .renderArea = ToVkRect2D(framebuffer->GetDrawRect()),
+        .clearValueCount = clear_value_count,
+        .pClearValues = clear_values.data()
+    };
+
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.beginRenderPass(renderpass_begin, vk::SubpassContents::eInline);
 }
 
 } // namespace VideoCore::Vulkan

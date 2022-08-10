@@ -39,8 +39,6 @@ enum class BindingType : u32 {
 
 using BindingGroup = BitFieldArray<0, 3, MAX_BINDINGS_IN_GROUP, BindingType>;
 
-static_assert(sizeof(BindingGroup));
-
 /**
  * Describes all the resources used in the pipeline
  */
@@ -49,8 +47,6 @@ struct PipelineLayoutInfo {
     std::array<BindingGroup, MAX_BINDING_GROUPS> binding_groups{};
     u8 push_constant_block_size = 0;
 };
-
-static_assert(sizeof(PipelineLayoutInfo));
 
 /**
  * The pipeline state is tightly packed with bitfields to reduce

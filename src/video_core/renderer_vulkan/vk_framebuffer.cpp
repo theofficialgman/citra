@@ -57,7 +57,7 @@ Framebuffer::~Framebuffer() {
     device.destroyFramebuffer(framebuffer);
 }
 
-void Framebuffer::DoClear(Common::Vec4f color, float depth, u8 stencil) {
+void Framebuffer::DoClear() {
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
 
     u32 clear_value_count = 0;
@@ -65,7 +65,7 @@ void Framebuffer::DoClear(Common::Vec4f color, float depth, u8 stencil) {
 
     if (info.color.IsValid()) {
         vk::ClearColorValue clear_color{};
-        std::memcpy(clear_color.float32.data(), color.AsArray(), sizeof(float) * 4);
+        std::memcpy(clear_color.float32.data(), clear_value.color.AsArray(), sizeof(float) * 4);
 
         clear_values[clear_value_count++] = vk::ClearValue {
             .color = clear_color
@@ -75,8 +75,8 @@ void Framebuffer::DoClear(Common::Vec4f color, float depth, u8 stencil) {
     if (info.depth_stencil.IsValid()) {
         clear_values[clear_value_count++] = vk::ClearValue {
             .depthStencil = vk::ClearDepthStencilValue {
-                .depth = depth,
-                .stencil = stencil
+                .depth = clear_value.depth,
+                .stencil = clear_value.stencil
             }
         };
     }

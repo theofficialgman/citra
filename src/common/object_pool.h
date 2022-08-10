@@ -62,6 +62,10 @@ struct AlignedAllocation {
 template<typename T>
 class ObjectPool {
 public:
+    ObjectPool() {
+        vacants.reserve(32);
+    }
+
     template<typename... P>
     T* Allocate(P&&... p) {
 #ifndef OBJECT_POOL_DEBUG

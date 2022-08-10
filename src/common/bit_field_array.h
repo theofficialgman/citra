@@ -50,14 +50,6 @@ public:
     }
   }
 
-  // We explicitly delete the copy assignment operator here, because the
-  // default copy assignment would copy the full storage value, rather than
-  // just the bits relevant to this particular bit field.
-  // Ideally, we would just implement the copy assignment to copy only the
-  // relevant bits, but we're prevented from doing that because the savestate
-  // code expects that this class is trivially copyable.
-  BitFieldArray& operator=(const BitFieldArray&) = delete;
-
 public:
   constexpr bool IsSigned() const { return std::is_signed<T>(); }
   constexpr std::size_t StartBit() const { return position; }

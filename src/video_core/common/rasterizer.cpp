@@ -96,7 +96,7 @@ constexpr u32 UTILITY_GROUP = 0;
 constexpr u32 TEXTURE_GROUP = 1;
 
 // Rasterizer pipeline layout
-static constexpr PipelineLayoutInfo RASTERIZER_PIPELINE_INFO = {
+constexpr PipelineLayoutInfo RASTERIZER_PIPELINE_LAYOUT = {
     .group_count = 3,
     .binding_groups = {
         // Uniform + LUT set
@@ -191,6 +191,10 @@ Rasterizer::Rasterizer(Frontend::EmuWindow& emu_window, std::unique_ptr<BackendB
 
     // Create pipeline cache
     pipeline_cache = std::make_unique<PipelineCache>(emu_window, backend);
+
+    // Initialize the rasterization pipeline info
+    raster_info.vertex_layout = HardwareVertex::GetVertexLayout();
+    raster_info.layout = RASTERIZER_PIPELINE_LAYOUT;
 
     // Synchronize pica state
     SyncEntireState();
@@ -348,7 +352,7 @@ void Rasterizer::SetupVertexArray(u32 vs_input_size, u32 vs_input_index_min, u32
 
     VertexLayout layout{};
     std::array<bool, 16> enable_attributes{};
-    std::array<u32, 16> binding_offsets{};
+    std::array<u64, 16> binding_offsets{};
 
     u32 buffer_offset = 0;
     for (const auto& loader : vertex_attributes.attribute_loaders) {
@@ -448,7 +452,7 @@ void Rasterizer::SetupVertexArray(u32 vs_input_size, u32 vs_input_index_min, u32
     vertex_buffer->Commit(vs_input_size);
 
     // Bind the vertex buffers with all the bindings
-    auto offsets = std::span<u32>{binding_offsets.data(), layout.binding_count};
+    auto offsets = std::span<u64>{binding_offsets.data(), layout.binding_count};
     backend->BindVertexBuffer(vertex_buffer, offsets);
 }
 
@@ -587,6 +591,8 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
 
     // Retrieve the framebuffer assigned to the surfaces and update raster_info
     FramebufferHandle framebuffer = res_cache.GetFramebuffer(color_surface, depth_surface);
+    framebuffer->SetLoadOp(LoadOp::Load);
+
     raster_info.color_attachment = framebuffer->GetColorAttachment().IsValid() ?
                                    framebuffer->GetColorAttachment()->GetFormat() :
                                    TextureFormat::Undefined;
@@ -815,7 +821,7 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
         // Bind the vertex buffer at the current mapped offset. This effectively means
         // that when base_vertex is zero the GPU will start drawing from the current mapped
         // offset not the start of the buffer.
-        const std::array mapped_offset = {vertex_buffer->GetCurrentOffset()};
+        const std::array<u64, 1> mapped_offset = {vertex_buffer->GetCurrentOffset()};
         backend->BindVertexBuffer(vertex_buffer, mapped_offset);
 
         const std::size_t max_vertices = VERTEX_BUFFER_INFO.capacity / sizeof(HardwareVertex);

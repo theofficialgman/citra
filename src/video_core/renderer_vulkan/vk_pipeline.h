@@ -25,6 +25,7 @@ union DescriptorData {
  * Functions as the "parent" to a group of pipelines that share the same layout
  */
 class PipelineOwner {
+    friend class Backend;
 public:
     PipelineOwner(Instance& instance, PipelineLayoutInfo info);
     ~PipelineOwner();

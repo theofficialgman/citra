@@ -262,7 +262,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
         tex_info.format = static_cast<Pica::TexturingRegs::TextureFormat>(surface->pixel_format);
         const auto color_values = Pica::Texture::LookupTexture(fill_data, 0, 0, tex_info) / 255.f;
 
-        framebuffer->DoClear(color_values, 0.0f, 0);
+        framebuffer->SetClearValues(color_values, 0.0f, 0);
     } else if (surface->type == SurfaceType::Depth) {
         u32 depth_32bit = 0;
         float depth_float;
@@ -278,7 +278,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
             UNREACHABLE();
         }
 
-        framebuffer->DoClear({}, depth_float, 0);
+        framebuffer->SetClearValues({}, depth_float, 0);
     } else if (surface->type == SurfaceType::DepthStencil) {
         u32 value_32bit;
         std::memcpy(&value_32bit, fill_data, sizeof(u32));
@@ -286,9 +286,10 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
         float depth_float = (value_32bit & 0xFFFFFF) / 16777215.0f; // 2^24 - 1
         u8 stencil_int = (value_32bit >> 24);
 
-        framebuffer->DoClear({}, depth_float, stencil_int);
+        framebuffer->SetClearValues({}, depth_float, stencil_int);
     }
 
+    framebuffer->DoClear();
     return true;
 }
 

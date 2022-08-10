@@ -16,6 +16,12 @@ enum class MSAASamples : u32 {
     x8
 };
 
+// States which operation to perform on the framebuffer attachment during rendering
+enum class LoadOp : u8 {
+    Load = 0,
+    Clear = 1
+};
+
 /**
  * Information about a framebuffer
  */
@@ -31,9 +37,7 @@ struct FramebufferInfo {
     }
 };
 
-/**
- * A framebuffer is a collection of render targets and their configuration
- */
+// A framebuffer is a collection of render targets and their configuration
 class FramebufferBase : public IntrusivePtrEnabled<FramebufferBase> {
 public:
     FramebufferBase(const FramebufferInfo& info) : info(info) {}
@@ -43,8 +47,8 @@ public:
     FramebufferBase(const FramebufferBase&) = delete;
     FramebufferBase& operator=(const FramebufferBase&) = delete;
 
-    // Clears the attachments bound to the framebuffer
-    virtual void DoClear(Common::Vec4f color, float depth, u8 stencil) = 0;
+    // Clears the attachments bound to the framebuffer using the last stored clear value
+    virtual void DoClear() = 0;
 
     // Returns an immutable reference to the color attachment
     TextureHandle GetColorAttachment() const {
@@ -61,8 +65,22 @@ public:
         draw_rect = rect;
     }
 
+    LoadOp GetLoadOp() const {
+        return load_op;
+    }
+
+    void SetLoadOp(LoadOp op) {
+        load_op = op;
+    }
+
+    void SetClearValues(Common::Vec4f color, float depth, u8 stencil) {
+        clear_color_value = color;
+        clear_depth_value = depth;
+        clear_stencil_value = stencil;
+    }
+
     // Returns the area of the framebuffer affected by draw operations
-    Common::Rectangle<u32> GetDrawRect() {
+    Common::Rectangle<u32> GetDrawRect() const {
         return draw_rect;
     }
 
@@ -72,6 +90,10 @@ public:
     }
 
 protected:
+    LoadOp load_op = LoadOp::Load;
+    Common::Vec4f clear_color_value{};
+    float clear_depth_value = 0.f;
+    u8 clear_stencil_value = 0;
     Common::Rectangle<u32> draw_rect;
     FramebufferInfo info;
 };

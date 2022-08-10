@@ -10,12 +10,9 @@
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline.h"
+#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
 
 namespace VideoCore::Vulkan {
-
-class Texture;
-
-constexpr u32 RENDERPASS_COUNT = (MAX_COLOR_FORMATS + 1) * (MAX_DEPTH_FORMATS + 1);
 
 class Backend final : public VideoCore::BackendBase {
 public:
@@ -38,8 +35,8 @@ public:
     SamplerHandle CreateSampler(SamplerInfo info) override;
     ShaderHandle CreateShader(ShaderStage stage, std::string_view name, std::string source) override;
 
-    void BindVertexBuffer(BufferHandle buffer, std::span<const u32> offsets) override;
-    void BindIndexBuffer(BufferHandle buffer, AttribType index_type, u32 offset) override;
+    void BindVertexBuffer(BufferHandle buffer, std::span<const u64> offsets) override;
+    void BindIndexBuffer(BufferHandle buffer, AttribType index_type, u64 offset) override;
 
     void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
               u32 base_vertex, u32 num_vertices) override;
@@ -61,21 +58,20 @@ public:
     }
 
 private:
-    vk::RenderPass CreateRenderPass(vk::Format color, vk::Format depth) const;
-    vk::RenderPass GetRenderPass(TextureFormat color, TextureFormat depth) const;
+    vk::RenderPass GetRenderPass(TextureFormat color, TextureFormat depth, bool is_clear = false) const;
 
     // Allocates and binds descriptor sets for the provided pipeline
     void BindDescriptorSets(PipelineHandle pipeline);
+
+    // Begins the renderpass for the provided framebuffer
+    void BeginRenderpass(FramebufferHandle framebuffer);
 
 private:
     Instance instance;
     Swapchain swapchain;
     CommandScheduler scheduler;
-
-    // The formats Citra uses are limited so we can pre-create
-    // all the renderpasses we will need
-    std::array<vk::RenderPass, RENDERPASS_COUNT> renderpass_cache;
-    vk::PipelineCache cache;
+    RenderpassCache renderpass_cache;
+    vk::PipelineCache pipeline_cache;
 
     // A cache of pipeline owners
     std::unordered_map<PipelineLayoutInfo, PipelineOwner> pipeline_owners;

@@ -13,12 +13,13 @@ class Instance;
 class CommandScheduler;
 
 class Framebuffer : public VideoCore::FramebufferBase {
+    friend class Backend;
 public:
     Framebuffer(Instance& instance, CommandScheduler& scheduler, const FramebufferInfo& info,
                 vk::RenderPass load_renderpass, vk::RenderPass clear_renderpass);
     ~Framebuffer() override;
 
-    void DoClear(Common::Vec4f color, float depth, u8 stencil) override;
+    void DoClear() override;
 
     vk::Framebuffer GetHandle() const {
         return framebuffer;
@@ -26,6 +27,20 @@ public:
 
     vk::RenderPass GetLoadRenderpass() const {
         return load_renderpass;
+    }
+
+    vk::RenderPass GetClearRenderpass() const {
+        return clear_renderpass;
+    }
+
+    u32 GetAttachmentCount() const {
+        if (info.color.IsValid() && info.depth_stencil.IsValid()) {
+            return 2;
+        } else if (!info.color.IsValid() && !info.depth_stencil.IsValid()) {
+            return 0;
+        } else {
+            return 1;
+        }
     }
 
 private:

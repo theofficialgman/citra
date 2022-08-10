@@ -59,10 +59,10 @@ public:
     virtual ShaderHandle CreateShader(ShaderStage stage, std::string_view name, std::string source) = 0;
 
     // Binds a vertex buffer at a provided offset
-    virtual void BindVertexBuffer(BufferHandle buffer, std::span<const u32> offsets) = 0;
+    virtual void BindVertexBuffer(BufferHandle buffer, std::span<const u64> offsets) = 0;
 
     // Binds an index buffer at provided offset
-    virtual void BindIndexBuffer(BufferHandle buffer, AttribType index_type, u32 offset) = 0;
+    virtual void BindIndexBuffer(BufferHandle buffer, AttribType index_type, u64 offset) = 0;
 
     // Start a draw operation
     virtual void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer, u32 base_vertex,
