@@ -14,7 +14,10 @@ class EmuWindow;
 
 namespace VideoCore {
 
-class ShaderDiskCache;
+// A piece of information the video frontend can query the backend about
+enum class Query {
+    PresentFormat = 0
+};
 
 // Common interface of a video backend
 class BackendBase {
@@ -22,8 +25,17 @@ public:
     BackendBase(Frontend::EmuWindow& window) : window(window) {}
     virtual ~BackendBase() = default;
 
+    // Acquires the next swapchain images and begins rendering
+    virtual bool BeginPresent() = 0;
+
     // Triggers a swapchain buffer swap
-    virtual void SwapBuffers();
+    virtual void EndPresent() = 0;
+
+    // Returns the framebuffer created from the swapchain images
+    virtual FramebufferHandle GetWindowFramebuffer() = 0;
+
+    // Asks the driver about a particular piece of information
+    virtual u64 QueryDriver(Query query) = 0;
 
     // Creates a backend specific texture handle
     virtual TextureHandle CreateTexture(TextureInfo info) = 0;
@@ -60,7 +72,7 @@ public:
     // Executes a compute shader
     virtual void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,
                                  Common::Vec3<u32> groups) = 0;
-private:
+protected:
     Frontend::EmuWindow& window;
 };
 

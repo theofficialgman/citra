@@ -9,6 +9,7 @@
 #include "core/hw/gpu.h"
 #include "video_core/pica_state.h"
 #include "video_core/common/rasterizer.h"
+#include "video_core/common/renderer.h"
 #include "video_core/common/pipeline_cache.h"
 #include "video_core/video_core.h"
 
@@ -78,7 +79,7 @@ constexpr VertexLayout HardwareVertex::GetVertexLayout() {
     constexpr std::array sizes = {4, 4, 2, 2, 2, 1, 4, 3};
     u32 offset = 0;
 
-    for (u32 loc = 0; loc < layout.attribute_count; loc++) {
+    for (u32 loc = 0; loc < 8; loc++) {
         VertexAttribute& attribute = layout.attributes[loc];
         attribute.binding.Assign(0);
         attribute.location.Assign(loc);
@@ -1559,7 +1560,7 @@ bool Rasterizer::AccelerateDisplay(const GPU::Regs::FramebufferConfig& config,
         (float)src_rect.bottom / (float)scaled_height, (float)src_rect.left / (float)scaled_width,
         (float)src_rect.top / (float)scaled_height, (float)src_rect.right / (float)scaled_width);
 
-    screen_info.display_texture = src_surface->texture.handle;
+    screen_info.display_texture = src_surface->texture;
 
     return true;
 }

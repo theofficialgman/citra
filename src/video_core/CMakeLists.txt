@@ -35,6 +35,8 @@ add_library(video_core STATIC
     common/rasterizer.h
     common/rasterizer_cache.cpp
     common/rasterizer_cache.h
+    common/renderer.cpp
+    common/renderer.h
     common/shader_runtime_cache.h
     common/shader_disk_cache.cpp
     common/shader_disk_cache.h

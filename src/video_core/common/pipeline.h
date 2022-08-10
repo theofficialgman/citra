@@ -39,6 +39,8 @@ enum class BindingType : u32 {
 
 using BindingGroup = BitFieldArray<0, 3, MAX_BINDINGS_IN_GROUP, BindingType>;
 
+static_assert(sizeof(BindingGroup));
+
 /**
  * Describes all the resources used in the pipeline
  */
@@ -47,6 +49,8 @@ struct PipelineLayoutInfo {
     std::array<BindingGroup, MAX_BINDING_GROUPS> binding_groups{};
     u8 push_constant_block_size = 0;
 };
+
+static_assert(sizeof(PipelineLayoutInfo));
 
 /**
  * The pipeline state is tightly packed with bitfields to reduce
@@ -83,7 +87,8 @@ union BlendState {
     BitField<16, 4, Pica::BlendFactor> dst_alpha_blend_factor;
     BitField<20, 3, Pica::BlendEquation> alpha_blend_eq;
     BitField<23, 4, u32> color_write_mask;
-    BitField<27, 4, Pica::LogicOp> logic_op;
+    BitField<27, 1, u32> logic_op_enable;
+    BitField<28, 4, Pica::LogicOp> logic_op;
 };
 
 enum class AttribType : u32 {
@@ -159,11 +164,14 @@ public:
     // Binds the sampler in the specified slot
     virtual void BindSampler(u32 group, u32 slot, SamplerHandle handle) = 0;
 
+    // Binds a small uniform block (under 256 bytes) to the current pipeline
+    virtual void BindPushConstant(std::span<const std::byte> data) = 0;
+
     // Sets the viewport of the pipeline
-    virtual void SetViewport(Rect2D viewport) = 0;
+    virtual void SetViewport(float x, float y, float width, float height) = 0;
 
     // Sets the scissor of the pipeline
-    virtual void SetScissor(Rect2D scissor) = 0;
+    virtual void SetScissor(s32 x, s32 y, u32 width, u32 height) = 0;
 
     // Returns the pipeline type (Graphics or Compute)
     PipelineType GetType() const {
@@ -171,7 +179,7 @@ public:
     }
 
 protected:
-    PipelineInfo info;
+    const PipelineInfo info;
     PipelineType type = PipelineType::Graphics;
 };
 

@@ -23,8 +23,8 @@ class MemorySystem;
 
 namespace VideoCore {
 
-class RendererBase;
-extern std::unique_ptr<RendererBase> g_renderer; ///< Renderer plugin
+class DisplayRenderer;
+extern std::unique_ptr<DisplayRenderer> g_renderer; ///< Renderer plugin
 
 // TODO: Wrap these in a user settings struct along with any other graphics settings (often set from
 // qt ui)

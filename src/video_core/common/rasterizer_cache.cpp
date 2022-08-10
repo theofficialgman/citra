@@ -241,9 +241,11 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
         .depth_stencil = depth_surface ? surface->texture : TextureHandle{}
     };
 
-    // Some backends (Vulkan) provide texture clear functions but in general
-    // it's still more efficient to use framebuffers for fills to take advantage
-    // of the dedicated clear engine on the GPU
+    /**
+     * Some backends (for example Vulkan) provide texture clear functions but in general
+     * it's still more efficient to use framebuffers for fills to take advantage of the dedicated
+     * clear engine on the GPU
+     */
     FramebufferHandle framebuffer;
     if (auto iter = framebuffer_cache.find(framebuffer_info); iter != framebuffer_cache.end()) {
         framebuffer = iter->second;
@@ -258,7 +260,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
     if (surface->type == SurfaceType::Color || surface->type == SurfaceType::Texture) {
         Pica::Texture::TextureInfo tex_info{};
         tex_info.format = static_cast<Pica::TexturingRegs::TextureFormat>(surface->pixel_format);
-        Common::Vec4f color_values = Pica::Texture::LookupTexture(fill_data, 0, 0, tex_info) / 255.f;
+        const auto color_values = Pica::Texture::LookupTexture(fill_data, 0, 0, tex_info) / 255.f;
 
         framebuffer->DoClear(color_values, 0.0f, 0);
     } else if (surface->type == SurfaceType::Depth) {
@@ -286,6 +288,7 @@ bool RasterizerCache::FillSurface(const Surface& surface, const u8* fill_data, C
 
         framebuffer->DoClear({}, depth_float, stencil_int);
     }
+
     return true;
 }
 

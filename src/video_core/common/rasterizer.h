@@ -38,6 +38,7 @@ struct HardwareVertex {
 };
 
 class BackendBase;
+struct ScreenInfo;
 
 class Rasterizer {
 public:

@@ -18,7 +18,7 @@ class Texture;
 constexpr u32 RENDERPASS_COUNT = (MAX_COLOR_FORMATS + 1) * (MAX_DEPTH_FORMATS + 1);
 constexpr u32 DESCRIPTOR_BANK_SIZE = 64;
 
-class Backend : public VideoCore::BackendBase {
+class Backend final : public VideoCore::BackendBase {
 public:
     Backend(Frontend::EmuWindow& window);
     ~Backend();

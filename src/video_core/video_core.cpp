@@ -8,10 +8,7 @@
 #include "core/settings.h"
 #include "video_core/pica.h"
 #include "video_core/pica_state.h"
-#include "video_core/renderer_base.h"
-#include "video_core/renderer_opengl/gl_vars.h"
-#include "video_core/renderer_opengl/renderer_opengl.h"
-#include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/common/renderer.h"
 #include "video_core/video_core.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -19,7 +16,7 @@
 
 namespace VideoCore {
 
-std::unique_ptr<RendererBase> g_renderer; ///< Renderer plugin
+std::unique_ptr<DisplayRenderer> g_renderer; ///< Renderer plugin
 
 std::atomic<bool> g_hw_renderer_enabled;
 std::atomic<bool> g_shader_jit_enabled;
@@ -44,25 +41,14 @@ ResultStatus Init(Frontend::EmuWindow& emu_window, Memory::MemorySystem& memory)
     g_memory = &memory;
     Pica::Init();
 
-    OpenGL::GLES = Settings::values.use_gles;
-
-    g_renderer = std::make_unique<Vulkan::RendererVulkan>(emu_window);
-    ResultStatus result = g_renderer->Init();
-
-    if (result != ResultStatus::Success) {
-        LOG_ERROR(Render, "initialization failed !");
-    } else {
-        LOG_DEBUG(Render, "initialized OK");
-    }
-
-    return result;
+    g_renderer = std::make_unique<DisplayRenderer>(emu_window);
+    return ResultStatus::Success;
 }
 
 /// Shutdown the video core
 void Shutdown() {
     Pica::Shutdown();
 
-    g_renderer->ShutDown();
     g_renderer.reset();
 
     LOG_DEBUG(Render, "shutdown OK");
