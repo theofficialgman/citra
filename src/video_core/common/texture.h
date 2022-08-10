@@ -24,6 +24,7 @@ enum class TextureFormat : u8 {
     D16 = 5,
     D24 = 6,
     D24S8 = 7,
+    PresentColor = 8, // Backend specific swapchain format
     Undefined = 255
 };
 

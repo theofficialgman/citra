@@ -41,17 +41,16 @@ using ProgramCode = std::vector<u32>;
 using ShaderDecompiledMap = std::unordered_map<u64, ShaderDiskCacheDecompiled>;
 using ShaderDumpsMap = std::unordered_map<u64, ShaderDiskCacheDump>;
 
-// Describes a shader how it's used by the guest GPU
+/// Describes a shader how it's used by the guest GPU
 class ShaderDiskCacheRaw {
 public:
+    explicit ShaderDiskCacheRaw(u64 unique_identifier, ProgramType program_type,
+                                RawShaderConfig config, ProgramCode program_code);
     ShaderDiskCacheRaw() = default;
-    ShaderDiskCacheRaw(u64 unique_identifier, ProgramType program_type,
-                       Pica::Regs config, std::vector<u32> program_code) :
-        unique_identifier(unique_identifier), program_type(program_type), config(config),
-        program_code(program_code) {}
     ~ShaderDiskCacheRaw() = default;
 
     bool Load(FileUtil::IOFile& file);
+
     bool Save(FileUtil::IOFile& file) const;
 
     u64 GetUniqueIdentifier() const {
@@ -62,19 +61,19 @@ public:
         return program_type;
     }
 
-    const std::vector<u32>& GetProgramCode() const {
+    const ProgramCode& GetProgramCode() const {
         return program_code;
     }
 
-    const Pica::Regs& GetRawShaderConfig() const {
+    const RawShaderConfig& GetRawShaderConfig() const {
         return config;
     }
 
 private:
-    u64 unique_identifier = 0;
+    u64 unique_identifier{};
     ProgramType program_type{};
-    Pica::Regs config{};
-    std::vector<u32> program_code{};
+    RawShaderConfig config{};
+    ProgramCode program_code{};
 };
 
 /// Contains decompiled data from a shader

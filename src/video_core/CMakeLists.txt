@@ -95,8 +95,6 @@ add_library(video_core STATIC
     renderer_opengl/gl_format_reinterpreter.cpp
     renderer_opengl/gl_format_reinterpreter.h
     renderer_vulkan/pica_to_vulkan.h
-    renderer_vulkan/renderer_vulkan.cpp
-    renderer_vulkan/renderer_vulkan.h
     renderer_vulkan/vk_backend.cpp
     renderer_vulkan/vk_backend.h
     renderer_vulkan/vk_buffer.cpp
@@ -114,17 +112,10 @@ add_library(video_core STATIC
     renderer_vulkan/vk_pipeline.cpp
     renderer_vulkan/vk_pipeline.h
     renderer_vulkan/vk_platform.h
-    renderer_vulkan/vk_rasterizer_cache.cpp
-    renderer_vulkan/vk_rasterizer_cache.h
-    renderer_vulkan/vk_rasterizer.cpp
-    renderer_vulkan/vk_rasterizer.h
-    renderer_vulkan/vk_shader_state.h
     renderer_vulkan/vk_shader_gen.cpp
     renderer_vulkan/vk_shader_gen.h
     renderer_vulkan/vk_shader.cpp
     renderer_vulkan/vk_shader.h
-    renderer_vulkan/vk_surface_params.cpp
-    renderer_vulkan/vk_surface_params.h
     renderer_vulkan/vk_swapchain.cpp
     renderer_vulkan/vk_swapchain.h
     renderer_vulkan/vk_task_scheduler.cpp

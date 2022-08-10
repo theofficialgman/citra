@@ -43,13 +43,10 @@ static bool IsVendorAmd() {
     const std::string_view gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
     return gpu_vendor == "ATI Technologies Inc." || gpu_vendor == "Advanced Micro Devices, Inc.";
 }
-
-#ifdef __APPLE__
 static bool IsVendorIntel() {
     std::string gpu_vendor{reinterpret_cast<char const*>(glGetString(GL_VENDOR))};
     return gpu_vendor == "Intel Inc.";
 }
-#endif
 
 RasterizerOpenGL::RasterizerOpenGL(Frontend::EmuWindow& emu_window)
     : is_amd(IsVendorAmd()), vertex_buffer(GL_ARRAY_BUFFER, VERTEX_BUFFER_SIZE, is_amd),
@@ -414,7 +411,7 @@ bool RasterizerOpenGL::SetupGeometryShader() {
     MICROPROFILE_SCOPE(OpenGL_GS);
     const auto& regs = Pica::g_state.regs;
 
-    if (regs.pipeline.use_gs != Pica::UseGS::No) {
+    if (regs.pipeline.use_gs != Pica::PipelineRegs::UseGS::No) {
         LOG_ERROR(Render_OpenGL, "Accelerate draw doesn't support geometry shader");
         return false;
     }
@@ -761,9 +758,8 @@ bool RasterizerOpenGL::Draw(bool accelerate, bool is_indexed) {
                     texture_cube_sampler.SyncWithConfig(texture.config);
                     state.texture_units[texture_index].texture_2d = 0;
                     continue; // Texture unit 0 setup finished. Continue to next unit
-                default:
-                    state.texture_cube_unit.texture_cube = 0;
                 }
+                state.texture_cube_unit.texture_cube = 0;
             }
 
             texture_samplers[texture_index].SyncWithConfig(texture.config);
@@ -786,6 +782,12 @@ bool RasterizerOpenGL::Draw(bool accelerate, bool is_indexed) {
         }
     }
 
+    if (color_surface->pixel_format == SurfaceParams::PixelFormat::RGB5A1 ||
+        color_surface->pixel_format == SurfaceParams::PixelFormat::RGB565 ||
+        color_surface->pixel_format == SurfaceParams::PixelFormat::RGBA4) {
+            LOG_WARNING(Render_OpenGL, "Render target with unsupported format!\n");
+        }
+
     OGLTexture temp_tex;
     if (need_duplicate_texture && (GLAD_GL_ARB_copy_image || GLES)) {
         // The game is trying to use a surface as a texture and framebuffer at the same time
@@ -802,7 +804,7 @@ bool RasterizerOpenGL::Draw(bool accelerate, bool is_indexed) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindTexture(GL_TEXTURE_2D, state.texture_units[0].texture_2d);
 
-        for (std::size_t level{0}; level <= color_surface->max_level; ++level) {
+        for (u32 level{0}; level <= color_surface->max_level; ++level) {
             glCopyImageSubData(color_surface->texture.handle, GL_TEXTURE_2D, level, 0, 0, 0,
                                temp_tex.handle, GL_TEXTURE_2D, level, 0, 0, 0,
                                color_surface->GetScaledWidth() >> level,

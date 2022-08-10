@@ -16,7 +16,7 @@ namespace VideoCore {
 
 // A piece of information the video frontend can query the backend about
 enum class Query {
-    PresentFormat = 0
+    UniformAlignment = 0,
 };
 
 // Common interface of a video backend
@@ -36,6 +36,9 @@ public:
 
     // Asks the driver about a particular piece of information
     virtual u64 QueryDriver(Query query) = 0;
+
+    // Returns the has of the pipeline info struct accounting for dynamic states
+    virtual u64 PipelineInfoHash(const PipelineInfo& info) = 0;
 
     // Creates a backend specific texture handle
     virtual TextureHandle CreateTexture(TextureInfo info) = 0;

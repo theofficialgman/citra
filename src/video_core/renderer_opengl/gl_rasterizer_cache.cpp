@@ -791,6 +791,10 @@ void CachedSurface::UploadGLTexture(Common::Rectangle<u32> rect, GLuint read_fb_
     const FormatTuple& tuple = GetFormatTuple(pixel_format);
     GLuint target_tex = texture.handle;
 
+    if (addr == 0x1829bfc0) {
+        LOG_ERROR(Render_OpenGL, "Framebuffer upload!");
+    }
+
     // If not 1x scale, create 1x texture that we will blit from to replace texture subrect in
     // surface
     OGLTexture unscaled_tex;

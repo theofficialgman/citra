@@ -106,9 +106,22 @@ Backend::~Backend() {
     }
 }
 
+u64 Backend::PipelineInfoHash(const PipelineInfo& info) {
+    const bool hash_all = !instance.IsExtendedDynamicStateSupported();
+    if (hash_all) {
+        // Don't hash the last three members of DepthStencilState, these are
+        // dynamic in every Vulkan implementation
+        return Common::ComputeHash64(&info, offsetof(PipelineInfo, depth_stencil) +
+                                            offsetof(DepthStencilState, stencil_reference));
+    } else {
+        // Hash everything except depth_stencil and rasterization
+        return Common::ComputeHash64(&info, offsetof(PipelineInfo, rasterization));
+    }
+}
+
 /**
  * To avoid many small heap allocations during handle creation, each resource has a dedicated pool
- * associated with it that batch allocates memory.
+ * associated with it that batch-allocates memory.
  */
 BufferHandle Backend::CreateBuffer(BufferInfo info) {
     static ObjectPool<Buffer> buffer_pool;
@@ -137,15 +150,13 @@ PipelineHandle Backend::CreatePipeline(PipelineType type, PipelineInfo info) {
     // Get renderpass
     vk::RenderPass renderpass = GetRenderPass(info.color_attachment, info.depth_attachment);
 
-            // Find a pipeline layout first
-    if (auto iter = pipeline_layouts.find(info.layout); iter != pipeline_layouts.end()) {
-        PipelineLayout& layout = iter->second;
-
-        return PipelineHandle{pipeline_pool.Allocate(instance, layout, type, info, renderpass, cache)};
+    // Find an owner first
+    if (auto iter = pipeline_owners.find(info.layout); iter != pipeline_owners.end()) {
+        return PipelineHandle{pipeline_pool.Allocate(instance, iter->second, type, info, renderpass, cache)};
     }
 
     // Create the layout
-    auto result = pipeline_layouts.emplace(info.layout, PipelineLayout{instance, info.layout});
+    auto result = pipeline_owners.emplace(info.layout, PipelineOwner{instance, info.layout});
     return PipelineHandle{pipeline_pool.Allocate(instance, result.first->second, type, info, renderpass, cache)};
 }
 
@@ -155,7 +166,6 @@ SamplerHandle Backend::CreateSampler(SamplerInfo info) {
 }
 
 void Backend::Draw(PipelineHandle pipeline_handle, FramebufferHandle draw_framebuffer,
-                   BufferHandle vertex_buffer,
                    u32 base_vertex, u32 num_vertices) {
     // Bind descriptor sets
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();

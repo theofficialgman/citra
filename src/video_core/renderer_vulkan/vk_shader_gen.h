@@ -13,14 +13,10 @@ public:
     ShaderGenerator() = default;
     ~ShaderGenerator() override = default;
 
-    std::string GenerateTrivialVertexShader(bool separable_shader) override;
-
-    std::string GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config,
-                                     bool separable_shader) override;
-
-    std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config, bool separable_shader) override;
-
-    std::string GenerateFragmentShader(const PicaFSConfig& config, bool separable_shader) override;
+    std::string GenerateTrivialVertexShader() override;
+    std::string GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config) override;
+    std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config) override;
+    std::string GenerateFragmentShader(const PicaFSConfig& config) override;
 };
 
 } // namespace VideoCore

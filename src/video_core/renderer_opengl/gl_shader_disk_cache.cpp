@@ -66,7 +66,6 @@ bool ShaderDiskCacheRaw::Load(FileUtil::IOFile& file) {
         if (file.ReadBytes(&code_len, sizeof(u64)) != sizeof(u64)) {
             return false;
         }
-
         program_code.resize(code_len);
         if (file.ReadArray(program_code.data(), code_len) != code_len) {
             return false;

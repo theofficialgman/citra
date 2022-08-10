@@ -1,14 +1,15 @@
-// Copyright 2018 Citra Emulator Project
+// Copyright 2022 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
 #include <algorithm>
 #include <thread>
-#include <tuple>
+#include <mutex>
 #include "core/frontend/scope_acquire_context.h"
 #include "video_core/common/pipeline_cache.h"
 #include "video_core/common/shader.h"
 #include "video_core/common/shader_gen.h"
+#include "video_core/renderer_vulkan/vk_shader_gen.h"
 #include "video_core/video_core.h"
 
 namespace VideoCore {
@@ -41,7 +42,8 @@ PipelineCache::PipelineCache(Frontend::EmuWindow& emu_window, std::unique_ptr<Ba
     : emu_window(emu_window), backend(backend), pica_vertex_shaders(backend, generator),
       fixed_geometry_shaders(backend, generator), fragment_shaders(backend, generator),
       disk_cache(backend) {
-    //generator = std::make_unique<ShaderGenerator
+    // TODO: Don't hardcode this!
+    generator = std::make_unique<Vulkan::ShaderGenerator>();
 }
 
 PipelineHandle PipelineCache::GetPipeline(PipelineInfo& info) {
@@ -51,7 +53,8 @@ PipelineHandle PipelineCache::GetPipeline(PipelineInfo& info) {
     info.shaders[static_cast<u32>(ProgramType::FragmentShader)] = current_fragment_shader;
 
     // Search cache
-    if (auto iter = cached_pipelines.find(info); iter != cached_pipelines.end()) {
+    const u64 pipeline_hash = backend->PipelineInfoHash(info);
+    if (auto iter = cached_pipelines.find(pipeline_hash); iter != cached_pipelines.end()) {
         return iter->second;
     }
 
@@ -309,7 +312,7 @@ void PipelineCache::LoadDiskCache(const std::atomic_bool& stop_loading, const Di
         const std::size_t end{is_last_worker ? load_raws_size : start + bucket_size};
 
         // On some platforms the shared context has to be created from the GUI thread
-        contexts[i] = emu_window.CreateSharedContext();
+        //contexts[i] = emu_window.CreateSharedContext();
         threads[i] = std::thread(LoadRawSepareble, contexts[i].get(), start, end);
     }
 

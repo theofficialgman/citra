@@ -66,13 +66,11 @@ layout (set = 0, binding = 0) uniform shader_data {
 };
 )";
 
-static std::string GetVertexInterfaceDeclaration(bool is_output, bool separable_shader) {
+static std::string GetVertexInterfaceDeclaration(bool is_output) {
     std::string out;
 
     const auto append_variable = [&](std::string_view var, int location) {
-        if (separable_shader) {
-            out += fmt::format("layout(location = {}) ", location);
-        }
+        out += fmt::format("layout(location = {}) ", location);
         out += fmt::format("{}{};\n", is_output ? "out " : "in ", var);
     };
 
@@ -84,7 +82,7 @@ static std::string GetVertexInterfaceDeclaration(bool is_output, bool separable_
     append_variable("vec4 normquat", ATTRIBUTE_NORMQUAT);
     append_variable("vec3 view", ATTRIBUTE_VIEW);
 
-    if (is_output && separable_shader) {
+    if (is_output) {
         // gl_PerVertex redeclaration is required for separate shader object
         out += R"(
         out gl_PerVertex {
@@ -1027,7 +1025,7 @@ float ProcTexNoiseCoef(vec2 x) {
     }
 }
 
-std::string ShaderGenerator::GenerateFragmentShader(const PicaFSConfig& config, bool seperable_shader) {
+std::string ShaderGenerator::GenerateFragmentShader(const PicaFSConfig& config) {
     const auto& state = config;
     std::string out;
 
@@ -1037,7 +1035,7 @@ std::string ShaderGenerator::GenerateFragmentShader(const PicaFSConfig& config, 
     )";
     out += "#extension GL_ARB_separate_shader_objects : enable\n";
 
-    out += GetVertexInterfaceDeclaration(false, true);
+    out += GetVertexInterfaceDeclaration(false);
 
     out += R"(
     in vec4 gl_FragCoord;
@@ -1379,7 +1377,7 @@ do {
     return out;
 }
 
-std::string ShaderGenerator::GenerateTrivialVertexShader(bool separable_shader) {
+std::string ShaderGenerator::GenerateTrivialVertexShader() {
     std::string out;
     out += "#version 450\n";
     out += "#extension GL_ARB_separate_shader_objects : enable\n";
@@ -1394,7 +1392,7 @@ std::string ShaderGenerator::GenerateTrivialVertexShader(bool separable_shader) 
                        ATTRIBUTE_POSITION, ATTRIBUTE_COLOR, ATTRIBUTE_TEXCOORD0, ATTRIBUTE_TEXCOORD1,
                        ATTRIBUTE_TEXCOORD2, ATTRIBUTE_TEXCOORD0_W, ATTRIBUTE_NORMQUAT, ATTRIBUTE_VIEW);
 
-    out += GetVertexInterfaceDeclaration(true, separable_shader);
+    out += GetVertexInterfaceDeclaration(true);
 
     out += UniformBlockDef;
 
@@ -1419,13 +1417,12 @@ void main() {
     return out;
 }
 
-std::string ShaderGenerator::GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config,
-                                                  bool separable_shader) {
+std::string ShaderGenerator::GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config) {
     LOG_CRITICAL(Render_Vulkan, "Unimplemented!");
     UNREACHABLE();
 }
 
-std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config, bool separable_shader) {
+std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config) {
     LOG_CRITICAL(Render_Vulkan, "Unimplemented!");
     UNREACHABLE();
 }

@@ -1456,7 +1456,7 @@ bool RasterizerCache::IntervalHasInvalidPixelFormat(SurfaceParams& params, const
 
 bool RasterizerCache::ValidateByReinterpretation(const Surface& surface, SurfaceParams& params,
                                                  const SurfaceInterval& interval) {
-    auto [cvt_begin, cvt_end] =
+    /*auto [cvt_begin, cvt_end] =
         format_reinterpreter->GetPossibleReinterpretations(surface->pixel_format);
     for (auto reinterpreter = cvt_begin; reinterpreter != cvt_end; ++reinterpreter) {
         PixelFormat format = reinterpreter->first.src_format;
@@ -1498,7 +1498,7 @@ bool RasterizerCache::ValidateByReinterpretation(const Surface& surface, Surface
             }
             return true;
         }
-    }
+    }*/
     return false;
 }
 

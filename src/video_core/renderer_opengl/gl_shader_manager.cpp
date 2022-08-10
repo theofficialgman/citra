@@ -175,11 +175,11 @@ public:
 
     void Create(const char* source, GLenum type) {
         if (shader_or_program.which() == 0) {
-            std::get<OGLShader>(shader_or_program).Create(source, type);
+            boost::get<OGLShader>(shader_or_program).Create(source, type);
         } else {
             OGLShader shader;
             shader.Create(source, type);
-            OGLProgram& program = std::get<OGLProgram>(shader_or_program);
+            OGLProgram& program = boost::get<OGLProgram>(shader_or_program);
             program.Create(true, {shader.handle});
             SetShaderUniformBlockBindings(program.handle);
 
@@ -191,9 +191,9 @@ public:
 
     GLuint GetHandle() const {
         if (shader_or_program.which() == 0) {
-            return std::get<OGLShader>(shader_or_program).handle;
+            return boost::get<OGLShader>(shader_or_program).handle;
         } else {
-            return std::get<OGLProgram>(shader_or_program).handle;
+            return boost::get<OGLProgram>(shader_or_program).handle;
         }
     }
 
@@ -204,7 +204,7 @@ public:
     }
 
 private:
-    std::variant<OGLShader, OGLProgram> shader_or_program;
+    boost::variant<OGLShader, OGLProgram> shader_or_program;
 };
 
 class TrivialVertexShader {
@@ -393,7 +393,7 @@ bool ShaderProgramManager::UseProgrammableVertexShader(const Pica::Regs& regs,
     // Save VS to the disk cache if its a new shader
     if (result) {
         auto& disk_cache = impl->disk_cache;
-        std::vector<u32> program_code{setup.program_code.begin(), setup.program_code.end()};
+        ProgramCode program_code{setup.program_code.begin(), setup.program_code.end()};
         program_code.insert(program_code.end(), setup.swizzle_data.begin(),
                             setup.swizzle_data.end());
         const u64 unique_identifier = GetUniqueIdentifier(regs, program_code);
@@ -715,7 +715,6 @@ void ShaderProgramManager::LoadDiskCache(const std::atomic_bool& stop_loading,
         contexts[i] = emu_window.CreateSharedContext();
         threads[i] = std::thread(LoadRawSepareble, contexts[i].get(), start, end);
     }
-
     for (auto& thread : threads) {
         thread.join();
     }

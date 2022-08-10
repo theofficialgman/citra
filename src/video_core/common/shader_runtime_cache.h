@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include <string>
+#include <optional>
 #include <memory>
 #include <unordered_map>
+#include <tuple>
 #include "video_core/common/backend.h"
 #include "video_core/common/shader_gen.h"
 

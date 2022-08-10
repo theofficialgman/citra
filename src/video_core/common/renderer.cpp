@@ -165,11 +165,10 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
                                          &fragment_shader_anaglyph_source,
                                          &fragment_shader_interlaced_source};
 
-    const auto color_format = static_cast<TextureFormat>(backend->QueryDriver(Query::PresentFormat));
     PipelineInfo present_pipeline_info = {
         .vertex_layout = ScreenRectVertex::GetVertexLayout(),
         .layout = RENDERER_PIPELINE_INFO,
-        .color_attachment = color_format,
+        .color_attachment = TextureFormat::PresentColor,
         .depth_attachment = TextureFormat::Undefined
     };
 

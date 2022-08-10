@@ -147,8 +147,8 @@ Texture::~Texture() {
         // Schedule deletion of the texture after it's no longer used by the GPU
         scheduler.Schedule(deleter);
     } else if (!is_texture_owned) {
-        // If the texture is not owning, destroy the view immediately as
-        // synchronization is the caller's responsibility
+        // If the texture is not owning, destroy the view immediately.
+        // Synchronization is the caller's responsibility
         vk::Device device = instance.GetDevice();
         device.destroyImageView(image_view);
     }
@@ -261,10 +261,9 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
     // If the adverised format supports blitting then use GPU accelerated
     // format conversion.
     if (internal_format != advertised_format &&
-        instance.IsFormatSupported(advertised_format,
-                                   vk::FormatFeatureFlagBits::eBlitSrc)) {
+        instance.IsFormatSupported(advertised_format, vk::FormatFeatureFlagBits::eBlitSrc)) {
         // Creating a new staging texture for each upload/download is expensive
-        // but this path is not common. TODO: Profile this
+        // but this path should not be common. TODO: Profile this
         StagingTexture staging{instance, scheduler, info};
 
         const std::array offsets = {
@@ -274,9 +273,19 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
         };
 
         const vk::ImageBlit image_blit = {
-            .srcSubresource = {aspect, level, 0, 1},
+            .srcSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = level,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
             .srcOffsets = offsets,
-            .dstSubresource = {aspect, level, 0, 1},
+            .dstSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = level,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
             .dstOffsets = offsets
         };
 
@@ -301,7 +310,7 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
         std::memcpy(slice.data(), data.data(), byte_count);
         staging.Commit(byte_count);
 
-        // TODO: Handle depth and stencil uploads
+        // TODO: Handle format convertions and depth/stencil uploads
         ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
                advertised_format == internal_format);
 
@@ -338,10 +347,9 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
     // If the adverised format supports blitting then use GPU accelerated
     // format conversion.
     if (internal_format != advertised_format &&
-        instance.IsFormatSupported(advertised_format,
-                                   vk::FormatFeatureFlagBits::eBlitDst)) {
+        instance.IsFormatSupported(advertised_format, vk::FormatFeatureFlagBits::eBlitDst)) {
         // Creating a new staging texture for each upload/download is expensive
-        // but this path is not common. TODO: Profile this
+        // but this path should not be common. TODO: Profile this
         StagingTexture staging{instance, scheduler, info};
 
         const std::array offsets = {
@@ -351,9 +359,19 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
         };
 
         const vk::ImageBlit image_blit = {
-            .srcSubresource = {aspect, level, 0, 1},
+            .srcSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = level,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
             .srcOffsets = offsets,
-            .dstSubresource = {aspect, level, 0, 1},
+            .dstSubresource = {
+                .aspectMask = aspect,
+                .mipLevel = level,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
             .dstOffsets = offsets
         };
 
@@ -375,6 +393,10 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
     } else {
         Buffer& staging = scheduler.GetCommandUploadBuffer();
         const u64 staging_offset = staging.GetCurrentOffset();
+
+        // TODO: Handle format convertions and depth/stencil downloads
+        ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
+               advertised_format == internal_format);
 
         const vk::BufferImageCopy copy_region = {
             .bufferOffset = staging_offset,
@@ -409,6 +431,7 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
 
 void Texture::BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect, u32 src_level, u32 dest_level,
                      u32 src_layer, u32 dest_layer) {
+
     Texture* dest_texture = static_cast<Texture*>(dest.Get());
 
     // Prepare images for transfer
@@ -449,7 +472,7 @@ void Texture::BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect, u
                              dest_texture->GetHandle(), vk::ImageLayout::eTransferDstOptimal,
                              blit_area, vk::Filter::eNearest);
 
-    // Revert changes to the layout
+    // Prepare for shader reads
     Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
     dest_texture->Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
@@ -501,6 +524,42 @@ void Texture::GenerateMipmaps() {
     Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal, 0, info.levels);
 }
 
+void Texture::CopyFrom(TextureHandle source) {
+    const vk::ImageCopy image_copy = {
+        .srcSubresource = {
+            .aspectMask = aspect,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+        .srcOffset = {0, 0, 0},
+        .dstSubresource = {
+            .aspectMask = aspect,
+            .mipLevel = 0,
+            .baseArrayLayer = 0,
+            .layerCount = 1
+        },
+        .dstOffset = {0, 0, 0},
+        .extent = {source->GetWidth(), source->GetHeight(), 1}
+    };
+
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    Texture* texture = static_cast<Texture*>(source.Get());
+
+    // Transition images
+    vk::ImageLayout old_layout = texture->GetLayout();
+    texture->Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal);
+    Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal);
+
+    // Perform copy
+    command_buffer.copyImage(texture->GetHandle(), vk::ImageLayout::eTransferSrcOptimal,
+                             image, vk::ImageLayout::eTransferDstOptimal, image_copy);
+
+    // We need to preserve the old texture layout
+    texture->Transition(command_buffer, old_layout);
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+}
+
 StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info) :
     TextureBase(info), instance(instance), scheduler(scheduler) {
 
@@ -538,9 +597,8 @@ StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler, 
     // Map memory
     mapped_ptr = alloc_info.pMappedData;
 
-    // Transition image to VK_IMAGE_LAYOUT_GENERAL. This layout is convenient
-    // for staging textures since it allows for well defined host access and
-    // works with vkCmdBlitImage, thus eliminating the need for layout transitions
+    // For staging textures the most conventient layout is VK_IMAGE_LAYOUT_GENERAL because it allows
+    // for well defined host access and works with vkCmdBlitImage, thus eliminating the need for layout transitions
     const vk::ImageMemoryBarrier barrier = {
         .srcAccessMask = vk::AccessFlagBits::eNone,
         .dstAccessMask = vk::AccessFlagBits::eNone,

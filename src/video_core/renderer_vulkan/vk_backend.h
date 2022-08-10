@@ -16,31 +16,35 @@ namespace VideoCore::Vulkan {
 class Texture;
 
 constexpr u32 RENDERPASS_COUNT = (MAX_COLOR_FORMATS + 1) * (MAX_DEPTH_FORMATS + 1);
-constexpr u32 DESCRIPTOR_BANK_SIZE = 64;
 
 class Backend final : public VideoCore::BackendBase {
 public:
     Backend(Frontend::EmuWindow& window);
     ~Backend();
 
-    void SwapBuffers() override;
+    bool BeginPresent() override;
+    void EndPresent() override;
+
+    FramebufferHandle GetWindowFramebuffer() override;
+
+    u64 QueryDriver(Query query) override;
+
+    u64 PipelineInfoHash(const PipelineInfo& info) override;
 
     BufferHandle CreateBuffer(BufferInfo info) override;
-
     FramebufferHandle CreateFramebuffer(FramebufferInfo info) override;
-
     TextureHandle CreateTexture(TextureInfo info) override;
-
     PipelineHandle CreatePipeline(PipelineType type, PipelineInfo info) override;
-
     SamplerHandle CreateSampler(SamplerInfo info) override;
+    ShaderHandle CreateShader(ShaderStage stage, std::string_view name, std::string source) override;
+
+    void BindVertexBuffer(BufferHandle buffer, std::span<const u32> offsets) override;
+    void BindIndexBuffer(BufferHandle buffer, AttribType index_type, u32 offset) override;
 
     void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
-              BufferHandle vertex_buffer,
               u32 base_vertex, u32 num_vertices) override;
 
     void DrawIndexed(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
-                     BufferHandle vertex_buffer, BufferHandle index_buffer, AttribType index_type,
                      u32 base_index, u32 num_indices, u32 base_vertex) override;
 
     void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,
@@ -73,8 +77,8 @@ private:
     std::array<vk::RenderPass, RENDERPASS_COUNT> renderpass_cache;
     vk::PipelineCache cache;
 
-    // Pipeline layout cache
-    std::unordered_map<PipelineLayoutInfo, PipelineLayout> pipeline_layouts;
+    // A cache of pipeline owners
+    std::unordered_map<PipelineLayoutInfo, PipelineOwner> pipeline_owners;
 
     // Descriptor pools
     std::array<vk::DescriptorPool, SCHEDULER_COMMAND_COUNT> descriptor_pools;

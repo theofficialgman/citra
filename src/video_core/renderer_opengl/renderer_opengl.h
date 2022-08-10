@@ -57,7 +57,7 @@ struct PresentationTexture {
     OGLTexture texture;
 };
 
-class RendererOpenGL : public VideoCore::RendererBase {
+class RendererOpenGL : public RendererBase {
 public:
     explicit RendererOpenGL(Frontend::EmuWindow& window);
     ~RendererOpenGL() override;

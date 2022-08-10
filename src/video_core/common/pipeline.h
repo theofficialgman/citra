@@ -62,19 +62,23 @@ union RasterizationState {
     BitField<4, 2, Pica::CullMode> cull_mode;
 };
 
-union DepthStencilState {
-    u64 value = 0;
-    BitField<0, 1, u64> depth_test_enable;
-    BitField<1, 1, u64> depth_write_enable;
-    BitField<2, 1, u64> stencil_test_enable;
-    BitField<3, 3, Pica::CompareFunc> depth_compare_op;
-    BitField<6, 3, Pica::StencilAction> stencil_fail_op;
-    BitField<9, 3, Pica::StencilAction> stencil_pass_op;
-    BitField<12, 3, Pica::StencilAction> stencil_depth_fail_op;
-    BitField<15, 3, Pica::CompareFunc> stencil_compare_op;
-    BitField<18, 8, u64> stencil_reference;
-    BitField<26, 8, u64> stencil_compare_mask;
-    BitField<34, 8, u64> stencil_write_mask;
+struct DepthStencilState {
+    union {
+        u32 value = 0;
+        BitField<0, 1, u32> depth_test_enable;
+        BitField<1, 1, u32> depth_write_enable;
+        BitField<2, 1, u32> stencil_test_enable;
+        BitField<3, 3, Pica::CompareFunc> depth_compare_op;
+        BitField<6, 3, Pica::StencilAction> stencil_fail_op;
+        BitField<9, 3, Pica::StencilAction> stencil_pass_op;
+        BitField<12, 3, Pica::StencilAction> stencil_depth_fail_op;
+        BitField<15, 3, Pica::CompareFunc> stencil_compare_op;
+    };
+
+    // These are dynamic on most graphics APIs so keep them separate
+    u8 stencil_reference;
+    u8 stencil_compare_mask;
+    u8 stencil_write_mask;
 };
 
 union BlendState {
@@ -131,14 +135,10 @@ struct PipelineInfo {
     VertexLayout vertex_layout{};
     PipelineLayoutInfo layout{};
     BlendState blending{};
-    DepthStencilState depth_stencil{};
-    RasterizationState rasterization{};
     TextureFormat color_attachment = TextureFormat::RGBA8;
     TextureFormat depth_attachment = TextureFormat::D24S8;
-
-    const u64 Hash() const {
-        return Common::ComputeStructHash64(*this);
-    }
+    RasterizationState rasterization{};
+    DepthStencilState depth_stencil{};
 };
 #pragma pack()
 
@@ -186,12 +186,3 @@ protected:
 using PipelineHandle = IntrusivePtr<PipelineBase>;
 
 } // namespace VideoCore
-
-namespace std {
-template <>
-struct hash<VideoCore::PipelineInfo> {
-    std::size_t operator()(const VideoCore::PipelineInfo& info) const noexcept {
-        return info.Hash();
-    }
-};
-} // namespace std

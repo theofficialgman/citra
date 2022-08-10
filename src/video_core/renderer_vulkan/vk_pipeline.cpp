@@ -10,11 +10,9 @@
 #include "video_core/renderer_vulkan/vk_texture.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_task_scheduler.h"
 
 namespace VideoCore::Vulkan {
-
-// Maximum binding per descriptor set
-constexpr u32 MAX_BINDING_SLOTS = 7;
 
 vk::ShaderStageFlags ToVkStageFlags(BindingType type) {
     vk::ShaderStageFlags flags;
@@ -62,21 +60,21 @@ vk::DescriptorType ToVkDescriptorType(BindingType type) {
 u32 AttribBytes(VertexAttribute attrib) {
     switch (attrib.type) {
     case AttribType::Float:
-        return sizeof(float) * attrib.components;
+        return sizeof(float) * attrib.size;
     case AttribType::Int:
-        return sizeof(u32) * attrib.components;
+        return sizeof(u32) * attrib.size;
     case AttribType::Short:
-        return sizeof(u16) * attrib.components;
+        return sizeof(u16) * attrib.size;
     case AttribType::Byte:
     case AttribType::Ubyte:
-        return sizeof(u8) * attrib.components;
+        return sizeof(u8) * attrib.size;
     }
 }
 
 vk::Format ToVkAttributeFormat(VertexAttribute attrib) {
     switch (attrib.type) {
     case AttribType::Float:
-        switch (attrib.components) {
+        switch (attrib.size) {
         case 1: return vk::Format::eR32Sfloat;
         case 2: return vk::Format::eR32G32Sfloat;
         case 3: return vk::Format::eR32G32B32Sfloat;
@@ -104,20 +102,20 @@ vk::ShaderStageFlagBits ToVkShaderStage(ShaderStage stage) {
     }
 }
 
-PipelineLayout::PipelineLayout(Instance& instance, PipelineLayoutInfo info) :
+PipelineOwner::PipelineOwner(Instance& instance, PipelineLayoutInfo info) :
     instance(instance), set_layout_count(info.group_count) {
 
     // Used as temp storage for CreateDescriptorSet
-    std::array<vk::DescriptorSetLayoutBinding, MAX_BINDING_SLOTS> set_bindings;
-    std::array<vk::DescriptorUpdateTemplateEntry, MAX_BINDING_SLOTS> update_entries;
+    std::array<vk::DescriptorSetLayoutBinding, MAX_BINDINGS_IN_GROUP> set_bindings;
+    std::array<vk::DescriptorUpdateTemplateEntry, MAX_BINDINGS_IN_GROUP> update_entries;
 
     vk::Device device = instance.GetDevice();
     for (u32 set = 0; set < set_layout_count; set++) {
         auto& group = info.binding_groups[set];
 
         u32 binding = 0;
-        while (group[binding] != BindingType::None) {
-            const BindingType type = group[binding];
+        while (group.Value(binding) != BindingType::None) {
+            const BindingType type = group.Value(binding);
             set_bindings[binding] = vk::DescriptorSetLayoutBinding{
                 .binding = binding,
                 .descriptorType = ToVkDescriptorType(type),
@@ -175,7 +173,7 @@ PipelineLayout::PipelineLayout(Instance& instance, PipelineLayoutInfo info) :
     pipeline_layout = device.createPipelineLayout(layout_info);
 }
 
-PipelineLayout::~PipelineLayout() {
+PipelineOwner::~PipelineOwner() {
     vk::Device device = instance.GetDevice();
     device.destroyPipelineLayout(pipeline_layout);
 
@@ -186,9 +184,10 @@ PipelineLayout::~PipelineLayout() {
     }
 }
 
-Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type, PipelineInfo info,
+Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwner& owner,
+                   PipelineType type, PipelineInfo info,
                    vk::RenderPass renderpass, vk::PipelineCache cache) : PipelineBase(type, info),
-    instance(instance), owner(owner) {
+    instance(instance), scheduler(scheduler), owner(owner) {
 
     vk::Device device = instance.GetDevice();
 
@@ -209,43 +208,41 @@ Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type,
         };
     }
 
-    // Create a graphics pipeline
     if (type == PipelineType::Graphics) {
+
         /**
-         * Most modern graphics APIs don't natively support constant attributes. To avoid duplicating
-         * the data and increasing data bandwith, we reserve the last binding for fixed attributes,
-         * which are always interleaved and specify VK_VERTEX_INPUT_RATE_INSTANCE as the input rate.
-         * Since we are always rendering 1 instance, the shader will always read the single attribute
+         * Vulkan doesn't intuitively support fixed attributes. To avoid duplicating the data and increasing
+         * data upload, when the fixed flag is true, we specify VK_VERTEX_INPUT_RATE_INSTANCE as the input rate.
+         * Since 1 instance is all we render, the shader will always read the single attribute.
          */
-        const vk::VertexInputBindingDescription binding_desc = {
-            .binding = 0,
-            .stride = info.vertex_layout.stride
-        };
+        std::array<vk::VertexInputBindingDescription, MAX_VERTEX_BINDINGS> bindings;
+        for (u32 i = 0; i < info.vertex_layout.binding_count; i++) {
+            const auto& binding = info.vertex_layout.bindings[i];
+            bindings[i] = vk::VertexInputBindingDescription{
+                .binding = binding.binding,
+                .stride = binding.stride,
+                .inputRate = binding.fixed.Value() ? vk::VertexInputRate::eInstance
+                                                   : vk::VertexInputRate::eVertex
+            };
+        }
 
         // Populate vertex attribute structures
-        u32 attribute_count = 0;
-        std::array<vk::VertexInputAttributeDescription, MAX_VERTEX_ATTRIBUTES> attribute_desc;
-        for (u32 i = 0; i < MAX_VERTEX_ATTRIBUTES; i++) {
-            auto& attr = info.vertex_layout.attributes[i];
-            if (attr.components == 0) {
-                attribute_count = i;
-                break;
-            }
-
-            attribute_desc[i] = vk::VertexInputAttributeDescription{
-                .location = i,
-                .binding = 0,
+        std::array<vk::VertexInputAttributeDescription, MAX_VERTEX_ATTRIBUTES> attributes;
+        for (u32 i = 0; i < info.vertex_layout.attribute_count; i++) {
+            const auto& attr = info.vertex_layout.attributes[i];
+            attributes[i] = vk::VertexInputAttributeDescription{
+                .location = attr.location,
+                .binding = attr.binding,
                 .format = ToVkAttributeFormat(attr),
-                .offset = (i > 0 ? attribute_desc[i - 1].offset +
-                                   AttribBytes(info.vertex_layout.attributes[i - 1]) : 0)
+                .offset = attr.offset
             };
         }
 
         const vk::PipelineVertexInputStateCreateInfo vertex_input_info = {
-            .vertexBindingDescriptionCount = 1,
-            .pVertexBindingDescriptions = &binding_desc,
-            .vertexAttributeDescriptionCount = attribute_count,
-            .pVertexAttributeDescriptions = attribute_desc.data()
+            .vertexBindingDescriptionCount = info.vertex_layout.binding_count,
+            .pVertexBindingDescriptions = bindings.data(),
+            .vertexAttributeDescriptionCount = info.vertex_layout.attribute_count,
+            .pVertexAttributeDescriptions = attributes.data()
         };
 
         const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
@@ -279,8 +276,8 @@ Pipeline::Pipeline(Instance& instance, PipelineLayout& owner, PipelineType type,
         };
 
         const vk::PipelineColorBlendStateCreateInfo color_blending = {
-            .logicOpEnable = true,
-            .logicOp = vk::LogicOp::eCopy, // TODO
+            .logicOpEnable = info.blending.logic_op_enable.Value(),
+            .logicOp = PicaToVK::LogicOp(info.blending.logic_op), // TODO
             .attachmentCount = 1,
             .pAttachments = &colorblend_attachment,
         };
@@ -385,10 +382,11 @@ void Pipeline::BindTexture(u32 group, u32 slot, TextureHandle handle) {
     owner.SetBinding(group, slot, data);
 }
 
-void Pipeline::BindBuffer(u32 group, u32 slot, BufferHandle handle, u32 view) {
+void Pipeline::BindBuffer(u32 group, u32 slot, BufferHandle handle, u32 offset, u32 range, u32 view) {
     Buffer* buffer = static_cast<Buffer*>(handle.Get());
 
     // Texel buffers are bound with their views
+    // TODO: Support variable binding range?
     if (buffer->GetUsage() == BufferUsage::Texel) {
         const DescriptorData data = {
             .buffer_view = buffer->GetView(view)
@@ -399,8 +397,8 @@ void Pipeline::BindBuffer(u32 group, u32 slot, BufferHandle handle, u32 view) {
         const DescriptorData data = {
             .buffer_info = vk::DescriptorBufferInfo{
                 .buffer = buffer->GetHandle(),
-                .offset = 0,
-                .range = buffer->GetCapacity()
+                .offset = offset,
+                .range = (range == WHOLE_SIZE ? buffer->GetCapacity() : range)
             }
         };
 
@@ -418,6 +416,24 @@ void Pipeline::BindSampler(u32 group, u32 slot, SamplerHandle handle) {
     };
 
     owner.SetBinding(group, slot, data);
+}
+
+void Pipeline::BindPushConstant(std::span<const std::byte> data) {
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.pushConstants(owner.GetLayout(),
+                                 vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+                                 0, data.size(), data.data());
+}
+
+// Viewport and scissor are always dynamic
+void Pipeline::SetViewport(float x, float y, float width, float height) {
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.setViewport(0, vk::Viewport{x, y, width, height, 0.f, 1.f});
+}
+
+void Pipeline::SetScissor(s32 x, s32 y, u32 width, u32 height) {
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.setScissor(0, vk::Rect2D{{x, y}, {width, height}});
 }
 
 } // namespace VideoCore::Vulkan

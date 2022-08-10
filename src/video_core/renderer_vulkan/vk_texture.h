@@ -38,6 +38,8 @@ public:
     void BlitTo(TextureHandle dest, Rect2D src_rectangle, Rect2D dest_rect, u32 src_level = 0,
                 u32 dest_level = 0, u32 src_layer = 0, u32 dest_layer = 0) override;
 
+    void CopyFrom(TextureHandle source) override;
+
     void GenerateMipmaps() override;
 
     /// Overrides the layout of provided image subresource

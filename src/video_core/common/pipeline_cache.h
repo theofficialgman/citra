@@ -58,13 +58,13 @@ private:
     std::unique_ptr<BackendBase>& backend;
     std::unique_ptr<ShaderGeneratorBase> generator;
 
-    // Keeps all the compiled graphics pipelines
-    std::unordered_map<PipelineInfo, PipelineHandle> cached_pipelines;
+    // Keeps all the compiled graphics pipelines. The hash is decided by the backend
+    std::unordered_map<u64, PipelineHandle, Common::IdentityHash> cached_pipelines;
 
     // Current shaders
-    ShaderHandle current_vertex_shader;
-    ShaderHandle current_geometry_shader;
-    ShaderHandle current_fragment_shader;
+    ShaderHandle current_vertex_shader{};
+    ShaderHandle current_geometry_shader{};
+    ShaderHandle current_fragment_shader{};
 
     // Pica runtime shader caches
     PicaVertexShaders pica_vertex_shaders;

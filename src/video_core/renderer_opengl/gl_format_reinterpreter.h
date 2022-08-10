@@ -50,7 +50,7 @@ class FormatReinterpreterOpenGL : NonCopyable {
 
 public:
     explicit FormatReinterpreterOpenGL();
-    ~FormatReinterpreterOpenGL() = default;
+    ~FormatReinterpreterOpenGL();
 
     std::pair<ReinterpreterMap::iterator, ReinterpreterMap::iterator> GetPossibleReinterpretations(
         SurfaceParams::PixelFormat dst_format);

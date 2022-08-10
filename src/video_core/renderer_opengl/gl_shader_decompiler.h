@@ -9,7 +9,7 @@
 #include <optional>
 #include <string>
 #include "common/common_types.h"
-#include "video_core/shader_compiler/shader.h"
+#include "video_core/shader/shader.h"
 
 namespace OpenGL::ShaderDecompiler {
 

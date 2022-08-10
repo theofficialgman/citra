@@ -184,12 +184,10 @@ Rasterizer::Rasterizer(Frontend::EmuWindow& emu_window, std::unique_ptr<BackendB
     texel_buffer_lut = backend->CreateBuffer(TEXEL_BUFFER_INFO);
     texel_buffer_lut_lf = backend->CreateBuffer(TEXEL_BUFFER_LF_INFO);
 
-    /*glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &uniform_buffer_alignment);
-    uniform_size_aligned_vs =
-        Common::AlignUp<std::size_t>(sizeof(VSUniformData), uniform_buffer_alignment);
-    uniform_size_aligned_fs =
-        Common::AlignUp<std::size_t>(sizeof(UniformData), uniform_buffer_alignment);
-    */
+    // TODO: Have the backend say this
+    uniform_buffer_alignment = 64;
+    uniform_size_aligned_vs = Common::AlignUp<std::size_t>(sizeof(VSUniformData), uniform_buffer_alignment);
+    uniform_size_aligned_fs = Common::AlignUp<std::size_t>(sizeof(UniformData), uniform_buffer_alignment);
 
     // Create pipeline cache
     pipeline_cache = std::make_unique<PipelineCache>(emu_window, backend);
@@ -587,16 +585,14 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
                                              viewport_rect_unscaled.bottom * res_scale,
                                          surfaces_rect.bottom, surfaces_rect.top))}; // Bottom
 
-    // Retrive the framebuffer assigned to the surfaces
+    // Retrieve the framebuffer assigned to the surfaces and update raster_info
     FramebufferHandle framebuffer = res_cache.GetFramebuffer(color_surface, depth_surface);
-
-    // Sync the viewport
-    const Rect2D viewport = {
-         static_cast<s32>(surfaces_rect.left) + viewport_rect_unscaled.left * res_scale,
-         static_cast<s32>(surfaces_rect.bottom) + viewport_rect_unscaled.bottom * res_scale,
-         static_cast<u32>(viewport_rect_unscaled.GetWidth() * res_scale),
-         static_cast<u32>(viewport_rect_unscaled.GetHeight() * res_scale)
-    };
+    raster_info.color_attachment = framebuffer->GetColorAttachment().IsValid() ?
+                                   framebuffer->GetColorAttachment()->GetFormat() :
+                                   TextureFormat::Undefined;
+    raster_info.depth_attachment = framebuffer->GetDepthStencilAttachment().IsValid() ?
+                                   framebuffer->GetDepthStencilAttachment()->GetFormat() :
+                                   TextureFormat::Undefined;
 
     if (uniform_block_data.data.framebuffer_scale != res_scale) {
         uniform_block_data.data.framebuffer_scale = res_scale;
@@ -637,8 +633,12 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
         shader_dirty = false;
     }
 
+    // Sync the viewport
     PipelineHandle raster_pipeline = pipeline_cache->GetPipeline(raster_info);
-    raster_pipeline->SetViewport(viewport);
+    raster_pipeline->SetViewport(surfaces_rect.left + viewport_rect_unscaled.left * res_scale,
+                                 surfaces_rect.bottom + viewport_rect_unscaled.bottom * res_scale,
+                                 viewport_rect_unscaled.GetWidth() * res_scale,
+                                 viewport_rect_unscaled.GetHeight() * res_scale);
 
     // Checks if the game is trying to use a surface as a texture and framebuffer at the same time
     // which causes unpredictable behavior on the host.
@@ -803,16 +803,9 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
     // Sync the uniform data
     UploadUniforms(raster_pipeline, accelerate);
 
-    const Common::Rectangle<u32> scissor = {
-        draw_rect.left,
-        draw_rect.bottom,
-        draw_rect.GetWidth(),
-        draw_rect.GetHeight()
-    };
-
     // Viewport can have negative offsets or larger dimensions than our framebuffer sub-rect.
     // Enable scissor test to prevent drawing outside of the framebuffer region
-    raster_pipeline->SetScissor(scissor);
+    raster_pipeline->SetScissor(draw_rect.left, draw_rect.bottom, draw_rect.GetWidth(), draw_rect.GetHeight());
 
     // Draw the vertex batch
     bool succeeded = true;
@@ -1686,15 +1679,15 @@ void Rasterizer::SyncColorWriteMask() {
 
 void Rasterizer::SyncStencilWriteMask() {
     const auto& regs = Pica::g_state.regs;
-    raster_info.depth_stencil.stencil_write_mask.Assign(
+    raster_info.depth_stencil.stencil_write_mask =
         (regs.framebuffer.framebuffer.allow_depth_stencil_write != 0)
             ? static_cast<u32>(regs.framebuffer.output_merger.stencil_test.write_mask)
-            : 0);
+            : 0;
 }
 
 void Rasterizer::SyncDepthWriteMask() {
     const auto& regs = Pica::g_state.regs;
-    raster_info.depth_stencil.stencil_write_mask.Assign(
+    raster_info.depth_stencil.depth_write_enable.Assign(
                 (regs.framebuffer.framebuffer.allow_depth_stencil_write != 0 &&
                  regs.framebuffer.output_merger.depth_write_enable));
 }
@@ -1708,8 +1701,8 @@ void Rasterizer::SyncStencilTest() {
     raster_info.depth_stencil.stencil_pass_op.Assign(regs.framebuffer.output_merger.stencil_test.action_depth_pass);
     raster_info.depth_stencil.stencil_depth_fail_op.Assign(regs.framebuffer.output_merger.stencil_test.action_depth_fail);
     raster_info.depth_stencil.stencil_compare_op.Assign(regs.framebuffer.output_merger.stencil_test.func);
-    raster_info.depth_stencil.stencil_reference.Assign(regs.framebuffer.output_merger.stencil_test.reference_value);
-    raster_info.depth_stencil.stencil_write_mask.Assign(regs.framebuffer.output_merger.stencil_test.input_mask);
+    raster_info.depth_stencil.stencil_reference = regs.framebuffer.output_merger.stencil_test.reference_value;
+    raster_info.depth_stencil.stencil_write_mask = regs.framebuffer.output_merger.stencil_test.input_mask;
 }
 
 void Rasterizer::SyncDepthTest() {
