@@ -13,8 +13,11 @@ class Swapchain;
 
 class RenderpassCache {
 public:
-    RenderpassCache(Instance& instance, Swapchain& swapchain);
+    RenderpassCache(Instance& instance);
     ~RenderpassCache();
+
+    // Creates the renderpass used when rendering to the swapchain
+    void CreatePresentRenderpass(vk::Format format);
 
     vk::RenderPass GetRenderpass(TextureFormat color, TextureFormat depth, bool is_clear) const;
 

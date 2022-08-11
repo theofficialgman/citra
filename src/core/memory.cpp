@@ -21,7 +21,9 @@
 #include "core/hle/lock.h"
 #include "core/memory.h"
 #include "core/settings.h"
-#include "video_core/renderer_base.h"
+//#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
+#include "video_core/common/rasterizer.h"
 #include "video_core/video_core.h"
 
 SERIALIZE_EXPORT_IMPL(Memory::MemorySystem::BackingMemImpl<Memory::Region::FCRAM>)

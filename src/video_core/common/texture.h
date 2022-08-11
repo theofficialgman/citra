@@ -75,12 +75,14 @@ struct TextureInfo {
     TextureViewType view_type = TextureViewType::Undefined;
     TextureFormat format = TextureFormat::Undefined;
 
+    auto operator<=>(const TextureInfo& info) const = default;
+
     void UpdateMipLevels() {
         levels = std::log2(std::max(width, height)) + 1;
     }
 
     const u64 Hash() const {
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(TextureInfo));
     }
 };
 
@@ -164,8 +166,10 @@ struct SamplerInfo {
     u32 lod_max = 0;
     s32 lod_bias = 0;
 
+    auto operator<=>(const SamplerInfo& info) const = default;
+
     const u64 Hash() const {
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(SamplerInfo));
     }
 };
 

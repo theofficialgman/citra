@@ -5,6 +5,7 @@
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include <span>
 #include <array>
+#include "common/assert.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 
@@ -12,6 +13,11 @@ namespace VideoCore::Vulkan {
 
 Instance::Instance(Frontend::EmuWindow& window) {
     auto window_info = window.GetWindowInfo();
+
+    // Fetch instance independant function pointers
+    vk::DynamicLoader dl;
+    auto vkGetInstanceProcAddr = dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
 
     // Enable the instance extensions the backend uses
     auto extensions = GetInstanceExtensions(window_info.type, true);
@@ -41,10 +47,11 @@ Instance::Instance(Frontend::EmuWindow& window) {
 
     // Create VkInstance
     instance = vk::createInstance(instance_info);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(instance);
     surface = CreateSurface(instance, window);
 
     // TODO: GPU select dialog
-    physical_device = instance.enumeratePhysicalDevices()[0];
+    physical_device = instance.enumeratePhysicalDevices()[1];
     device_limits = physical_device.getProperties().limits;
 
     // Create logical device
@@ -91,9 +98,9 @@ bool Instance::CreateDevice(bool validation_enabled) {
     // Enable newer Vulkan features
     auto enabled_features = vk::StructureChain{
         features,
-        feature_chain.get<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>(),
-        feature_chain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>(),
-        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>()
+        //feature_chain.get<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>(),
+        //feature_chain.get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>(),
+        //feature_chain.get<vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>()
     };
 
     auto extension_list = physical_device.enumerateDeviceExtensionProperties();
@@ -133,9 +140,9 @@ bool Instance::CreateDevice(bool validation_enabled) {
     AddExtension(VK_KHR_SWAPCHAIN_EXTENSION_NAME, true);
 
     // Check for optional features
-    dynamic_rendering = AddExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, false);
-    extended_dynamic_state = AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, false);
-    push_descriptors = AddExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, false);
+    //dynamic_rendering = AddExtension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, false);
+    //extended_dynamic_state = AddExtension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, false);
+    //push_descriptors = AddExtension(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, false);
 
     // Search queue families for graphics and present queues
     auto family_properties = physical_device.getQueueFamilyProperties();
@@ -186,7 +193,7 @@ bool Instance::CreateDevice(bool validation_enabled) {
     };
 
     vk::DeviceCreateInfo device_info = {
-        .pNext = &enabled_features,
+        .pNext = &features, // TODO: Change this
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = queue_infos.data(),
         .enabledExtensionCount = enabled_extension_count,
@@ -231,7 +238,10 @@ void Instance::CreateAllocator() {
         .vulkanApiVersion = VK_API_VERSION_1_1
     };
 
-    vmaCreateAllocator(&allocator_info, &allocator);
+    if (auto result = vmaCreateAllocator(&allocator_info, &allocator); result != VK_SUCCESS) {
+        LOG_CRITICAL(Render_Vulkan, "Failed to initialize VMA with error {}", result);
+        UNREACHABLE();
+    }
 }
 
 bool Instance::IsFormatSupported(vk::Format format, vk::FormatFeatureFlags usage) const {
@@ -263,10 +273,13 @@ vk::Format Instance::GetFormatAlternative(vk::Format format) const {
         return vk::Format::eD32Sfloat;
     case vk::Format::eR5G5B5A1UnormPack16:
         return vk::Format::eA1R5G5B5UnormPack16;
-    case vk::Format::eR4G4B4A4UnormPack16:
-        return vk::Format::eB4G4R4A4UnormPack16;
     case vk::Format::eR8G8B8Unorm:
         return vk::Format::eR8G8B8A8Unorm;
+    case vk::Format::eUndefined:
+        return vk::Format::eUndefined;
+    case vk::Format::eR4G4B4A4UnormPack16:
+        // B4G4R4A4 is not guaranteed by the spec to support attachments
+        return GetFormatAlternative(vk::Format::eB4G4R4A4UnormPack16);
     default:
         LOG_WARNING(Render_Vulkan, "Unable to find compatible alternative to format = {} with usage {}",
                                     vk::to_string(format), vk::to_string(features));

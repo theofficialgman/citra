@@ -71,7 +71,7 @@ public:
 #ifndef OBJECT_POOL_DEBUG
         if (vacants.empty()) {
             unsigned num_objects = 64u << memory.size();
-            T *ptr = static_cast<T*>(memalign_alloc(std::max(64, alignof(T)),
+            T *ptr = static_cast<T*>(memalign_alloc(std::max<unsigned>(64, alignof(T)),
                                                     num_objects * sizeof(T)));
             if (!ptr) {
                 return nullptr;

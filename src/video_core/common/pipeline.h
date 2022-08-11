@@ -143,7 +143,7 @@ constexpr s32 WHOLE_SIZE = -1;
 // An opaque handle to a backend specific program pipeline
 class PipelineBase : public IntrusivePtrEnabled<PipelineBase> {
 public:
-    PipelineBase(PipelineType type, PipelineInfo info) : info(info), type(type) {}
+    PipelineBase(PipelineType type, PipelineInfo info) : type(type) {}
     virtual ~PipelineBase() = default;
 
     // Disable copy constructor
@@ -169,13 +169,15 @@ public:
     // Sets the scissor of the pipeline
     virtual void SetScissor(s32 x, s32 y, u32 width, u32 height) = 0;
 
+    // Applies dynamic state
+    virtual void ApplyDynamic(const PipelineInfo& info) = 0;
+
     // Returns the pipeline type (Graphics or Compute)
     PipelineType GetType() const {
         return type;
     }
 
 protected:
-    const PipelineInfo info;
     PipelineType type = PipelineType::Graphics;
 };
 

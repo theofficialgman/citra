@@ -36,8 +36,10 @@ public:
 
     // Assigns data to a particular binding
     void SetBinding(u32 set, u32 binding, DescriptorData data) {
-        update_data[set][binding] = data;
-        descriptor_dirty[set] = true;
+        if (std::memcmp(&update_data[set][binding], &data, sizeof(DescriptorData)) != 0) {
+            update_data[set][binding] = data;
+            descriptor_dirty[set] = true;
+        }
     }
 
     // Returns the number of descriptor set layouts
@@ -46,8 +48,8 @@ public:
     }
 
     // Returns the most current descriptor update data
-    std::span<DescriptorData> GetData(u32 set) {
-        return std::span{update_data.at(set).data(), set_layout_count};
+    DescriptorData* GetData(u32 set) {
+        return update_data.at(set).data();
     }
 
     vk::DescriptorSetLayout* GetDescriptorSetLayouts() {
@@ -85,14 +87,16 @@ public:
              vk::RenderPass renderpass, vk::PipelineCache cache);
     ~Pipeline() override;
 
-    virtual void BindTexture(u32 group, u32 slot, TextureHandle handle) override;
-    virtual void BindBuffer(u32 group, u32 slot, BufferHandle handle,
+    void BindTexture(u32 group, u32 slot, TextureHandle handle) override;
+    void BindBuffer(u32 group, u32 slot, BufferHandle handle,
                             u32 offset = 0, u32 range = WHOLE_SIZE, u32 view = 0) override;
-    virtual void BindSampler(u32 group, u32 slot, SamplerHandle handle) override;
-    virtual void BindPushConstant(std::span<const std::byte> data) override;
+    void BindSampler(u32 group, u32 slot, SamplerHandle handle) override;
+    void BindPushConstant(std::span<const std::byte> data) override;
 
-    virtual void SetViewport(float x, float y, float width, float height) override;
-    virtual void SetScissor(s32 x, s32 y, u32 width, u32 height) override;
+    void SetViewport(float x, float y, float width, float height) override;
+    void SetScissor(s32 x, s32 y, u32 width, u32 height) override;
+
+    void ApplyDynamic(const PipelineInfo& info) override;
 
     /// Returns the layout tracker that owns this pipeline
     PipelineOwner& GetOwner() const {

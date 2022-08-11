@@ -62,16 +62,19 @@ Buffer::Buffer(Instance& instance, CommandScheduler& scheduler, const BufferInfo
                     &unsafe_buffer, &allocation, &alloc_info);
     buffer = vk::Buffer{unsafe_buffer};
 
-    u32 view = 0;
     vk::Device device = instance.GetDevice();
-    while (info.views[view] != ViewFormat::Undefined) {
+    for (u32 view = 0; view < info.views.size(); view++) {
+        if (info.views[view] == ViewFormat::Undefined) {
+            break;
+        }
+
         const vk::BufferViewCreateInfo view_info = {
             .buffer = buffer,
             .format = ToVkViewFormat(info.views[view]),
             .range = info.capacity
         };
 
-        views[view++] = device.createBufferView(view_info);
+        views[view] = device.createBufferView(view_info);
     }
 
     // Map memory

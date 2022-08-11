@@ -44,6 +44,7 @@ static std::string fragment_shader_source = R"(
 layout (location = 0) in vec2 frag_tex_coord;
 layout (location = 0) out vec4 color;
 layout (set = 0, binding = 0) uniform texture2D top_screen;
+layout (set = 1, binding = 0) uniform sampler screen_sampler;
 
 layout (std140, push_constant) uniform PresentUniformData {
     mat4 modelview_matrix;
@@ -55,7 +56,7 @@ layout (std140, push_constant) uniform PresentUniformData {
 };
 
 void main() {
-    color = texture(top_screen, frag_tex_coord);
+    color = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
 }
 )";
 
@@ -75,12 +76,13 @@ const mat3 r = mat3(-0.011,-0.032,-0.007,
 
 layout (location = 0) in vec2 frag_tex_coord;
 layout (location = 0) out vec4 color;
-layout (set = 0, binding = 0) uniform sampler2D top_screen;
-layout (set = 0, binding = 1) uniform sampler2D top_screen_r;
+layout (set = 0, binding = 0) uniform texture2D top_screen;
+layout (set = 0, binding = 1) uniform texture2D top_screen_r;
+layout (set = 1, binding = 0) uniform sampler screen_sampler;
 
 void main() {
-    vec4 color_tex_l = texture(top_screen, frag_tex_coord);
-    vec4 color_tex_r = texture(top_screen_r, frag_tex_coord);
+    vec4 color_tex_l = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
+    vec4 color_tex_r = texture(sampler2D(top_screen_r, screen_sampler), frag_tex_coord);
     color = vec4(color_tex_l.rgb * l + color_tex_r.rgb * r, color_tex_l.a);
 }
 )";
@@ -98,15 +100,16 @@ layout (std140, push_constant) uniform PresentUniformData {
     int reverse_interlaced;
 };
 
-layout (set = 0, binding = 0) uniform sampler2D top_screen;
-layout (set = 0, binding = 1) uniform sampler2D top_screen_r;
+layout (set = 0, binding = 0) uniform texture2D top_screen;
+layout (set = 0, binding = 1) uniform texture2D top_screen_r;
+layout (set = 1, binding = 0) uniform sampler screen_sampler;
 
 void main() {
     float screen_row = o_resolution.x * frag_tex_coord.x;
     if (int(screen_row) % 2 == reverse_interlaced) {
-        color = texture(top_screen, frag_tex_coord);
+        color = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
     } else {
-        color = texture(top_screen_r, frag_tex_coord);
+        color = texture(sampler2D(top_screen_r, screen_sampler), frag_tex_coord);
     }
 }
 )";
@@ -175,19 +178,33 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
     // Set topology to strip
     present_pipeline_info.rasterization.topology.Assign(Pica::TriangleTopology::Strip);
 
+    // Create screen sampler
+    const SamplerInfo sampler_info = {
+        .mag_filter = Pica::TextureFilter::Linear,
+        .min_filter = Pica::TextureFilter::Linear,
+        .mip_filter = Pica::TextureFilter::Linear,
+        .wrap_s = Pica::WrapMode::ClampToEdge,
+        .wrap_t = Pica::WrapMode::ClampToEdge
+    };
+
+    screen_sampler = backend->CreateSampler(sampler_info);
 
     // Create vertex and fragment shaders
-    vertex_shader = backend->CreateShader(ShaderStage::Vertex, "Present vertex shader",
-                                          vertex_shader_source);
+    vertex_shader = backend->CreateShader(ShaderStage::Vertex, "Present vertex shader", vertex_shader_source);
+    vertex_shader->Compile(ShaderOptimization::Debug);
     for (int i = 0; i < PRESENT_PIPELINES; i++) {
         const std::string name = fmt::format("Present shader {:d}", i);
         present_shaders[i] = backend->CreateShader(ShaderStage::Fragment, name, *fragment_shaders[i]);
+        present_shaders[i]->Compile(ShaderOptimization::Debug);
 
         // Create associated pipeline
         present_pipeline_info.shaders[0] = vertex_shader;
         present_pipeline_info.shaders[1] = present_shaders[i];
         present_pipelines[i] = backend->CreatePipeline(PipelineType::Graphics, present_pipeline_info);
     }
+
+    // Bind sampler. TODO: Sampler hot-reload?
+    present_pipelines[0]->BindSampler(1, 0, screen_sampler);
 }
 
 void DisplayRenderer::PrepareRendertarget() {
@@ -207,6 +224,11 @@ void DisplayRenderer::PrepareRendertarget() {
             const TextureHandle& texture = screen_infos[i].texture;
             u32 fwidth = framebuffer.width;
             u32 fheight = framebuffer.height;
+
+            // Allocate texture for the first time
+            if (!texture.IsValid()) {
+                ConfigureFramebufferTexture(screen_infos[i], framebuffer);
+            }
 
             if (texture->GetWidth() != fwidth || texture->GetHeight() != fheight ||
                 screen_infos[i].format != framebuffer.color_format) {
@@ -343,6 +365,10 @@ void DisplayRenderer::DrawSingleScreen(u32 screen, bool rotate, float x, float y
     current_pipeline->SetViewport(0.f, 0.f, color_surface->GetWidth(), color_surface->GetHeight());
     current_pipeline->SetScissor(0, 0, color_surface->GetWidth(), color_surface->GetHeight());
 
+    // Binding screen textures
+    current_pipeline->BindTexture(0, 0, screen_info.display_texture);
+    current_pipeline->BindTexture(0, 1, screen_info.display_texture);
+
     std::array<ScreenRectVertex, 4> vertices;
     if (rotate) {
         vertices = {
@@ -386,7 +412,7 @@ void DisplayRenderer::DrawSingleScreen(u32 screen, bool rotate, float x, float y
     // Bind the vertex buffer and draw
     const std::array offsets = {mapped_offset};
     backend->BindVertexBuffer(vertex_buffer, offsets);
-    backend->Draw(current_pipeline, FramebufferHandle{}, 0, vertices.size());
+    backend->Draw(current_pipeline, display, 0, vertices.size());
 }
 
 void DisplayRenderer::DrawScreens(bool flipped) {
@@ -503,6 +529,10 @@ void DisplayRenderer::SwapBuffers() {
 void DisplayRenderer::UpdateCurrentFramebufferLayout(bool is_portrait_mode) {
     const Layout::FramebufferLayout& layout = render_window.GetFramebufferLayout();
     render_window.UpdateCurrentFramebufferLayout(layout.width, layout.height, is_portrait_mode);
+}
+
+void DisplayRenderer::Sync() {
+    rasterizer->SyncEntireState();
 }
 
 } // namespace Vulkan

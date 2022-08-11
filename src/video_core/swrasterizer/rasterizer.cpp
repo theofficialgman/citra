@@ -142,14 +142,14 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
                                     ScreenToRasterizerCoordinates(v1.screenpos),
                                     ScreenToRasterizerCoordinates(v2.screenpos)};
 
-    if (regs.rasterizer.cull_mode == RasterizerRegs::CullMode::KeepAll) {
+    if (regs.rasterizer.cull_mode == Pica::CullMode::KeepAll) {
         // Make sure we always end up with a triangle wound counter-clockwise
         if (!reversed && SignedArea(vtxpos[0].xy(), vtxpos[1].xy(), vtxpos[2].xy()) <= 0) {
             ProcessTriangleInternal(v0, v2, v1, true);
             return;
         }
     } else {
-        if (!reversed && regs.rasterizer.cull_mode == RasterizerRegs::CullMode::KeepClockWise) {
+        if (!reversed && regs.rasterizer.cull_mode == Pica::CullMode::KeepClockWise) {
             // Reverse vertex order and use the CCW code path.
             ProcessTriangleInternal(v0, v2, v1, true);
             return;
@@ -381,15 +381,15 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
                 bool use_border_s = false;
                 bool use_border_t = false;
 
-                if (texture.config.wrap_s == TexturingRegs::TextureConfig::ClampToBorder) {
+                if (texture.config.wrap_s == Pica::WrapMode::ClampToBorder) {
                     use_border_s = s < 0 || s >= static_cast<int>(texture.config.width);
-                } else if (texture.config.wrap_s == TexturingRegs::TextureConfig::ClampToBorder2) {
+                } else if (texture.config.wrap_s == Pica::WrapMode::ClampToBorder2) {
                     use_border_s = s >= static_cast<int>(texture.config.width);
                 }
 
-                if (texture.config.wrap_t == TexturingRegs::TextureConfig::ClampToBorder) {
+                if (texture.config.wrap_t == Pica::WrapMode::ClampToBorder) {
                     use_border_t = t < 0 || t >= static_cast<int>(texture.config.height);
-                } else if (texture.config.wrap_t == TexturingRegs::TextureConfig::ClampToBorder2) {
+                } else if (texture.config.wrap_t == Pica::WrapMode::ClampToBorder2) {
                     use_border_t = t >= static_cast<int>(texture.config.height);
                 }
 
@@ -579,8 +579,7 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
 
             const auto& output_merger = regs.framebuffer.output_merger;
 
-            if (output_merger.fragment_operation_mode ==
-                FramebufferRegs::FragmentOperationMode::Shadow) {
+            if (output_merger.fragment_operation_mode == Pica::FragmentOperationMode::Shadow) {
                 u32 depth_int = static_cast<u32>(depth * 0xFFFFFF);
                 // use green color as the shadow intensity
                 u8 stencil = combiner_output.y;
@@ -594,35 +593,35 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
                 bool pass = false;
 
                 switch (output_merger.alpha_test.func) {
-                case FramebufferRegs::CompareFunc::Never:
+                case Pica::CompareFunc::Never:
                     pass = false;
                     break;
 
-                case FramebufferRegs::CompareFunc::Always:
+                case Pica::CompareFunc::Always:
                     pass = true;
                     break;
 
-                case FramebufferRegs::CompareFunc::Equal:
+                case Pica::CompareFunc::Equal:
                     pass = combiner_output.a() == output_merger.alpha_test.ref;
                     break;
 
-                case FramebufferRegs::CompareFunc::NotEqual:
+                case Pica::CompareFunc::NotEqual:
                     pass = combiner_output.a() != output_merger.alpha_test.ref;
                     break;
 
-                case FramebufferRegs::CompareFunc::LessThan:
+                case Pica::CompareFunc::LessThan:
                     pass = combiner_output.a() < output_merger.alpha_test.ref;
                     break;
 
-                case FramebufferRegs::CompareFunc::LessThanOrEqual:
+                case Pica::CompareFunc::LessThanOrEqual:
                     pass = combiner_output.a() <= output_merger.alpha_test.ref;
                     break;
 
-                case FramebufferRegs::CompareFunc::GreaterThan:
+                case Pica::CompareFunc::GreaterThan:
                     pass = combiner_output.a() > output_merger.alpha_test.ref;
                     break;
 
-                case FramebufferRegs::CompareFunc::GreaterThanOrEqual:
+                case Pica::CompareFunc::GreaterThanOrEqual:
                     pass = combiner_output.a() >= output_merger.alpha_test.ref;
                     break;
                 }
@@ -667,7 +666,7 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
             u8 old_stencil = 0;
 
             auto UpdateStencil = [stencil_test, x, y,
-                                  &old_stencil](Pica::FramebufferRegs::StencilAction action) {
+                                  &old_stencil](Pica::StencilAction action) {
                 u8 new_stencil =
                     PerformStencilAction(action, old_stencil, stencil_test.reference_value);
                 if (g_state.regs.framebuffer.framebuffer.allow_depth_stencil_write != 0)
@@ -683,35 +682,35 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
 
                 bool pass = false;
                 switch (stencil_test.func) {
-                case FramebufferRegs::CompareFunc::Never:
+                case Pica::CompareFunc::Never:
                     pass = false;
                     break;
 
-                case FramebufferRegs::CompareFunc::Always:
+                case Pica::CompareFunc::Always:
                     pass = true;
                     break;
 
-                case FramebufferRegs::CompareFunc::Equal:
+                case Pica::CompareFunc::Equal:
                     pass = (ref == dest);
                     break;
 
-                case FramebufferRegs::CompareFunc::NotEqual:
+                case Pica::CompareFunc::NotEqual:
                     pass = (ref != dest);
                     break;
 
-                case FramebufferRegs::CompareFunc::LessThan:
+                case Pica::CompareFunc::LessThan:
                     pass = (ref < dest);
                     break;
 
-                case FramebufferRegs::CompareFunc::LessThanOrEqual:
+                case Pica::CompareFunc::LessThanOrEqual:
                     pass = (ref <= dest);
                     break;
 
-                case FramebufferRegs::CompareFunc::GreaterThan:
+                case Pica::CompareFunc::GreaterThan:
                     pass = (ref > dest);
                     break;
 
-                case FramebufferRegs::CompareFunc::GreaterThanOrEqual:
+                case Pica::CompareFunc::GreaterThanOrEqual:
                     pass = (ref >= dest);
                     break;
                 }
@@ -733,35 +732,35 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
                 bool pass = false;
 
                 switch (output_merger.depth_test_func) {
-                case FramebufferRegs::CompareFunc::Never:
+                case Pica::CompareFunc::Never:
                     pass = false;
                     break;
 
-                case FramebufferRegs::CompareFunc::Always:
+                case Pica::CompareFunc::Always:
                     pass = true;
                     break;
 
-                case FramebufferRegs::CompareFunc::Equal:
+                case Pica::CompareFunc::Equal:
                     pass = z == ref_z;
                     break;
 
-                case FramebufferRegs::CompareFunc::NotEqual:
+                case Pica::CompareFunc::NotEqual:
                     pass = z != ref_z;
                     break;
 
-                case FramebufferRegs::CompareFunc::LessThan:
+                case Pica::CompareFunc::LessThan:
                     pass = z < ref_z;
                     break;
 
-                case FramebufferRegs::CompareFunc::LessThanOrEqual:
+                case Pica::CompareFunc::LessThanOrEqual:
                     pass = z <= ref_z;
                     break;
 
-                case FramebufferRegs::CompareFunc::GreaterThan:
+                case Pica::CompareFunc::GreaterThan:
                     pass = z > ref_z;
                     break;
 
-                case FramebufferRegs::CompareFunc::GreaterThanOrEqual:
+                case Pica::CompareFunc::GreaterThanOrEqual:
                     pass = z >= ref_z;
                     break;
                 }
@@ -790,7 +789,7 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
                 auto params = output_merger.alpha_blending;
 
                 auto LookupFactor = [&](unsigned channel,
-                                        FramebufferRegs::BlendFactor factor) -> u8 {
+                                        Pica::BlendFactor factor) -> u8 {
                     DEBUG_ASSERT(channel < 4);
 
                     const Common::Vec4<u8> blend_const =
@@ -801,49 +800,49 @@ static void ProcessTriangleInternal(const Vertex& v0, const Vertex& v1, const Ve
                             .Cast<u8>();
 
                     switch (factor) {
-                    case FramebufferRegs::BlendFactor::Zero:
+                    case Pica::BlendFactor::Zero:
                         return 0;
 
-                    case FramebufferRegs::BlendFactor::One:
+                    case Pica::BlendFactor::One:
                         return 255;
 
-                    case FramebufferRegs::BlendFactor::SourceColor:
+                    case Pica::BlendFactor::SourceColor:
                         return combiner_output[channel];
 
-                    case FramebufferRegs::BlendFactor::OneMinusSourceColor:
+                    case Pica::BlendFactor::OneMinusSourceColor:
                         return 255 - combiner_output[channel];
 
-                    case FramebufferRegs::BlendFactor::DestColor:
+                    case Pica::BlendFactor::DestColor:
                         return dest[channel];
 
-                    case FramebufferRegs::BlendFactor::OneMinusDestColor:
+                    case Pica::BlendFactor::OneMinusDestColor:
                         return 255 - dest[channel];
 
-                    case FramebufferRegs::BlendFactor::SourceAlpha:
+                    case Pica::BlendFactor::SourceAlpha:
                         return combiner_output.a();
 
-                    case FramebufferRegs::BlendFactor::OneMinusSourceAlpha:
+                    case Pica::BlendFactor::OneMinusSourceAlpha:
                         return 255 - combiner_output.a();
 
-                    case FramebufferRegs::BlendFactor::DestAlpha:
+                    case Pica::BlendFactor::DestAlpha:
                         return dest.a();
 
-                    case FramebufferRegs::BlendFactor::OneMinusDestAlpha:
+                    case Pica::BlendFactor::OneMinusDestAlpha:
                         return 255 - dest.a();
 
-                    case FramebufferRegs::BlendFactor::ConstantColor:
+                    case Pica::BlendFactor::ConstantColor:
                         return blend_const[channel];
 
-                    case FramebufferRegs::BlendFactor::OneMinusConstantColor:
+                    case Pica::BlendFactor::OneMinusConstantColor:
                         return 255 - blend_const[channel];
 
-                    case FramebufferRegs::BlendFactor::ConstantAlpha:
+                    case Pica::BlendFactor::ConstantAlpha:
                         return blend_const.a();
 
-                    case FramebufferRegs::BlendFactor::OneMinusConstantAlpha:
+                    case Pica::BlendFactor::OneMinusConstantAlpha:
                         return 255 - blend_const.a();
 
-                    case FramebufferRegs::BlendFactor::SourceAlphaSaturate:
+                    case Pica::BlendFactor::SourceAlphaSaturate:
                         // Returns 1.0 for the alpha channel
                         if (channel == 3)
                             return 255;

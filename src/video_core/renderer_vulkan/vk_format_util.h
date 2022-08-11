@@ -206,6 +206,7 @@ constexpr void Convert2(std::span<const u8> source, std::span<u8> dest) {
         // RGB8 <-> RGBA8 is extrenely common on desktop GPUs
         // so it deserves a special path
         } else if constexpr (true) {
+
         } else {
             ForEach<0, source_components>([&](auto comp) {
                 constexpr u8 dest_comp = (mapping >> (2 * comp)) & 0x3;

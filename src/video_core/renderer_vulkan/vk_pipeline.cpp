@@ -130,7 +130,7 @@ PipelineOwner::PipelineOwner(Instance& instance, PipelineLayoutInfo info) :
                 .descriptorCount = 1,
                 .descriptorType  = ToVkDescriptorType(type),
                 .offset = binding * sizeof(DescriptorData),
-                .stride = sizeof(DescriptorData)
+                .stride = 0
             };
 
             binding++;
@@ -156,6 +156,8 @@ PipelineOwner::PipelineOwner(Instance& instance, PipelineLayoutInfo info) :
 
     // Create pipeline layout
     const vk::PushConstantRange range = {
+        .stageFlags = vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eFragment,
         .offset = 0,
         .size = info.push_constant_block_size
     };
@@ -204,7 +206,7 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwne
         shader_stages[i] = vk::PipelineShaderStageCreateInfo{
             .stage = ToVkShaderStage(shader->GetStage()),
             .module = vk_shader->GetHandle(),
-            .pName = shader->GetName().data(),
+            .pName = "main"
         };
     }
 
@@ -280,6 +282,16 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwne
             .logicOp = PicaToVK::LogicOp(info.blending.logic_op), // TODO
             .attachmentCount = 1,
             .pAttachments = &colorblend_attachment,
+            .blendConstants = std::array{1.0f, 1.0f, 1.0f, 1.0f}
+        };
+
+        const vk::Viewport placeholder_viewport = vk::Viewport{0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+        const vk::Rect2D placeholder_scissor = vk::Rect2D{{0, 0}, {1, 1}};
+        const vk::PipelineViewportStateCreateInfo viewport_info = {
+            .viewportCount = 1,
+            .pViewports = &placeholder_viewport,
+            .scissorCount = 1,
+            .pScissors = &placeholder_scissor,
         };
 
         const bool extended_dynamic_states = instance.IsExtendedDynamicStateSupported();
@@ -311,9 +323,9 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwne
             .passOp = PicaToVK::StencilOp(info.depth_stencil.stencil_pass_op),
             .depthFailOp = PicaToVK::StencilOp(info.depth_stencil.stencil_depth_fail_op),
             .compareOp = PicaToVK::CompareFunc(info.depth_stencil.stencil_compare_op),
-            .compareMask = static_cast<u32>(info.depth_stencil.stencil_compare_mask.Value()),
-            .writeMask = static_cast<u32>(info.depth_stencil.stencil_write_mask.Value()),
-            .reference = static_cast<u32>(info.depth_stencil.stencil_reference.Value())
+            .compareMask = info.depth_stencil.stencil_compare_mask,
+            .writeMask = info.depth_stencil.stencil_write_mask,
+            .reference = info.depth_stencil.stencil_reference
         };
 
         const vk::PipelineDepthStencilStateCreateInfo depth_info = {
@@ -331,6 +343,7 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwne
             .pStages = shader_stages.data(),
             .pVertexInputState = &vertex_input_info,
             .pInputAssemblyState = &input_assembly,
+            .pViewportState = &viewport_info,
             .pRasterizationState = &raster_state,
             .pMultisampleState = &multisampling,
             .pDepthStencilState = &depth_info,
@@ -340,7 +353,8 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwne
             .renderPass = renderpass
         };
 
-        if (auto result = device.createGraphicsPipeline(cache, pipeline_info); result.result == vk::Result::eSuccess) {
+        if (auto result = device.createGraphicsPipeline(cache, pipeline_info);
+                result.result == vk::Result::eSuccess) {
             pipeline = result.value;
         } else {
            LOG_CRITICAL(Render_Vulkan, "Graphics pipeline creation failed!");
@@ -434,6 +448,10 @@ void Pipeline::SetViewport(float x, float y, float width, float height) {
 void Pipeline::SetScissor(s32 x, s32 y, u32 width, u32 height) {
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     command_buffer.setScissor(0, vk::Rect2D{{x, y}, {width, height}});
+}
+
+void Pipeline::ApplyDynamic(const PipelineInfo& info) {
+
 }
 
 } // namespace VideoCore::Vulkan

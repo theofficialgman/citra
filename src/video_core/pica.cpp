@@ -8,7 +8,8 @@
 #include "video_core/geometry_pipeline.h"
 #include "video_core/pica.h"
 #include "video_core/pica_state.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
+#include "video_core/common/rasterizer.h"
 #include "video_core/video_core.h"
 
 namespace Core {
@@ -60,7 +61,7 @@ void State::Reset() {
     Zero(gs);
     Zero(cmd_list);
     Zero(immediate);
-    primitive_assembler.Reconfigure(PipelineRegs::TriangleTopology::List);
+    primitive_assembler.Reconfigure(TriangleTopology::List);
     vs_float_regs_counter = 0;
     vs_uniform_write_buffer.fill(0);
     gs_float_regs_counter = 0;

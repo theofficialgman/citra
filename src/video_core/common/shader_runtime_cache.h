@@ -90,7 +90,7 @@ public:
     }
 
     void Inject(const KeyType& key, std::string decomp, ShaderHandle&& program) {
-        const auto iter = shader_cache.emplace(std::move(decomp), std::move(stage)).first;
+        const auto iter = shader_cache.emplace(std::move(decomp), std::move(program)).first;
 
         ShaderHandle& cached_shader = iter->second;
         shader_map.insert_or_assign(key, &cached_shader);

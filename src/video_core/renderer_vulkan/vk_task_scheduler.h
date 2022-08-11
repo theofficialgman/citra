@@ -24,9 +24,6 @@ public:
     CommandScheduler(Instance& instance);
     ~CommandScheduler();
 
-    /// Create and initialize the work scheduler
-    bool Create();
-
     /// Block host until the current command completes execution
     void Synchronize();
 

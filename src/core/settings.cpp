@@ -14,7 +14,7 @@
 #include "core/hle/service/ir/ir_user.h"
 #include "core/hle/service/mic_u.h"
 #include "core/settings.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
 #include "video_core/video_core.h"
 
 namespace Settings {

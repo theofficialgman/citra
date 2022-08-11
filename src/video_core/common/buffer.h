@@ -35,8 +35,10 @@ struct BufferInfo {
     BufferUsage usage = BufferUsage::Undefined;
     std::array<ViewFormat, MAX_BUFFER_VIEWS> views{ViewFormat::Undefined};
 
+    auto operator<=>(const BufferInfo& info) const = default;
+
     const u64 Hash() const {
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(BufferInfo));
     }
 };
 

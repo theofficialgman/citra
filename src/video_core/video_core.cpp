@@ -10,6 +10,8 @@
 #include "video_core/pica_state.h"
 #include "video_core/common/renderer.h"
 #include "video_core/video_core.h"
+#include "video_core/renderer_vulkan/vk_backend.h"
+#include "video_core/common/rasterizer.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Video Core namespace

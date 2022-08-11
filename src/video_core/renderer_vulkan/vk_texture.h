@@ -10,7 +10,7 @@
 namespace VideoCore::Vulkan {
 
 // PICA texture have at most 8 mipmap levels
-constexpr u32 TEXTURE_MAX_LEVELS = 8;
+constexpr u32 TEXTURE_MAX_LEVELS = 10;
 
 class Instance;
 class CommandScheduler;
@@ -26,8 +26,9 @@ public:
     // Constructor for texture creation
     Texture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info);
 
-    // Constructor for not owning textures (swapchain)
-    Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, const TextureInfo& info);
+    // Constructor for swapchain images
+    Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, vk::Format format,
+            const TextureInfo& info);
 
     ~Texture() override;
 
@@ -93,7 +94,7 @@ private:
     vk::Format advertised_format = vk::Format::eUndefined;
     vk::Format internal_format = vk::Format::eUndefined;
     vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eNone;
-    std::array<vk::ImageLayout, TEXTURE_MAX_LEVELS> layouts;
+    std::array<vk::ImageLayout, TEXTURE_MAX_LEVELS> layouts{vk::ImageLayout::eUndefined};
 };
 
 /**

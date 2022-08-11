@@ -13,31 +13,31 @@ namespace Pica::Rasterizer {
 
 using TevStageConfig = TexturingRegs::TevStageConfig;
 
-int GetWrappedTexCoord(TexturingRegs::TextureConfig::WrapMode mode, int val, unsigned size) {
+int GetWrappedTexCoord(Pica::WrapMode mode, int val, unsigned size) {
     switch (mode) {
-    case TexturingRegs::TextureConfig::ClampToEdge2:
+    case Pica::ClampToEdge2:
         // For negative coordinate, ClampToEdge2 behaves the same as Repeat
         if (val < 0) {
             return static_cast<int>(static_cast<unsigned>(val) % size);
         }
     // [[fallthrough]]
-    case TexturingRegs::TextureConfig::ClampToEdge:
+    case Pica::ClampToEdge:
         val = std::max(val, 0);
         val = std::min(val, static_cast<int>(size) - 1);
         return val;
 
-    case TexturingRegs::TextureConfig::ClampToBorder:
+    case Pica::ClampToBorder:
         return val;
 
-    case TexturingRegs::TextureConfig::ClampToBorder2:
+    case Pica::ClampToBorder2:
     // For ClampToBorder2, the case of positive coordinate beyond the texture size is already
     // handled outside. Here we only handle the negative coordinate in the same way as Repeat.
-    case TexturingRegs::TextureConfig::Repeat2:
-    case TexturingRegs::TextureConfig::Repeat3:
-    case TexturingRegs::TextureConfig::Repeat:
+    case Pica::Repeat2:
+    case Pica::Repeat3:
+    case Pica::Repeat:
         return static_cast<int>(static_cast<unsigned>(val) % size);
 
-    case TexturingRegs::TextureConfig::MirroredRepeat: {
+    case Pica::MirroredRepeat: {
         unsigned int coord = (static_cast<unsigned>(val) % (2 * size));
         if (coord >= size)
             coord = 2 * size - 1 - coord;

@@ -107,7 +107,11 @@ Texture::Texture(Instance& instance, CommandScheduler& scheduler, const TextureI
     VmaAllocator allocator = instance.GetAllocator();
 
     // Allocate texture memory
-    vmaCreateImage(allocator, &unsafe_image_info, &alloc_info, &unsafe_image, &allocation, nullptr);
+    if (auto result = vmaCreateImage(allocator, &unsafe_image_info, &alloc_info, &unsafe_image, &allocation, nullptr);
+            result != VK_SUCCESS) {
+        LOG_CRITICAL(Render_Vulkan, "Failed allocating texture with error {}", result);
+        UNREACHABLE();
+    }
     image = vk::Image{unsafe_image};
 
     const vk::ImageViewCreateInfo view_info = {
@@ -119,15 +123,24 @@ Texture::Texture(Instance& instance, CommandScheduler& scheduler, const TextureI
 
     // Create image view
     image_view = device.createImageView(view_info);
+
+    // NOTE: To prevent validation errors when using the image without uploading
+    // transition it now to VK_IMAGE_LAYOUT_SHADER_READONLY_OPTIMAL
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal, 0, info.levels);
 }
 
-Texture::Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, const TextureInfo& info) :
-    TextureBase(info), instance(instance), scheduler(scheduler), image(image), is_texture_owned(false) {
+Texture::Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, vk::Format format,
+                 const TextureInfo& info) : TextureBase(info), instance(instance),
+    scheduler(scheduler), image(image), is_texture_owned(false) {
+
+    advertised_format = internal_format = format;
+    aspect = vk::ImageAspectFlagBits::eColor;
 
     const vk::ImageViewCreateInfo view_info = {
         .image = image,
         .viewType = ToVkImageViewType(info.view_type),
-        .format = internal_format,
+        .format = format,
         .subresourceRange = {aspect, 0, info.levels, 0, 1}
     };
 
@@ -306,13 +319,29 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
         const u64 staging_offset = staging.GetCurrentOffset();
 
         // Copy pixels to the staging buffer
-        auto slice = staging.Map(byte_count);
-        std::memcpy(slice.data(), data.data(), byte_count);
-        staging.Commit(byte_count);
+        if (advertised_format == vk::Format::eR8G8B8Unorm) {
+            const u32 new_byte_count = (byte_count / 3) * 4;
+            auto slice = staging.Map(new_byte_count);
 
-        // TODO: Handle format convertions and depth/stencil uploads
-        ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
-               advertised_format == internal_format);
+            u32 dst_offset = 0;
+            for (u32 src_offset = 0; src_offset < byte_count; src_offset += 3) {
+                slice[dst_offset] = data[src_offset];
+                slice[dst_offset+1] = data[src_offset+1];
+                slice[dst_offset+2] = data[src_offset+2];
+                slice[dst_offset+3] = 255;
+                dst_offset += 4;
+            }
+
+            staging.Commit(new_byte_count);
+        } else {
+            // TODO: Handle format convertions and depth/stencil uploads
+            ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
+                   advertised_format == internal_format);
+
+            auto slice = staging.Map(byte_count);
+            std::memcpy(slice.data(), data.data(), byte_count);
+            staging.Commit(byte_count);
+        }
 
         const vk::BufferImageCopy copy_region = {
             .bufferOffset = staging_offset,
@@ -571,46 +600,49 @@ StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler, 
         .imageType = ToVkImageType(info.type),
         .format = format,
         .extent = {info.width, info.height, 1},
-        .mipLevels = info.levels,
+        .mipLevels = 1,
         .arrayLayers = info.view_type == TextureViewType::ViewCube ? 6u : 1u,
         .samples = vk::SampleCountFlagBits::e1,
+        .tiling = vk::ImageTiling::eLinear,
         .usage = vk::ImageUsageFlagBits::eTransferSrc |
                  vk::ImageUsageFlagBits::eTransferDst,
     };
 
     const VmaAllocationCreateInfo alloc_create_info = {
-        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
         .usage = VMA_MEMORY_USAGE_AUTO
     };
 
     VkImage unsafe_image = VK_NULL_HANDLE;
     VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
-    VmaAllocationInfo alloc_info;
     VmaAllocator allocator = instance.GetAllocator();
 
     // Allocate texture memory
-    vmaCreateImage(allocator, &unsafe_image_info, &alloc_create_info,
-                   &unsafe_image, &allocation, &alloc_info);
+    if (auto result = vmaCreateImage(allocator, &unsafe_image_info, &alloc_create_info, &unsafe_image, &allocation, nullptr);
+            result != VK_SUCCESS) {
+        LOG_CRITICAL(Render_Vulkan, "Allocation of staging texture failed with error {}", result);
+        UNREACHABLE();
+    }
+
     image = vk::Image{unsafe_image};
 
     // Map memory
-    mapped_ptr = alloc_info.pMappedData;
+    vmaMapMemory(allocator, allocation, &mapped_ptr);
 
     // For staging textures the most conventient layout is VK_IMAGE_LAYOUT_GENERAL because it allows
     // for well defined host access and works with vkCmdBlitImage, thus eliminating the need for layout transitions
     const vk::ImageMemoryBarrier barrier = {
-        .srcAccessMask = vk::AccessFlagBits::eNone,
-        .dstAccessMask = vk::AccessFlagBits::eNone,
+        .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
         .oldLayout = vk::ImageLayout::eUndefined,
         .newLayout = vk::ImageLayout::eGeneral,
         .image = image,
         .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, info.levels, 0, 1}
     };
 
-    vk::CommandBuffer command_buffer = scheduler.GetUploadCommandBuffer();
-    command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eBottomOfPipe,
-                                   vk::PipelineStageFlagBits::eTransfer,
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                   vk::PipelineStageFlagBits::eFragmentShader,
                                    vk::DependencyFlagBits::eByRegion,
                                    {}, {}, barrier);
 }
@@ -619,6 +651,7 @@ StagingTexture::~StagingTexture() {
     if (image) {
         auto deleter = [allocation = allocation,
                         image = image](vk::Device device, VmaAllocator allocator) {
+            vmaUnmapMemory(allocator, allocation);
             vmaDestroyImage(allocator, static_cast<VkImage>(image), allocation);
         };
 

@@ -1643,6 +1643,7 @@ Surface RasterizerCache::CreateSurface(const SurfaceParams& params) {
         .format = GetTextureFormat(surface->pixel_format)
     };
 
+    texture_info.UpdateMipLevels();
     surface->texture = AllocateSurfaceTexture(texture_info);
     return surface;
 }

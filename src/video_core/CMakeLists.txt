@@ -15,6 +15,8 @@ add_library(video_core STATIC
     pica_regs.inc
     pica.cpp
     pica.h
+    regs.cpp
+    regs.h
     regs_framebuffer.h
     regs_lighting.h
     regs_pipeline.h
@@ -47,53 +49,53 @@ add_library(video_core STATIC
     common/surface_params.h
     common/texture.h
     common/pipeline.h
-    renderer_opengl/frame_dumper_opengl.cpp
-    renderer_opengl/frame_dumper_opengl.h
-    renderer_opengl/gl_rasterizer.cpp
-    renderer_opengl/gl_rasterizer.h
-    renderer_opengl/gl_rasterizer_cache.cpp
-    renderer_opengl/gl_rasterizer_cache.h
-    renderer_opengl/gl_resource_manager.cpp
-    renderer_opengl/gl_resource_manager.h
-    renderer_opengl/gl_shader_decompiler.cpp
-    renderer_opengl/gl_shader_decompiler.h
-    renderer_opengl/gl_shader_disk_cache.cpp
-    renderer_opengl/gl_shader_disk_cache.h
-    renderer_opengl/gl_shader_gen.cpp
-    renderer_opengl/gl_shader_gen.h
-    renderer_opengl/gl_shader_manager.cpp
-    renderer_opengl/gl_shader_manager.h
-    renderer_opengl/gl_shader_util.cpp
-    renderer_opengl/gl_shader_util.h
-    renderer_opengl/gl_state.cpp
-    renderer_opengl/gl_state.h
-    renderer_opengl/gl_stream_buffer.cpp
-    renderer_opengl/gl_stream_buffer.h
-    renderer_opengl/gl_surface_params.cpp
-    renderer_opengl/gl_surface_params.h
-    renderer_opengl/gl_vars.cpp
-    renderer_opengl/gl_vars.h
-    renderer_opengl/pica_to_gl.h
-    renderer_opengl/post_processing_opengl.cpp
-    renderer_opengl/post_processing_opengl.h
-    renderer_opengl/renderer_opengl.cpp
-    renderer_opengl/renderer_opengl.h
-    renderer_opengl/texture_downloader_es.cpp
-    renderer_opengl/texture_downloader_es.h
-    renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.cpp
-    renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.h
-    renderer_opengl/texture_filters/bicubic/bicubic.cpp
-    renderer_opengl/texture_filters/bicubic/bicubic.h
-    renderer_opengl/texture_filters/scale_force/scale_force.cpp
-    renderer_opengl/texture_filters/scale_force/scale_force.h
-    renderer_opengl/texture_filters/texture_filter_base.h
-    renderer_opengl/texture_filters/texture_filterer.cpp
-    renderer_opengl/texture_filters/texture_filterer.h
-    renderer_opengl/texture_filters/xbrz/xbrz_freescale.cpp
-    renderer_opengl/texture_filters/xbrz/xbrz_freescale.h
+    #renderer_opengl/frame_dumper_opengl.cpp
+    #renderer_opengl/frame_dumper_opengl.h
+    #renderer_opengl/gl_rasterizer.cpp
+    #renderer_opengl/gl_rasterizer.h
+    #renderer_opengl/gl_rasterizer_cache.cpp
+    #renderer_opengl/gl_rasterizer_cache.h
+    #renderer_opengl/gl_resource_manager.cpp
+    #renderer_opengl/gl_resource_manager.h
+    #renderer_opengl/gl_shader_decompiler.cpp
+    #renderer_opengl/gl_shader_decompiler.h
+    #renderer_opengl/gl_shader_disk_cache.cpp
+    #renderer_opengl/gl_shader_disk_cache.h
+    #renderer_opengl/gl_shader_gen.cpp
+    #renderer_opengl/gl_shader_gen.h
+    #renderer_opengl/gl_shader_manager.cpp
+    #renderer_opengl/gl_shader_manager.h
+    #renderer_opengl/gl_shader_util.cpp
+    #renderer_opengl/gl_shader_util.h
+    #renderer_opengl/gl_state.cpp
+    #renderer_opengl/gl_state.h
+    #renderer_opengl/gl_stream_buffer.cpp
+    #renderer_opengl/gl_stream_buffer.h
+    #renderer_opengl/gl_surface_params.cpp
+    #renderer_opengl/gl_surface_params.h
+    #renderer_opengl/gl_vars.cpp
+    #renderer_opengl/gl_vars.h
+    #renderer_opengl/pica_to_gl.h
+    #renderer_opengl/post_processing_opengl.cpp
+    #renderer_opengl/post_processing_opengl.h
+    #renderer_opengl/renderer_opengl.cpp
+    #renderer_opengl/renderer_opengl.h
+    #renderer_opengl/texture_downloader_es.cpp
+    #renderer_opengl/texture_downloader_es.h
+    #renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.cpp
+    #renderer_opengl/texture_filters/anime4k/anime4k_ultrafast.h
+    #renderer_opengl/texture_filters/bicubic/bicubic.cpp
+    #renderer_opengl/texture_filters/bicubic/bicubic.h
+    #renderer_opengl/texture_filters/scale_force/scale_force.cpp
+    #renderer_opengl/texture_filters/scale_force/scale_force.h
+    #renderer_opengl/texture_filters/texture_filter_base.h
+    #renderer_opengl/texture_filters/texture_filterer.cpp
+    #renderer_opengl/texture_filters/texture_filterer.h
+    #renderer_opengl/texture_filters/xbrz/xbrz_freescale.cpp
+    #renderer_opengl/texture_filters/xbrz/xbrz_freescale.h
     #temporary, move these back in alphabetical order before merging
-    renderer_opengl/gl_format_reinterpreter.cpp
-    renderer_opengl/gl_format_reinterpreter.h
+    #renderer_opengl/gl_format_reinterpreter.cpp
+    #renderer_opengl/gl_format_reinterpreter.h
     renderer_vulkan/pica_to_vulkan.h
     renderer_vulkan/vk_backend.cpp
     renderer_vulkan/vk_backend.h
@@ -101,10 +103,10 @@ add_library(video_core STATIC
     renderer_vulkan/vk_buffer.h
     renderer_vulkan/vk_common.cpp
     renderer_vulkan/vk_common.h
-    renderer_vulkan/vk_format_reinterpreter.cpp
-    renderer_vulkan/vk_format_reinterpreter.h
-    renderer_vulkan/vk_format_util.cpp
-    renderer_vulkan/vk_format_util.h
+    #renderer_vulkan/vk_format_reinterpreter.cpp
+    #renderer_vulkan/vk_format_reinterpreter.h
+    #renderer_vulkan/vk_format_util.cpp
+    #renderer_vulkan/vk_format_util.h
     renderer_vulkan/vk_framebuffer.cpp
     renderer_vulkan/vk_framebuffer.h
     renderer_vulkan/vk_instance.cpp
@@ -199,7 +201,8 @@ endif()
 create_target_directory_groups(video_core)
 
 target_link_libraries(video_core PUBLIC common core)
-target_link_libraries(video_core PRIVATE glad::glad glm::glm nihstro-headers Boost::serialization)
+
+target_link_libraries(video_core PRIVATE nihstro-headers glad::glad glm::glm Boost::serialization)
 
 # Include Vulkan headers
 target_include_directories(video_core PRIVATE ../../externals/Vulkan-Headers/include)

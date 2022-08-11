@@ -10,7 +10,7 @@
 
 namespace Pica::Rasterizer {
 
-int GetWrappedTexCoord(TexturingRegs::TextureConfig::WrapMode mode, int val, unsigned size);
+int GetWrappedTexCoord(WrapMode mode, int val, unsigned size);
 
 Common::Vec3<u8> GetColorModifier(TexturingRegs::TevStageConfig::ColorModifier factor,
                                   const Common::Vec4<u8>& values);

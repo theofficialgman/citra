@@ -17,27 +17,6 @@ constexpr BufferInfo STAGING_INFO = {
 };
 
 CommandScheduler::CommandScheduler(Instance& instance) : instance(instance) {
-
-}
-
-CommandScheduler::~CommandScheduler() {
-    // Destroy Vulkan resources
-    vk::Device device = instance.GetDevice();
-    VmaAllocator allocator = instance.GetAllocator();
-
-    for (auto& command : commands) {
-        device.destroyFence(command.fence);
-
-        // Clean up any scheduled resources
-        for (auto& func : command.cleanups) {
-            func(device, allocator);
-        }
-    }
-
-    device.destroyCommandPool(command_pool);
-}
-
-bool CommandScheduler::Create() {
     vk::Device device = instance.GetDevice();
     const vk::CommandPoolCreateInfo pool_info = {
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -59,14 +38,39 @@ bool CommandScheduler::Create() {
     // Initialize command slots
     for (std::size_t i = 0; i < commands.size(); i++) {
         commands[i] = CommandSlot{
+            .fence = device.createFence({}),
             .render_command_buffer = command_buffers[2 * i],
             .upload_command_buffer = command_buffers[2 * i + 1],
-            .fence = device.createFence({}),
-            .upload_buffer = std::make_unique<Buffer>(instance, *this, STAGING_INFO)
         };
+
+        commands[i].upload_buffer = std::make_unique<Buffer>(instance, *this, STAGING_INFO);
     }
 
-    return true;
+    const vk::CommandBufferBeginInfo begin_info = {
+        .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit
+    };
+
+    // Begin first command
+    CommandSlot& command = commands[current_command];
+    command.render_command_buffer.begin(begin_info);
+    command.fence_counter = next_fence_counter++;
+}
+
+CommandScheduler::~CommandScheduler() {
+    // Destroy Vulkan resources
+    vk::Device device = instance.GetDevice();
+    VmaAllocator allocator = instance.GetAllocator();
+
+    for (auto& command : commands) {
+        device.destroyFence(command.fence);
+
+        // Clean up any scheduled resources
+        for (auto& func : command.cleanups) {
+            func(device, allocator);
+        }
+    }
+
+    device.destroyCommandPool(command_pool);
 }
 
 void CommandScheduler::Synchronize() {

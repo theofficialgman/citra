@@ -4,11 +4,13 @@
 
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include "core/core.h"
+#include "core/frontend/emu_window.h"
 #include "common/object_pool.h"
 #include "video_core/renderer_vulkan/vk_backend.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 #include "video_core/renderer_vulkan/vk_framebuffer.h"
+#include "video_core/renderer_vulkan/vk_shader.h"
 
 namespace VideoCore::Vulkan {
 
@@ -21,7 +23,7 @@ constexpr vk::PipelineBindPoint ToVkPipelineBindPoint(PipelineType type) {
     }
 }
 
-constexpr vk::Rect2D ToVkRect2D(Rect2D rect) {
+inline vk::Rect2D ToVkRect2D(Rect2D rect) {
     return vk::Rect2D{
         .offset = vk::Offset2D{rect.x, rect.y},
         .extent = vk::Extent2D{rect.width, rect.height}
@@ -41,8 +43,8 @@ constexpr vk::IndexType ToVkIndexType(AttribType type) {
 }
 
 Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
-    instance(window), swapchain(instance, instance.GetSurface()),
-    scheduler(instance), renderpass_cache(instance, swapchain) {
+    instance(window), scheduler(instance), renderpass_cache(instance),
+    swapchain(instance, scheduler, renderpass_cache, this, instance.GetSurface()) {
 
     // TODO: Properly report GPU hardware
     auto& telemetry_session = Core::System::GetInstance().TelemetrySession();
@@ -73,6 +75,10 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
     for (u32 pool = 0; pool < SCHEDULER_COMMAND_COUNT; pool++) {
         descriptor_pools[pool] = device.createDescriptorPool(pool_info);
     }
+
+    // Create swapchain with the initial window dimentions
+    const auto& layout = window.GetFramebufferLayout();
+    swapchain.Create(layout.width, layout.height, false);
 }
 
 Backend::~Backend() {
@@ -82,6 +88,28 @@ Backend::~Backend() {
     for (u32 pool = 0; pool < SCHEDULER_COMMAND_COUNT; pool++) {
         device.destroyDescriptorPool(descriptor_pools[pool]);
     }
+}
+
+static bool first = true;
+
+bool Backend::BeginPresent() {
+    const auto& layout = window.GetFramebufferLayout();
+    if (swapchain.NeedsRecreation() || first) {
+        swapchain.Create(layout.width, layout.height, false);
+        first = false;
+    }
+
+    swapchain.AcquireNextImage();
+    return true;
+}
+
+void Backend::EndPresent() {
+    scheduler.Submit(false, swapchain.GetAvailableSemaphore(), swapchain.GetPresentSemaphore());
+    swapchain.Present();
+}
+
+FramebufferHandle Backend::GetWindowFramebuffer() {
+    return swapchain.GetCurrentFramebuffer();
 }
 
 u64 Backend::PipelineInfoHash(const PipelineInfo& info) {
@@ -115,7 +143,7 @@ FramebufferHandle Backend::CreateFramebuffer(FramebufferInfo info) {
     vk::RenderPass load_renderpass = GetRenderPass(color, depth, false);
     vk::RenderPass clear_renderpass = GetRenderPass(color, depth, true);
 
-    return FramebufferHandle{framebuffer_pool.Allocate(instance, info, load_renderpass, clear_renderpass)};
+    return FramebufferHandle{framebuffer_pool.Allocate(instance, scheduler, info, load_renderpass, clear_renderpass)};
 }
 
 TextureHandle Backend::CreateTexture(TextureInfo info) {
@@ -130,20 +158,26 @@ PipelineHandle Backend::CreatePipeline(PipelineType type, PipelineInfo info) {
     vk::RenderPass renderpass = GetRenderPass(info.color_attachment, info.depth_attachment);
 
     // Find an owner first
-    if (auto iter = pipeline_owners.find(info.layout); iter != pipeline_owners.end()) {
-        return PipelineHandle{pipeline_pool.Allocate(instance, iter->second, type, info,
+    const u64 layout_hash = Common::ComputeHash64(&info.layout, sizeof(PipelineLayoutInfo));
+    if (auto iter = pipeline_owners.find(layout_hash); iter != pipeline_owners.end()) {
+        return PipelineHandle{pipeline_pool.Allocate(instance, scheduler, *iter->second.get(), type, info,
                                                      renderpass, pipeline_cache)};
     }
 
     // Create the layout
-    auto result = pipeline_owners.emplace(info.layout, PipelineOwner{instance, info.layout});
-    return PipelineHandle{pipeline_pool.Allocate(instance, result.first->second, type, info,
+    auto result = pipeline_owners.emplace(layout_hash, std::make_unique<PipelineOwner>(instance, info.layout));
+    return PipelineHandle{pipeline_pool.Allocate(instance, scheduler, *result.first->second.get(), type, info,
                                                  renderpass, pipeline_cache)};
 }
 
 SamplerHandle Backend::CreateSampler(SamplerInfo info) {
     static ObjectPool<Sampler> sampler_pool;
-    return SamplerHandle{sampler_pool.Allocate(info)};
+    return SamplerHandle{sampler_pool.Allocate(instance, info)};
+}
+
+ShaderHandle Backend::CreateShader(ShaderStage stage, std::string_view name, std::string source) {
+    static ObjectPool<Shader> shader_pool;
+    return ShaderHandle{shader_pool.Allocate(instance, stage, name, std::move(source))};
 }
 
 void Backend::BindVertexBuffer(BufferHandle buffer, std::span<const u64> offsets) {
@@ -235,7 +269,7 @@ void Backend::BindDescriptorSets(PipelineHandle handle) {
             vk::Device device = instance.GetDevice();
             vk::DescriptorSet set = device.allocateDescriptorSets(alloc_info)[0];
             device.updateDescriptorSetWithTemplate(set, pipeline_owner.GetUpdateTemplate(i),
-                                                   pipeline_owner.GetData(i));
+                                                   reinterpret_cast<const void*>(pipeline_owner.GetData(i)));
 
             bound_sets[i] = set;
             pipeline_owner.descriptor_bank[i] = set;
@@ -257,8 +291,9 @@ void Backend::BeginRenderpass(FramebufferHandle draw_framebuffer) {
 
     if (framebuffer->GetColorAttachment().IsValid()) {
         for (int i = 0; i < 4; i++) {
-            clear_values[clear_value_count++].color.float32[i] = framebuffer->clear_color_value[i];
+            clear_values[clear_value_count].color.float32[i] = framebuffer->clear_color_value[i];
         }
+        clear_value_count++;
     }
 
     if (framebuffer->GetDepthStencilAttachment().IsValid()) {

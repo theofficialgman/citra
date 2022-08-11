@@ -58,7 +58,7 @@ class Backend;
 }
 
 namespace VideoCore {
-class RendererBase;
+class DisplayRenderer;
 }
 
 namespace Core {
@@ -208,7 +208,7 @@ public:
         return *dsp_core;
     }
 
-    [[nodiscard]] VideoCore::RendererBase& Renderer();
+    [[nodiscard]] VideoCore::DisplayRenderer& Renderer();
 
     /**
      * Gets a reference to the service manager.

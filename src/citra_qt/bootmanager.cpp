@@ -24,7 +24,9 @@
 #include "input_common/main.h"
 #include "input_common/motion_emu.h"
 #include "network/network.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/rasterizer.h"
+#include "video_core/common/pipeline_cache.h"
+#include "video_core/common/renderer.h"
 #include "video_core/video_core.h"
 
 #if !defined(WIN32)

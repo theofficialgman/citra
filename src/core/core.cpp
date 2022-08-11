@@ -47,7 +47,7 @@
 #include "core/rpc/rpc_server.h"
 #include "core/settings.h"
 #include "network/network.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
 #include "video_core/video_core.h"
 
 namespace Core {
@@ -438,7 +438,7 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window, u32 system_mo
     return ResultStatus::Success;
 }
 
-VideoCore::RendererBase& System::Renderer() {
+VideoCore::DisplayRenderer& System::Renderer() {
     return *VideoCore::g_renderer;
 }
 

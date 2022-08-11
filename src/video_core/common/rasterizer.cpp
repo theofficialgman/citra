@@ -94,6 +94,7 @@ constexpr VertexLayout HardwareVertex::GetVertexLayout() {
 
 constexpr u32 UTILITY_GROUP = 0;
 constexpr u32 TEXTURE_GROUP = 1;
+constexpr u32 SAMPLER_GROUP = 2;
 
 // Rasterizer pipeline layout
 constexpr PipelineLayoutInfo RASTERIZER_PIPELINE_LAYOUT = {
@@ -103,6 +104,7 @@ constexpr PipelineLayoutInfo RASTERIZER_PIPELINE_LAYOUT = {
         BindingGroup{
             BindingType::Uniform,
             BindingType::Uniform,
+            BindingType::TexelBuffer,
             BindingType::TexelBuffer,
             BindingType::TexelBuffer
         }, // Texture unit set
@@ -137,7 +139,7 @@ static constexpr BufferInfo UNIFORM_BUFFER_INFO = {
     .usage = BufferUsage::Uniform
 };
 
-static constexpr BufferInfo TEXEL_BUFFER_INFO = {
+static constexpr BufferInfo TEXEL_BUFFER_LF_INFO = {
     .capacity = 1 * 1024 * 1024,
     .usage = BufferUsage::Texel,
     .views = {
@@ -145,7 +147,7 @@ static constexpr BufferInfo TEXEL_BUFFER_INFO = {
     }
 };
 
-static constexpr BufferInfo TEXEL_BUFFER_LF_INFO = {
+static constexpr BufferInfo TEXEL_BUFFER_INFO = {
     .capacity = 1 * 1024 * 1024,
     .usage = BufferUsage::Texel,
     .views = {
@@ -646,6 +648,11 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
                                  viewport_rect_unscaled.GetWidth() * res_scale,
                                  viewport_rect_unscaled.GetHeight() * res_scale);
 
+    // Bind texel buffers
+    raster_pipeline->BindBuffer(0, 2, texel_buffer_lut_lf);
+    raster_pipeline->BindBuffer(0, 3, texel_buffer_lut);
+    raster_pipeline->BindBuffer(0, 4, texel_buffer_lut, 0, WHOLE_SIZE, 1);
+
     // Checks if the game is trying to use a surface as a texture and framebuffer at the same time
     // which causes unpredictable behavior on the host.
     // Making a copy to sample from eliminates this issue and seems to be fairly cheap.
@@ -781,6 +788,15 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
                 .lod_max = texture.config.lod.max_level,
                 .lod_bias = texture.config.lod.bias
             };
+
+            // Search the cache and bind the appropriate sampler
+            const SamplerInfo& key = texture_samplers[texture_index];
+            if (auto iter = sampler_cache.find(key); iter != sampler_cache.end()) {
+                raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, iter->second);
+            } else {
+                auto result = sampler_cache.emplace(key, backend->CreateSampler(key));
+                raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, result.first->second);
+            }
 
             Surface surface = res_cache.GetTextureSurface(texture);
             if (surface != nullptr) {
@@ -1717,7 +1733,7 @@ void Rasterizer::SyncDepthTest() {
                                     regs.framebuffer.output_merger.depth_write_enable == 1);
     raster_info.depth_stencil.depth_compare_op.Assign(
         regs.framebuffer.output_merger.depth_test_enable == 1
-            ? regs.framebuffer.output_merger.depth_test_func
+            ? regs.framebuffer.output_merger.depth_test_func.Value()
             : Pica::CompareFunc::Always);
 }
 

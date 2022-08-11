@@ -20,7 +20,7 @@
 #include "input_common/motion_emu.h"
 #include "input_common/sdl/sdl.h"
 #include "network/network.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
 #include "video_core/video_core.h"
 
 SharedContext_SDL2::SharedContext_SDL2() {

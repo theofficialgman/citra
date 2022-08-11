@@ -24,7 +24,7 @@ public:
 
     FramebufferHandle GetWindowFramebuffer() override;
 
-    u64 QueryDriver(Query query) override;
+    u64 QueryDriver(Query query) override { return 0; }
 
     u64 PipelineInfoHash(const PipelineInfo& info) override;
 
@@ -45,7 +45,7 @@ public:
                      u32 base_index, u32 num_indices, u32 base_vertex) override;
 
     void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,
-                         Common::Vec3<u32> groups) override;
+                         Common::Vec3<u32> groups) override {}
 
     // Returns the vulkan instance
     inline const Instance& GetInstance() const {
@@ -68,13 +68,13 @@ private:
 
 private:
     Instance instance;
-    Swapchain swapchain;
     CommandScheduler scheduler;
     RenderpassCache renderpass_cache;
+    Swapchain swapchain;
     vk::PipelineCache pipeline_cache;
 
     // A cache of pipeline owners
-    std::unordered_map<PipelineLayoutInfo, PipelineOwner> pipeline_owners;
+    std::unordered_map<u64, std::unique_ptr<PipelineOwner>, Common::IdentityHash> pipeline_owners;
 
     // Descriptor pools
     std::array<vk::DescriptorPool, SCHEDULER_COMMAND_COUNT> descriptor_pools;

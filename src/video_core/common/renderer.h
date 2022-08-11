@@ -67,7 +67,7 @@ constexpr u32 PRESENT_PIPELINES = 3;
 class DisplayRenderer {
 public:
     DisplayRenderer(Frontend::EmuWindow& window);
-    ~DisplayRenderer();
+    ~DisplayRenderer() = default;
 
     void SwapBuffers();
     void TryPresent(int timeout_ms) {}
@@ -94,6 +94,9 @@ public:
 
     void Sync();
 
+    // Updates the framebuffer layout of the contained render window handle.
+    void UpdateCurrentFramebufferLayout(bool is_portrait_mode = {});
+
 private:
     void PrepareRendertarget();
     void ConfigureFramebufferTexture(ScreenInfo& screen, const GPU::Regs::FramebufferConfig& framebuffer);
@@ -117,9 +120,6 @@ private:
     // Fills active OpenGL texture with the given RGB color.
     void LoadColorToActiveTexture(u8 color_r, u8 color_g, u8 color_b, const ScreenInfo& screen);
 
-    // Updates the framebuffer layout of the contained render window handle.
-    void UpdateCurrentFramebufferLayout(bool is_portrait_mode = {});
-
 private:
     std::unique_ptr<VideoCore::Rasterizer> rasterizer;
     std::unique_ptr<BackendBase> backend;
@@ -135,6 +135,7 @@ private:
     ShaderHandle vertex_shader;
 
     // Display information for top and bottom screens respectively
+    SamplerHandle screen_sampler;
     std::array<ScreenInfo, 3> screen_infos;
     PresentUniformData uniform_data;
     BufferHandle vertex_buffer;

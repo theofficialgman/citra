@@ -18,7 +18,7 @@
 #include "core/loader/loader.h"
 #include "core/loader/smdh.h"
 #include "ui_loading_screen.h"
-#include "video_core/rasterizer_interface.h"
+#include "video_core/common/pipeline_cache.h"
 
 constexpr char PROGRESSBAR_STYLE_PREPARE[] = R"(
 QProgressBar {}

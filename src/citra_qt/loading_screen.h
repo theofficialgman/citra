@@ -17,7 +17,7 @@ class LoadingScreen;
 }
 
 namespace VideoCore {
-enum class LoadCallbackStage;
+enum class LoadCallbackStage : unsigned char;
 }
 
 class QGraphicsOpacityEffect;

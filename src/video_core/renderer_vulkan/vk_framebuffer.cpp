@@ -10,7 +10,7 @@
 
 namespace VideoCore::Vulkan {
 
-vk::Rect2D ToVkRect2D(Rect2D rect) {
+inline vk::Rect2D ToVkRect2D(Rect2D rect) {
     return vk::Rect2D{
         .offset = {rect.x, rect.y},
         .extent = {rect.width, rect.height}
@@ -41,7 +41,7 @@ Framebuffer::Framebuffer(Instance& instance, CommandScheduler& scheduler, const 
         // The load and clear renderpass are compatible according to the specification
         // so there is no need to create multiple framebuffers
         .renderPass = load_renderpass,
-        .attachmentCount = attachments.size(),
+        .attachmentCount = attachment_count,
         .pAttachments = attachments.data(),
         .width = valid_texture->GetWidth(),
         .height = valid_texture->GetHeight(),
@@ -65,7 +65,7 @@ void Framebuffer::DoClear() {
 
     if (info.color.IsValid()) {
         vk::ClearColorValue clear_color{};
-        std::memcpy(clear_color.float32.data(), clear_value.color.AsArray(), sizeof(float) * 4);
+        std::memcpy(clear_color.float32.data(), clear_color_value.AsArray(), sizeof(float) * 4);
 
         clear_values[clear_value_count++] = vk::ClearValue {
             .color = clear_color
@@ -75,8 +75,8 @@ void Framebuffer::DoClear() {
     if (info.depth_stencil.IsValid()) {
         clear_values[clear_value_count++] = vk::ClearValue {
             .depthStencil = vk::ClearDepthStencilValue {
-                .depth = clear_value.depth,
-                .stencil = clear_value.stencil
+                .depth = clear_depth_value,
+                .stencil = clear_stencil_value
             }
         };
     }

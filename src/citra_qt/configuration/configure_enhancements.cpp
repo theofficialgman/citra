@@ -14,8 +14,8 @@ ConfigureEnhancements::ConfigureEnhancements(QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureEnhancements>()) {
     ui->setupUi(this);
 
-    for (const auto& filter : OpenGL::TextureFilterer::GetFilterNames())
-        ui->texture_filter_combobox->addItem(QString::fromStdString(filter.data()));
+    //for (const auto& filter : OpenGL::TextureFilterer::GetFilterNames())
+    //    ui->texture_filter_combobox->addItem(QString::fromStdString(filter.data()));
 
     SetConfiguration();
 
@@ -89,12 +89,12 @@ void ConfigureEnhancements::updateShaders(Settings::StereoRenderOption stereo_op
 
     ui->shader_combobox->setCurrentIndex(0);
 
-    for (const auto& shader : OpenGL::GetPostProcessingShaderList(
+    /*for (const auto& shader : OpenGL::GetPostProcessingShaderList(
              stereo_option == Settings::StereoRenderOption::Anaglyph)) {
         ui->shader_combobox->addItem(QString::fromStdString(shader));
         if (Settings::values.pp_shader_name == shader)
             ui->shader_combobox->setCurrentIndex(ui->shader_combobox->count() - 1);
-    }
+    }*/
 }
 
 void ConfigureEnhancements::RetranslateUI() {

@@ -16,7 +16,7 @@ add_executable(citra
 create_target_directory_groups(citra)
 
 target_link_libraries(citra PRIVATE common core input_common network)
-target_link_libraries(citra PRIVATE inih glad::glad lodepng)
+target_link_libraries(citra PRIVATE inih nihstro-headers glad::glad lodepng)
 if (MSVC)
     target_link_libraries(citra PRIVATE getopt)
 endif()

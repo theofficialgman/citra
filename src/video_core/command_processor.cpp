@@ -12,7 +12,6 @@
 #include "common/microprofile.h"
 #include "common/vector_math.h"
 #include "core/hle/service/gsp/gsp.h"
-#include "core/hw/gpu.h"
 #include "core/memory.h"
 #include "core/tracer/recorder.h"
 #include "video_core/command_processor.h"
@@ -20,11 +19,11 @@
 #include "video_core/pica_state.h"
 #include "video_core/pica_types.h"
 #include "video_core/primitive_assembly.h"
-#include "video_core/rasterizer_interface.h"
+#include "video_core/common/rasterizer.h"
 #include "video_core/regs.h"
 #include "video_core/regs_pipeline.h"
 #include "video_core/regs_texturing.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
 #include "video_core/shader/shader.h"
 #include "video_core/vertex_loader.h"
 #include "video_core/video_core.h"
@@ -287,8 +286,8 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
 
         if (regs.pipeline.use_gs == PipelineRegs::UseGS::No) {
             auto topology = primitive_assembler.GetTopology();
-            if (topology == PipelineRegs::TriangleTopology::Shader ||
-                topology == PipelineRegs::TriangleTopology::List) {
+            if (topology == TriangleTopology::Shader ||
+                topology == TriangleTopology::List) {
                 accelerate_draw = accelerate_draw && (regs.pipeline.num_vertices % 3) == 0;
             }
             // TODO (wwylele): for Strip/Fan topology, if the primitive assember is not restarted

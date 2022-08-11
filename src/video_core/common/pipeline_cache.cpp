@@ -6,8 +6,8 @@
 #include <thread>
 #include <mutex>
 #include "core/frontend/scope_acquire_context.h"
-#include "video_core/common/pipeline_cache.h"
 #include "video_core/common/shader.h"
+#include "video_core/common/pipeline_cache.h"
 #include "video_core/common/shader_gen.h"
 #include "video_core/renderer_vulkan/vk_shader_gen.h"
 #include "video_core/video_core.h"
@@ -59,7 +59,7 @@ PipelineHandle PipelineCache::GetPipeline(PipelineInfo& info) {
     }
 
     // Create new pipeline
-    auto iter = cached_pipelines.emplace(info, backend->CreatePipeline(PipelineType::Graphics, info)).first;
+    auto iter = cached_pipelines.emplace(pipeline_hash, backend->CreatePipeline(PipelineType::Graphics, info)).first;
     return iter->second;
 }
 

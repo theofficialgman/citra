@@ -67,7 +67,7 @@ public:
     }
 
     bool IsExtendedDynamicStateSupported() const {
-        return extended_dynamic_state;
+        /*return extended_dynamic_state;*/return false;
     }
 
     bool IsPushDescriptorsSupported() const {

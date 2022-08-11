@@ -30,10 +30,12 @@ struct FramebufferInfo {
     TextureHandle depth_stencil;
     MSAASamples samples = MSAASamples::x1;
 
+    auto operator<=>(const FramebufferInfo& info) const = default;
+
     // Hashes the framebuffer object and returns a unique identifier
     const u64 Hash() const {
         // IntrusivePtr only has a pointer member so it's fine hash it
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(FramebufferInfo));
     }
 };
 
@@ -101,3 +103,12 @@ protected:
 using FramebufferHandle = IntrusivePtr<FramebufferBase>;
 
 } // namespace VideoCore
+
+namespace std {
+template <>
+struct hash<VideoCore::FramebufferInfo> {
+    std::size_t operator()(const VideoCore::FramebufferInfo& info) const noexcept {
+        return info.Hash();
+    }
+};
+} // namespace std

@@ -6,15 +6,21 @@
 
 #include <vector>
 #include "common/common_types.h"
+#include "video_core/common/framebuffer.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
 namespace VideoCore::Vulkan {
 
 class Instance;
+class Backend;
+class CommandScheduler;
+class Texture;
+class RenderpassCache;
 
 class Swapchain {
 public:
-    Swapchain(Instance& instance, vk::SurfaceKHR surface);
+    Swapchain(Instance& instance, CommandScheduler& scheduler, RenderpassCache& renderpass_cache,
+              Backend* backend, vk::SurfaceKHR surface);
     ~Swapchain();
 
     /// Creates (or recreates) the swapchain with a given size.
@@ -25,6 +31,10 @@ public:
 
     /// Present the current image and move to the next one
     void Present();
+
+    FramebufferHandle GetCurrentFramebuffer() const {
+        return framebuffers[current_image];
+    }
 
     /// Return current swapchain state
     inline vk::Extent2D GetExtent() const {
@@ -58,7 +68,7 @@ public:
 
     /// Return the current swapchain image
     inline vk::Image GetCurrentImage() {
-        return images[current_image];
+        return vk_images[current_image];
     }
 
     /// Returns true when the swapchain should be recreated
@@ -70,7 +80,10 @@ private:
     void Configure(u32 width, u32 height);
 
 private:
+    Backend* backend = nullptr;
     Instance& instance;
+    CommandScheduler& scheduler;
+    RenderpassCache& renderpass_cache;
     vk::SwapchainKHR swapchain = VK_NULL_HANDLE;
     vk::SurfaceKHR surface = VK_NULL_HANDLE;
 
@@ -82,7 +95,9 @@ private:
     u32 image_count;
 
     // Swapchain state
-    std::vector<vk::Image> images;
+    std::vector<vk::Image> vk_images;
+    std::vector<TextureHandle> textures;
+    std::vector<FramebufferHandle> framebuffers;
     vk::Semaphore image_available, render_finished;
     u32 current_image = 0, current_frame = 0;
     bool vsync_enabled = false;

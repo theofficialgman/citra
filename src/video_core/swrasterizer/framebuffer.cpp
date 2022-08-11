@@ -222,32 +222,32 @@ void SetStencil(int x, int y, u8 value) {
     }
 }
 
-u8 PerformStencilAction(FramebufferRegs::StencilAction action, u8 old_stencil, u8 ref) {
+u8 PerformStencilAction(StencilAction action, u8 old_stencil, u8 ref) {
     switch (action) {
-    case FramebufferRegs::StencilAction::Keep:
+    case StencilAction::Keep:
         return old_stencil;
 
-    case FramebufferRegs::StencilAction::Zero:
+    case StencilAction::Zero:
         return 0;
 
-    case FramebufferRegs::StencilAction::Replace:
+    case StencilAction::Replace:
         return ref;
 
-    case FramebufferRegs::StencilAction::Increment:
+    case StencilAction::Increment:
         // Saturated increment
         return std::min<u8>(old_stencil, 254) + 1;
 
-    case FramebufferRegs::StencilAction::Decrement:
+    case StencilAction::Decrement:
         // Saturated decrement
         return std::max<u8>(old_stencil, 1) - 1;
 
-    case FramebufferRegs::StencilAction::Invert:
+    case StencilAction::Invert:
         return ~old_stencil;
 
-    case FramebufferRegs::StencilAction::IncrementWrap:
+    case StencilAction::IncrementWrap:
         return old_stencil + 1;
 
-    case FramebufferRegs::StencilAction::DecrementWrap:
+    case StencilAction::DecrementWrap:
         return old_stencil - 1;
 
     default:
@@ -261,35 +261,35 @@ Common::Vec4<u8> EvaluateBlendEquation(const Common::Vec4<u8>& src,
                                        const Common::Vec4<u8>& srcfactor,
                                        const Common::Vec4<u8>& dest,
                                        const Common::Vec4<u8>& destfactor,
-                                       FramebufferRegs::BlendEquation equation) {
+                                       BlendEquation equation) {
     Common::Vec4<int> result;
 
     auto src_result = (src * srcfactor).Cast<int>();
     auto dst_result = (dest * destfactor).Cast<int>();
 
     switch (equation) {
-    case FramebufferRegs::BlendEquation::Add:
+    case BlendEquation::Add:
         result = (src_result + dst_result) / 255;
         break;
 
-    case FramebufferRegs::BlendEquation::Subtract:
+    case BlendEquation::Subtract:
         result = (src_result - dst_result) / 255;
         break;
 
-    case FramebufferRegs::BlendEquation::ReverseSubtract:
+    case BlendEquation::ReverseSubtract:
         result = (dst_result - src_result) / 255;
         break;
 
     // TODO: How do these two actually work?  OpenGL doesn't include the blend factors in the
     //       min/max computations, but is this what the 3DS actually does?
-    case FramebufferRegs::BlendEquation::Min:
+    case BlendEquation::Min:
         result.r() = std::min(src.r(), dest.r());
         result.g() = std::min(src.g(), dest.g());
         result.b() = std::min(src.b(), dest.b());
         result.a() = std::min(src.a(), dest.a());
         break;
 
-    case FramebufferRegs::BlendEquation::Max:
+    case BlendEquation::Max:
         result.r() = std::max(src.r(), dest.r());
         result.g() = std::max(src.g(), dest.g());
         result.b() = std::max(src.b(), dest.b());
@@ -305,54 +305,54 @@ Common::Vec4<u8> EvaluateBlendEquation(const Common::Vec4<u8>& src,
                             std::clamp(result.b(), 0, 255), std::clamp(result.a(), 0, 255));
 };
 
-u8 LogicOp(u8 src, u8 dest, FramebufferRegs::LogicOp op) {
+u8 LogicOp(u8 src, u8 dest, Pica::LogicOp op) {
     switch (op) {
-    case FramebufferRegs::LogicOp::Clear:
+    case LogicOp::Clear:
         return 0;
 
-    case FramebufferRegs::LogicOp::And:
+    case LogicOp::And:
         return src & dest;
 
-    case FramebufferRegs::LogicOp::AndReverse:
+    case LogicOp::AndReverse:
         return src & ~dest;
 
-    case FramebufferRegs::LogicOp::Copy:
+    case LogicOp::Copy:
         return src;
 
-    case FramebufferRegs::LogicOp::Set:
+    case LogicOp::Set:
         return 255;
 
-    case FramebufferRegs::LogicOp::CopyInverted:
+    case LogicOp::CopyInverted:
         return ~src;
 
-    case FramebufferRegs::LogicOp::NoOp:
+    case LogicOp::NoOp:
         return dest;
 
-    case FramebufferRegs::LogicOp::Invert:
+    case LogicOp::Invert:
         return ~dest;
 
-    case FramebufferRegs::LogicOp::Nand:
+    case LogicOp::Nand:
         return ~(src & dest);
 
-    case FramebufferRegs::LogicOp::Or:
+    case LogicOp::Or:
         return src | dest;
 
-    case FramebufferRegs::LogicOp::Nor:
+    case LogicOp::Nor:
         return ~(src | dest);
 
-    case FramebufferRegs::LogicOp::Xor:
+    case LogicOp::Xor:
         return src ^ dest;
 
-    case FramebufferRegs::LogicOp::Equiv:
+    case LogicOp::Equiv:
         return ~(src ^ dest);
 
-    case FramebufferRegs::LogicOp::AndInverted:
+    case LogicOp::AndInverted:
         return ~src & dest;
 
-    case FramebufferRegs::LogicOp::OrReverse:
+    case LogicOp::OrReverse:
         return src | ~dest;
 
-    case FramebufferRegs::LogicOp::OrInverted:
+    case LogicOp::OrInverted:
         return ~src | dest;
     }
 

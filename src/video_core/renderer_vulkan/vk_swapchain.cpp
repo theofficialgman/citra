@@ -7,11 +7,17 @@
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_backend.h"
+#include "video_core/renderer_vulkan/vk_framebuffer.h"
+#include "video_core/renderer_vulkan/vk_texture.h"
+#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
 
 namespace VideoCore::Vulkan {
 
-Swapchain::Swapchain(Instance& instance, vk::SurfaceKHR surface) :
-    instance(instance), surface(surface) {
+Swapchain::Swapchain(Instance& instance, CommandScheduler& scheduler, RenderpassCache& renderpass_cache,
+                     Backend* backend, vk::SurfaceKHR surface) :
+    backend(backend), instance(instance), scheduler(scheduler),
+    renderpass_cache(renderpass_cache), surface(surface) {
 
 }
 
@@ -75,8 +81,38 @@ void Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
         render_finished = device.createSemaphore({});
     }
 
+    // Create the present renderpass
+    renderpass_cache.CreatePresentRenderpass(surface_format.format);
+
     // Create framebuffer and image views
-    images = device.getSwapchainImagesKHR(swapchain);
+    vk_images = device.getSwapchainImagesKHR(swapchain);
+
+    const TextureInfo image_info = {
+        .width = static_cast<u16>(width),
+        .height = static_cast<u16>(height),
+        .levels = 1,
+        .type = TextureType::Texture2D,
+        .view_type = TextureViewType::View2D,
+        .format = TextureFormat::PresentColor
+    };
+
+    // Wrap vulkan image handles with our texture wrapper
+    textures.clear();
+    textures.resize(vk_images.size());
+    framebuffers.clear();
+    framebuffers.resize(vk_images.size());
+    for (int i = 0; i < vk_images.size(); i++) {
+        textures[i] = MakeHandle<Texture>(instance, scheduler, vk_images[i],
+                                          surface_format.format, image_info);
+
+        const FramebufferInfo framebuffer_info = {
+            .color = textures[i]
+        };
+
+        vk::RenderPass renderpass = renderpass_cache.GetPresentRenderpass();
+        framebuffers[i] = MakeHandle<Framebuffer>(instance, scheduler, framebuffer_info,
+                                                  renderpass, renderpass);
+    }
 }
 
 // Wait for maximum of 1 second
@@ -128,7 +164,7 @@ void Swapchain::Present() {
         break;
     }
 
-    current_frame = (current_frame + 1) % images.size();
+    current_frame = (current_frame + 1) % vk_images.size();
 }
 
 void Swapchain::Configure(u32 width, u32 height) {

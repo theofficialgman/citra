@@ -16,15 +16,15 @@ u32 GetDepth(int x, int y);
 u8 GetStencil(int x, int y);
 void SetDepth(int x, int y, u32 value);
 void SetStencil(int x, int y, u8 value);
-u8 PerformStencilAction(FramebufferRegs::StencilAction action, u8 old_stencil, u8 ref);
+u8 PerformStencilAction(Pica::StencilAction action, u8 old_stencil, u8 ref);
 
 Common::Vec4<u8> EvaluateBlendEquation(const Common::Vec4<u8>& src,
                                        const Common::Vec4<u8>& srcfactor,
                                        const Common::Vec4<u8>& dest,
                                        const Common::Vec4<u8>& destfactor,
-                                       FramebufferRegs::BlendEquation equation);
+                                       Pica::BlendEquation equation);
 
-u8 LogicOp(u8 src, u8 dest, FramebufferRegs::LogicOp op);
+u8 LogicOp(u8 src, u8 dest, Pica::LogicOp op);
 
 void DrawShadowMapPixel(int x, int y, u32 depth, u8 stencil);
 

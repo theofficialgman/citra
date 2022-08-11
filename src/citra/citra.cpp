@@ -43,7 +43,9 @@
 #include "core/movie.h"
 #include "core/settings.h"
 #include "network/network.h"
-#include "video_core/renderer_base.h"
+#include "video_core/common/renderer.h"
+#include "video_core/common/rasterizer.h"
+#include "video_core/video_core.h"
 
 #undef _UNICODE
 #include <getopt.h>

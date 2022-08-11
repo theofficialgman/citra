@@ -25,7 +25,7 @@ PicaFSConfig::PicaFSConfig(const Pica::Regs& regs) {
     // We don't sync const_color here because of the high variance, it is a
     // shader uniform instead.
     const auto stages = regs.texturing.GetTevStages();
-    DEBUG_ASSERT(state.tev_stages.size() == tev_stages.size());
+    DEBUG_ASSERT(tev_stages.size() == tev_stages.size());
     for (std::size_t i = 0; i < stages.size(); i++) {
         const auto& tev_stage = stages[i];
         tev_stages[i].sources_raw = tev_stage.sources_raw;

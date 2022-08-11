@@ -11,7 +11,6 @@
 #include <boost/serialization/access.hpp>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/base_object.hpp>
-#include <nihstro/shader_bytecode.h>
 #include "common/assert.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
@@ -20,6 +19,7 @@
 #include "video_core/pica_types.h"
 #include "video_core/regs_rasterizer.h"
 #include "video_core/regs_shader.h"
+#include <nihstro/shader_bytecode.h>
 
 using nihstro::DestRegister;
 using nihstro::RegisterType;

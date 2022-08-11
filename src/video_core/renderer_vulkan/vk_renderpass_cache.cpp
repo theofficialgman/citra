@@ -26,7 +26,7 @@ static constexpr std::array depth_stencil_formats = {
     vk::Format::eD24UnormS8Uint,
 };
 
-RenderpassCache::RenderpassCache(Instance& instance, Swapchain& swapchain) : instance(instance) {
+RenderpassCache::RenderpassCache(Instance& instance) : instance(instance) {
     // Pre-create all needed renderpasses by the renderer
     for (u32 color = 0; color <= MAX_COLOR_FORMATS; color++) {
         for (u32 depth = 0; depth <= MAX_DEPTH_FORMATS; depth++) {
@@ -36,6 +36,10 @@ RenderpassCache::RenderpassCache(Instance& instance, Swapchain& swapchain) : ins
 
             vk::Format color_format = instance.GetFormatAlternative(color_formats[color]);
             vk::Format depth_stencil_format = instance.GetFormatAlternative(depth_stencil_formats[depth]);
+
+            if (color_format == vk::Format::eA8B8G8R8SintPack32) {
+                LOG_INFO(Render_Vulkan, "");
+            }
 
             // Construct both load and clear pass
             cached_renderpasses[color][depth][0] = CreateRenderPass(color_format, depth_stencil_format,
@@ -48,12 +52,6 @@ RenderpassCache::RenderpassCache(Instance& instance, Swapchain& swapchain) : ins
                                                                     vk::ImageLayout::eColorAttachmentOptimal);
         }
     }
-
-    // Create the present renderpass
-    present_renderpass = CreateRenderPass(swapchain.GetSurfaceFormat().format, vk::Format::eUndefined,
-                                          vk::AttachmentLoadOp::eClear,
-                                          vk::ImageLayout::eUndefined,
-                                          vk::ImageLayout::ePresentSrcKHR);
 }
 
 RenderpassCache::~RenderpassCache() {
@@ -76,6 +74,15 @@ RenderpassCache::~RenderpassCache() {
     device.destroyRenderPass(present_renderpass);
 }
 
+void RenderpassCache::CreatePresentRenderpass(vk::Format format) {
+    if (!present_renderpass) {
+        present_renderpass = CreateRenderPass(format, vk::Format::eUndefined,
+                                              vk::AttachmentLoadOp::eClear,
+                                              vk::ImageLayout::eUndefined,
+                                              vk::ImageLayout::ePresentSrcKHR);
+    }
+}
+
 vk::RenderPass RenderpassCache::GetRenderpass(TextureFormat color, TextureFormat depth, bool is_clear) const {
     const u32 color_index = static_cast<u32>(color);
     const u32 depth_index = static_cast<u32>(depth) - MAX_COLOR_FORMATS;
@@ -92,12 +99,12 @@ vk::RenderPass RenderpassCache::CreateRenderPass(vk::Format color, vk::Format de
     std::array<vk::AttachmentDescription, 2> attachments;
 
     bool use_color = false;
-    vk::AttachmentReference color_attachment_ref;
+    vk::AttachmentReference color_attachment_ref{};
     bool use_depth = false;
-    vk::AttachmentReference depth_attachment_ref;
+    vk::AttachmentReference depth_attachment_ref{};
 
     if (color != vk::Format::eUndefined) {
-        attachments[attachment_count++] = vk::AttachmentDescription{
+        attachments[attachment_count] = vk::AttachmentDescription{
             .format = color,
             .loadOp = load_op,
             .storeOp = vk::AttachmentStoreOp::eStore,
@@ -108,13 +115,15 @@ vk::RenderPass RenderpassCache::CreateRenderPass(vk::Format color, vk::Format de
         };
 
         color_attachment_ref = vk::AttachmentReference{
-            .attachment = 0,
+            .attachment = attachment_count++,
             .layout = vk::ImageLayout::eColorAttachmentOptimal
        };
+
+        use_color = true;
     }
 
     if (depth != vk::Format::eUndefined) {
-        attachments[attachment_count++] = vk::AttachmentDescription{
+        attachments[attachment_count] = vk::AttachmentDescription{
             .format = depth,
             .loadOp = load_op,
             .storeOp = vk::AttachmentStoreOp::eStore,
@@ -123,9 +132,11 @@ vk::RenderPass RenderpassCache::CreateRenderPass(vk::Format color, vk::Format de
         };
 
         depth_attachment_ref = vk::AttachmentReference{
-            .attachment = 1,
+            .attachment = attachment_count++,
             .layout = vk::ImageLayout::eDepthStencilAttachmentOptimal
         };
+
+        use_depth = true;
     }
 
     const vk::SubpassDependency subpass_dependency = {

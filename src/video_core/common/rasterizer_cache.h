@@ -42,6 +42,28 @@ struct TextureCubeConfig {
     auto operator <=>(const TextureCubeConfig& other) const = default;
 };
 
+}
+
+namespace std {
+template <>
+struct hash<VideoCore::TextureCubeConfig> {
+    std::size_t operator()(const VideoCore::TextureCubeConfig& config) const noexcept {
+        std::size_t hash = 0;
+        boost::hash_combine(hash, config.px);
+        boost::hash_combine(hash, config.nx);
+        boost::hash_combine(hash, config.py);
+        boost::hash_combine(hash, config.ny);
+        boost::hash_combine(hash, config.pz);
+        boost::hash_combine(hash, config.nz);
+        boost::hash_combine(hash, config.width);
+        boost::hash_combine(hash, static_cast<u32>(config.format));
+        return hash;
+    }
+};
+}
+
+namespace VideoCore {
+
 using SurfaceSet = std::set<Surface>;
 
 using SurfaceRegions = boost::icl::interval_set<PAddr, std::less, SurfaceInterval>;
@@ -308,7 +330,7 @@ private:
 
 public:
     std::unique_ptr<BackendBase>& backend;
-    std::unique_ptr<TextureFilterer> texture_filterer;
+    //std::unique_ptr<TextureFilterer> texture_filterer;
     //std::unique_ptr<FormatReinterpreterOpenGL> format_reinterpreter;
     //std::unique_ptr<TextureDownloaderES> texture_downloader_es;
 };

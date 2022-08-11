@@ -24,7 +24,7 @@ class GMainWindow;
 class GRenderWindow;
 
 namespace VideoCore {
-enum class LoadCallbackStage;
+enum class LoadCallbackStage : u8;
 }
 
 class EmuThread final : public QThread {

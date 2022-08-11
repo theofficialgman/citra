@@ -113,12 +113,12 @@ static std::string SampleTexture(const PicaFSConfig& config, unsigned texture_un
         // Only unit 0 respects the texturing type
         switch (state.texture0_type) {
         case TexturingRegs::TextureConfig::Texture2D:
-            return "textureLod(tex0, texcoord0, getLod(texcoord0 * vec2(textureSize(tex0, 0))))";
+            return "textureLod(sampler2D(tex0, tex0_sampler), texcoord0, getLod(texcoord0 * vec2(textureSize(sampler2D(tex0, tex0_sampler), 0))))";
         case TexturingRegs::TextureConfig::Projection2D:
             // TODO (wwylele): find the exact LOD formula for projection texture
-            return "textureProj(tex0, vec3(texcoord0, texcoord0_w))";
+            return "textureProj(sampler2D(tex0, tex0_sampler), vec3(texcoord0, texcoord0_w))";
         case TexturingRegs::TextureConfig::TextureCube:
-            return "texture(tex_cube, vec3(texcoord0, texcoord0_w))";
+            return "texture(samplerCube(tex_cube, tex_cube_sampler), vec3(texcoord0, texcoord0_w))";
         case TexturingRegs::TextureConfig::Shadow2D:
             return "shadowTexture(texcoord0, texcoord0_w)";
         case TexturingRegs::TextureConfig::ShadowCube:
@@ -128,15 +128,15 @@ static std::string SampleTexture(const PicaFSConfig& config, unsigned texture_un
         default:
             LOG_CRITICAL(HW_GPU, "Unhandled texture type {:x}", state.texture0_type);
             UNIMPLEMENTED();
-            return "texture(tex0, texcoord0)";
+            return "texture(sampler2D(tex0, tex0_sampler), texcoord0)";
         }
     case 1:
-        return "textureLod(tex1, texcoord1, getLod(texcoord1 * vec2(textureSize(tex1, 0))))";
+        return "textureLod(sampler2D(tex1, tex1_sampler), texcoord1, getLod(texcoord1 * vec2(textureSize(sampler2D(tex1, tex1_sampler), 0))))";
     case 2:
         if (state.texture2_use_coord1)
-            return "textureLod(tex2, texcoord1, getLod(texcoord1 * vec2(textureSize(tex2, 0))))";
+            return "textureLod(sampler2D(tex2, tex2_sampler), texcoord1, getLod(texcoord1 * vec2(textureSize(sampler2D(tex2, tex2_sampler), 0))))";
         else
-            return "textureLod(tex2, texcoord2, getLod(texcoord2 * vec2(textureSize(tex2, 0))))";
+            return "textureLod(sampler2D(tex2, tex2_sampler), texcoord2, getLod(texcoord2 * vec2(textureSize(sampler2D(tex2, tex2_sampler), 0))))";
     case 3:
         if (state.proctex.enable) {
             return "ProcTex()";
@@ -1042,13 +1042,20 @@ std::string ShaderGenerator::GenerateFragmentShader(const PicaFSConfig& config) 
 
     layout (location = 0) out vec4 color;
 
-    layout(set = 1, binding = 0) uniform sampler2D tex0;
-    layout(set = 1, binding = 1) uniform sampler2D tex1;
-    layout(set = 1, binding = 2) uniform sampler2D tex2;
-    layout(set = 1, binding = 3) uniform samplerCube tex_cube;
-    layout(set = 2, binding = 0) uniform samplerBuffer texture_buffer_lut_lf;
-    layout(set = 2, binding = 1) uniform samplerBuffer texture_buffer_lut_rg;
-    layout(set = 2, binding = 2) uniform samplerBuffer texture_buffer_lut_rgba;
+
+    layout(set = 0, binding = 2) uniform samplerBuffer texture_buffer_lut_lf;
+    layout(set = 0, binding = 3) uniform samplerBuffer texture_buffer_lut_rg;
+    layout(set = 0, binding = 4) uniform samplerBuffer texture_buffer_lut_rgba;
+
+    layout(set = 1, binding = 0) uniform texture2D tex0;
+    layout(set = 1, binding = 1) uniform texture2D tex1;
+    layout(set = 1, binding = 2) uniform texture2D tex2;
+    layout(set = 1, binding = 3) uniform textureCube tex_cube;
+
+    layout(set = 2, binding = 0) uniform sampler tex0_sampler;
+    layout(set = 2, binding = 1) uniform sampler tex1_sampler;
+    layout(set = 2, binding = 2) uniform sampler tex2_sampler;
+    layout(set = 2, binding = 3) uniform sampler tex_cube_sampler;
 
     #if ALLOW_SHADOW
     layout(r32ui) uniform readonly uimage2D shadow_texture_px;
@@ -1422,7 +1429,7 @@ std::string ShaderGenerator::GenerateVertexShader(const Pica::Shader::ShaderSetu
     UNREACHABLE();
 }
 
-std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config) {
+std::string ShaderGenerator::GenerateFixedGeometryShader(const PicaFixedGSConfig& config) {
     LOG_CRITICAL(Render_Vulkan, "Unimplemented!");
     UNREACHABLE();
 }

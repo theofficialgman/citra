@@ -30,6 +30,8 @@ struct TevStageConfigRaw {
     u32 ops_raw;
     u32 scales_raw;
 
+    auto operator<=>(const TevStageConfigRaw& other) const = default;
+
     explicit operator Pica::TexturingRegs::TevStageConfig() const noexcept {
         Pica::TexturingRegs::TevStageConfig stage;
         stage.sources_raw = sources_raw;
@@ -54,8 +56,16 @@ struct PicaFSConfig {
 
     /// Returns the hash of the VS config
     const u64 Hash() const noexcept {
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(PicaFSConfig));
     }
+
+    bool operator==(const PicaFSConfig& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(PicaFSConfig)) == 0;
+    };
+
+    bool operator!=(const PicaFSConfig& other) const noexcept {
+        return !(*this == other);
+    };
 
     bool TevStageUpdatesCombinerBufferColor(unsigned stage_index) const {
         return (stage_index < 4) && (combiner_buffer_input & (1 << stage_index));
@@ -147,8 +157,16 @@ struct PicaVSConfig {
 
     /// Returns the hash of the VS config
     const u64 Hash() const noexcept {
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(PicaVSConfig));
     }
+
+    bool operator==(const PicaVSConfig& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(PicaVSConfig)) == 0;
+    };
+
+    bool operator!=(const PicaVSConfig& other) const noexcept {
+        return !(*this == other);
+    };
 
     u64 program_hash = 0;
     u64 swizzle_hash = 0;
@@ -169,8 +187,16 @@ struct PicaFixedGSConfig {
 
     /// Returns the hash of the GS config
     const u64 Hash() const noexcept {
-        return Common::ComputeStructHash64(*this);
+        return Common::ComputeHash64(this, sizeof(PicaFixedGSConfig));
     }
+
+    bool operator==(const PicaFixedGSConfig& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(PicaFixedGSConfig)) == 0;
+    };
+
+    bool operator!=(const PicaFixedGSConfig& other) const noexcept {
+        return !(*this == other);
+    };
 
     u32 vs_output_attributes = 0;
     u32 gs_output_attributes = 0;
@@ -225,3 +251,26 @@ public:
 };
 
 } // namespace VideoCore
+
+namespace std {
+template <>
+struct hash<VideoCore::PicaFSConfig> {
+    std::size_t operator()(const VideoCore::PicaFSConfig& k) const noexcept {
+        return k.Hash();
+    }
+};
+
+template <>
+struct hash<VideoCore::PicaVSConfig> {
+    std::size_t operator()(const VideoCore::PicaVSConfig& k) const noexcept {
+        return k.Hash();
+    }
+};
+
+template <>
+struct hash<VideoCore::PicaFixedGSConfig> {
+    std::size_t operator()(const VideoCore::PicaFixedGSConfig& k) const noexcept {
+        return k.Hash();
+    }
+};
+} // namespace std
