@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common/vector_math.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/common/pipeline.h"
 #include "video_core/common/framebuffer.h"
 
@@ -77,6 +78,7 @@ public:
                                  Common::Vec3<u32> groups) = 0;
 protected:
     Frontend::EmuWindow& window;
+    PoolManager pool_manager;
 };
 
 } // namespace VideoCore

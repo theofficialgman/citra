@@ -5,6 +5,7 @@
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/vk_shader.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include <glslang/Public/ShaderLang.h>
@@ -154,14 +155,18 @@ bool InitializeCompiler() {
     return true;
 }
 
-Shader::Shader(Instance& instance, ShaderStage stage, std::string_view name,
-               std::string&& source) :
-    ShaderBase(stage, name, std::move(source)), instance(instance) {
+Shader::Shader(Instance& instance, PoolManager& pool_manager, ShaderStage stage, std::string_view name,
+               std::string&& source) : ShaderBase(stage, name, std::move(source)),
+    instance(instance), pool_manager(pool_manager) {
 }
 
 Shader::~Shader() {
     vk::Device device = instance.GetDevice();
     device.destroyShaderModule(module);
+}
+
+void Shader::Free() {
+    pool_manager.Free<Shader>(this);
 }
 
 bool Shader::Compile(ShaderOptimization level) {

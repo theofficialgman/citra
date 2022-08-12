@@ -51,8 +51,7 @@ TextureFormat GetTextureFormat(PixelFormat pixel_format) {
         return depth_texture_formats[tuple_idx];
     }
 
-    LOG_ERROR(Render_Vulkan, "Unknown pixel format {}!", pixel_format);
-    return TextureFormat::Undefined;
+    return TextureFormat::RGBA8;
 }
 
 template <typename Map, typename Interval>

@@ -37,18 +37,14 @@ RenderpassCache::RenderpassCache(Instance& instance) : instance(instance) {
             vk::Format color_format = instance.GetFormatAlternative(color_formats[color]);
             vk::Format depth_stencil_format = instance.GetFormatAlternative(depth_stencil_formats[depth]);
 
-            if (color_format == vk::Format::eA8B8G8R8SintPack32) {
-                LOG_INFO(Render_Vulkan, "");
-            }
-
             // Construct both load and clear pass
             cached_renderpasses[color][depth][0] = CreateRenderPass(color_format, depth_stencil_format,
                                                                     vk::AttachmentLoadOp::eLoad,
-                                                                    vk::ImageLayout::eShaderReadOnlyOptimal,
+                                                                    vk::ImageLayout::eColorAttachmentOptimal,
                                                                     vk::ImageLayout::eColorAttachmentOptimal);
             cached_renderpasses[color][depth][1] = CreateRenderPass(color_format, depth_stencil_format,
                                                                     vk::AttachmentLoadOp::eClear,
-                                                                    vk::ImageLayout::eShaderReadOnlyOptimal,
+                                                                    vk::ImageLayout::eColorAttachmentOptimal,
                                                                     vk::ImageLayout::eColorAttachmentOptimal);
         }
     }
@@ -85,7 +81,7 @@ void RenderpassCache::CreatePresentRenderpass(vk::Format format) {
 
 vk::RenderPass RenderpassCache::GetRenderpass(TextureFormat color, TextureFormat depth, bool is_clear) const {
     const u32 color_index = static_cast<u32>(color);
-    const u32 depth_index = static_cast<u32>(depth) - MAX_COLOR_FORMATS;
+    const u32 depth_index = (depth == TextureFormat::Undefined ? 0 : (static_cast<u32>(depth) - MAX_COLOR_FORMATS));
 
     ASSERT(color_index < MAX_COLOR_FORMATS && depth_index < MAX_DEPTH_FORMATS);
     return cached_renderpasses[color_index][depth_index][is_clear];
@@ -127,7 +123,9 @@ vk::RenderPass RenderpassCache::CreateRenderPass(vk::Format color, vk::Format de
             .format = depth,
             .loadOp = load_op,
             .storeOp = vk::AttachmentStoreOp::eStore,
-            .initialLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .stencilLoadOp = vk::AttachmentLoadOp::eLoad,
+            .stencilStoreOp = vk::AttachmentStoreOp::eStore,
+            .initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
             .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal
         };
 

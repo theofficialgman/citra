@@ -7,10 +7,14 @@
 #include "video_core/common/texture.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
+namespace VideoCore {
+class PoolManager;
+}
+
 namespace VideoCore::Vulkan {
 
 // PICA texture have at most 8 mipmap levels
-constexpr u32 TEXTURE_MAX_LEVELS = 10;
+constexpr u32 TEXTURE_MAX_LEVELS = 12;
 
 class Instance;
 class CommandScheduler;
@@ -20,24 +24,24 @@ class CommandScheduler;
  */
 class Texture : public VideoCore::TextureBase {
 public:
-    // Default constructor
-    Texture(Instance& instance, CommandScheduler& scheduler);
-
     // Constructor for texture creation
-    Texture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info);
-
-    // Constructor for swapchain images
-    Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, vk::Format format,
+    Texture(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
             const TextureInfo& info);
 
+    // Constructor for swapchain images
+    Texture(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
+            vk::Image image, vk::Format format, const TextureInfo& info);
+
     ~Texture() override;
+
+    void Free() override;
 
     void Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32 level = 0) override;
 
     void Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 level = 0) override;
 
-    void BlitTo(TextureHandle dest, Rect2D src_rectangle, Rect2D dest_rect, u32 src_level = 0,
-                u32 dest_level = 0, u32 src_layer = 0, u32 dest_layer = 0) override;
+    void BlitTo(TextureHandle dest, Common::Rectangle<u32> src_rectangle, Common::Rectangle<u32> dest_rect,
+                u32 src_level = 0, u32 dest_level = 0, u32 src_layer = 0, u32 dest_layer = 0) override;
 
     void CopyFrom(TextureHandle source) override;
 
@@ -83,6 +87,7 @@ public:
 private:
     Instance& instance;
     CommandScheduler& scheduler;
+    PoolManager& pool_manager;
 
     // Vulkan texture handle
     vk::Image image = VK_NULL_HANDLE;
@@ -103,19 +108,20 @@ private:
  */
 class StagingTexture : public VideoCore::TextureBase {
 public:
-    StagingTexture(Instance& instance, CommandScheduler& scheduler,
-                   const TextureInfo& info);
+    StagingTexture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info);
     ~StagingTexture();
 
-    /// Flushes any writes made to texture memory
+    void Free() override {}
+
+    // Flushes any writes made to texture memory
     void Commit(u32 size);
 
-    /// Returns a span of the mapped texture memory
+    // Returns a span of the mapped texture memory
     void* GetMappedPtr() {
         return mapped_ptr;
     }
 
-    /// Returns the staging image handle
+    // Returns the staging image handle
     vk::Image GetHandle() const {
         return image;
     }
@@ -136,16 +142,19 @@ private:
  */
 class Sampler : public VideoCore::SamplerBase {
 public:
-    Sampler(Instance& instance, SamplerInfo info);
+    Sampler(Instance& instance, PoolManager& pool_manager, SamplerInfo info);
     ~Sampler() override;
 
-    /// Returns the underlying vulkan sampler handle
+    void Free() override;
+
+    // Returns the underlying vulkan sampler handle
     vk::Sampler GetHandle() const {
         return sampler;
     }
 
 private:
     Instance& instance;
+    PoolManager& pool_manager;
     vk::Sampler sampler;
 };
 

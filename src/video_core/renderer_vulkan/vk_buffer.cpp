@@ -6,6 +6,7 @@
 #include "common/alignment.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -13,35 +14,45 @@
 namespace VideoCore::Vulkan {
 
 inline vk::BufferUsageFlags ToVkBufferUsage(BufferUsage usage) {
-    constexpr std::array vk_buffer_usages = {
-        vk::BufferUsageFlagBits::eVertexBuffer,
-        vk::BufferUsageFlagBits::eIndexBuffer,
-        vk::BufferUsageFlagBits::eUniformBuffer,
-        vk::BufferUsageFlagBits::eUniformTexelBuffer,
-        vk::BufferUsageFlagBits::eTransferSrc
-    };
-
-    return vk::BufferUsageFlagBits::eTransferDst |
-            vk_buffer_usages.at(static_cast<u32>(usage));
+    switch (usage) {
+    case BufferUsage::Vertex:
+        return vk::BufferUsageFlagBits::eVertexBuffer;
+    case BufferUsage::Index:
+        return vk::BufferUsageFlagBits::eIndexBuffer;
+    case BufferUsage::Uniform:
+        return vk::BufferUsageFlagBits::eUniformBuffer;
+    case BufferUsage::Texel:
+        return vk::BufferUsageFlagBits::eUniformTexelBuffer;
+    case BufferUsage::Staging:
+        return vk::BufferUsageFlagBits::eTransferSrc;
+    default:
+        LOG_CRITICAL(Render_Vulkan, "Unknown buffer usage flag {}!", usage);
+        UNREACHABLE();
+    }
 }
 
 inline vk::Format ToVkViewFormat(ViewFormat format) {
-    constexpr std::array vk_view_formats = {
-        vk::Format::eR32Sfloat,
-        vk::Format::eR32G32Sfloat,
-        vk::Format::eR32G32B32Sfloat,
-        vk::Format::eR32G32B32A32Sfloat
-    };
-
-    return vk_view_formats.at(static_cast<u32>(format));
+    switch (format) {
+    case ViewFormat::R32Float:
+        return vk::Format::eR32Sfloat;
+    case ViewFormat::R32G32Float:
+        return vk::Format::eR32G32Sfloat;
+    case ViewFormat::R32G32B32Float:
+        return vk::Format::eR32G32B32Sfloat;
+    case ViewFormat::R32G32B32A32Float:
+        return vk::Format::eR32G32B32A32Sfloat;
+    default:
+        LOG_CRITICAL(Render_Vulkan, "Unknown buffer view format {}!", format);
+        UNREACHABLE();
+    }
 }
 
-Buffer::Buffer(Instance& instance, CommandScheduler& scheduler, const BufferInfo& info) :
-        BufferBase(info), instance(instance), scheduler(scheduler) {
+Buffer::Buffer(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager, const BufferInfo& info)
+    : BufferBase(info), instance(instance), scheduler(scheduler), pool_manager(pool_manager) {
 
     vk::BufferCreateInfo buffer_info = {
         .size = info.capacity,
-        .usage = ToVkBufferUsage(info.usage)
+        .usage = ToVkBufferUsage(info.usage) | vk::BufferUsageFlagBits::eTransferDst
     };
 
     VmaAllocationCreateInfo alloc_create_info = {
@@ -65,6 +76,7 @@ Buffer::Buffer(Instance& instance, CommandScheduler& scheduler, const BufferInfo
     vk::Device device = instance.GetDevice();
     for (u32 view = 0; view < info.views.size(); view++) {
         if (info.views[view] == ViewFormat::Undefined) {
+            view_count = view;
             break;
         }
 
@@ -105,6 +117,10 @@ Buffer::~Buffer() {
             scheduler.Schedule(deleter);
         }
     }
+}
+
+void Buffer::Free() {
+    pool_manager.Free<Buffer>(this);
 }
 
 std::span<u8> Buffer::Map(u32 size, u32 alignment) {

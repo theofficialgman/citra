@@ -44,6 +44,10 @@ PipelineCache::PipelineCache(Frontend::EmuWindow& emu_window, std::unique_ptr<Ba
       disk_cache(backend) {
     // TODO: Don't hardcode this!
     generator = std::make_unique<Vulkan::ShaderGenerator>();
+
+    trivial_vertex_shader = backend->CreateShader(ShaderStage::Vertex, "Trivial vertex shader",
+                                                  generator->GenerateTrivialVertexShader());
+    trivial_vertex_shader->Compile(ShaderOptimization::Debug);
 }
 
 PipelineHandle PipelineCache::GetPipeline(PipelineInfo& info) {

@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #define VULKAN_HPP_NO_CONSTRUCTORS
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/vk_framebuffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
@@ -17,10 +18,10 @@ inline vk::Rect2D ToVkRect2D(Rect2D rect) {
     };
 }
 
-Framebuffer::Framebuffer(Instance& instance, CommandScheduler& scheduler, const FramebufferInfo& info,
-                         vk::RenderPass load_renderpass, vk::RenderPass clear_renderpass) :
-    FramebufferBase(info), instance(instance), scheduler(scheduler), load_renderpass(load_renderpass),
-    clear_renderpass(clear_renderpass) {
+Framebuffer::Framebuffer(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
+                         const FramebufferInfo& info, vk::RenderPass load_renderpass, vk::RenderPass clear_renderpass) :
+    FramebufferBase(info), instance(instance), scheduler(scheduler), pool_manager(pool_manager),
+    load_renderpass(load_renderpass), clear_renderpass(clear_renderpass) {
 
     const Texture* color = static_cast<const Texture*>(info.color.Get());
     const Texture* depth_stencil = static_cast<const Texture*>(info.depth_stencil.Get());
@@ -57,9 +58,11 @@ Framebuffer::~Framebuffer() {
     device.destroyFramebuffer(framebuffer);
 }
 
-void Framebuffer::DoClear() {
-    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+void Framebuffer::Free() {
+    pool_manager.Free<Framebuffer>(this);
+}
 
+void Framebuffer::DoClear() {
     u32 clear_value_count = 0;
     std::array<vk::ClearValue, 2> clear_values{};
 
@@ -81,6 +84,9 @@ void Framebuffer::DoClear() {
         };
     }
 
+    // Prepare attachments
+    PrepareAttachments();
+
     const vk::RenderPassBeginInfo begin_info = {
         .renderPass = clear_renderpass,
         .framebuffer = framebuffer,
@@ -90,8 +96,22 @@ void Framebuffer::DoClear() {
     };
 
     // Begin clear pass
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     command_buffer.beginRenderPass(begin_info, vk::SubpassContents::eInline);
     command_buffer.endRenderPass();
+}
+
+void Framebuffer::PrepareAttachments() {
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    if (info.color.IsValid()) {
+        Texture* color = static_cast<Texture*>(info.color.Get());
+        color->Transition(command_buffer, vk::ImageLayout::eColorAttachmentOptimal);
+    }
+
+    if (info.depth_stencil.IsValid()) {
+        Texture* depth_stencil = static_cast<Texture*>(info.depth_stencil.Get());
+        depth_stencil->Transition(command_buffer, vk::ImageLayout::eDepthAttachmentOptimal);
+    }
 }
 
 } // namespace VideoCore::Vulkan

@@ -9,6 +9,10 @@
 #include "video_core/common/buffer.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
+namespace VideoCore {
+class PoolManager;
+}
+
 namespace VideoCore::Vulkan {
 
 class Instance;
@@ -16,20 +20,21 @@ class CommandScheduler;
 
 class Buffer : public VideoCore::BufferBase {
 public:
-    Buffer(Instance& instance, CommandScheduler& scheduler, const BufferInfo& info);
+    Buffer(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
+           const BufferInfo& info);
     ~Buffer() override;
 
-    std::span<u8> Map(u32 size, u32 alignment = 0) override;
+    void Free() override;
 
-    /// Flushes write to buffer memory
+    std::span<u8> Map(u32 size, u32 alignment = 0) override;
     void Commit(u32 size = 0) override;
 
-    /// Returns the Vulkan buffer handle
+    // Returns the Vulkan buffer handle
     vk::Buffer GetHandle() const {
         return buffer;
     }
 
-    /// Returns an immutable reference to the requested buffer view
+    // Returns an immutable reference to the requested buffer view
     const vk::BufferView& GetView(u32 index = 0) const {
         ASSERT(index < view_count);
         return views[index];
@@ -38,6 +43,7 @@ public:
 protected:
     Instance& instance;
     CommandScheduler& scheduler;
+    PoolManager& pool_manager;
 
     // Vulkan buffer handle
     void* mapped_ptr = nullptr;

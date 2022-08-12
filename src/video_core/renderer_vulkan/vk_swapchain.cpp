@@ -3,22 +3,25 @@
 // Refer to the license.txt file included.
 
 #define VULKAN_HPP_NO_CONSTRUCTORS
-#include <array>
 #include "common/logging/log.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_backend.h"
 #include "video_core/renderer_vulkan/vk_framebuffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
-#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
 
 namespace VideoCore::Vulkan {
 
 Swapchain::Swapchain(Instance& instance, CommandScheduler& scheduler, RenderpassCache& renderpass_cache,
-                     Backend* backend, vk::SurfaceKHR surface) :
-    backend(backend), instance(instance), scheduler(scheduler),
-    renderpass_cache(renderpass_cache), surface(surface) {
+                     PoolManager& pool_manager, vk::SurfaceKHR surface) : instance(instance), scheduler(scheduler),
+    renderpass_cache(renderpass_cache), pool_manager(pool_manager), surface(surface) {
 
+    // Set the surface format early for RenderpassCache to create the present renderpass
+    Configure(0, 0);
+
+    // Create the present renderpass
+    renderpass_cache.CreatePresentRenderpass(surface_format.format);
 }
 
 Swapchain::~Swapchain() {
@@ -42,7 +45,7 @@ void Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
     };
 
     const bool exclusive = queue_family_indices[0] == queue_family_indices[1];
-    const u32 queue_family_indices_count = exclusive ? 2u : 1u;
+    const u32 queue_family_indices_count = exclusive ? 1u : 2u;
     const vk::SharingMode sharing_mode = exclusive ? vk::SharingMode::eExclusive :
                                                      vk::SharingMode::eConcurrent;
 
@@ -81,9 +84,6 @@ void Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
         render_finished = device.createSemaphore({});
     }
 
-    // Create the present renderpass
-    renderpass_cache.CreatePresentRenderpass(surface_format.format);
-
     // Create framebuffer and image views
     vk_images = device.getSwapchainImagesKHR(swapchain);
 
@@ -102,16 +102,16 @@ void Swapchain::Create(u32 width, u32 height, bool vsync_enabled) {
     framebuffers.clear();
     framebuffers.resize(vk_images.size());
     for (int i = 0; i < vk_images.size(); i++) {
-        textures[i] = MakeHandle<Texture>(instance, scheduler, vk_images[i],
-                                          surface_format.format, image_info);
+        textures[i] = pool_manager.Allocate<Texture>(instance, scheduler, pool_manager, vk_images[i],
+                                                     surface_format.format, image_info);
 
         const FramebufferInfo framebuffer_info = {
             .color = textures[i]
         };
 
         vk::RenderPass renderpass = renderpass_cache.GetPresentRenderpass();
-        framebuffers[i] = MakeHandle<Framebuffer>(instance, scheduler, framebuffer_info,
-                                                  renderpass, renderpass);
+        framebuffers[i] = pool_manager.Allocate<Framebuffer>(instance, scheduler, pool_manager, framebuffer_info,
+                                                             renderpass, renderpass);
     }
 }
 

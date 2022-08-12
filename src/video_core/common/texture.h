@@ -16,34 +16,34 @@ constexpr u32 MAX_COLOR_FORMATS = 5;
 constexpr u32 MAX_DEPTH_FORMATS = 3;
 
 enum class TextureFormat : u8 {
-    RGBA8 = 0,
-    RGB8 = 1,
-    RGB5A1 = 2,
-    RGB565 = 3,
-    RGBA4 = 4,
-    D16 = 5,
-    D24 = 6,
-    D24S8 = 7,
-    PresentColor = 8, // Backend specific swapchain format
-    Undefined = 255
+    Undefined = 0,
+    RGBA8 = 1,
+    RGB8 = 2,
+    RGB5A1 = 3,
+    RGB565 = 4,
+    RGBA4 = 5,
+    D16 = 6,
+    D24 = 7,
+    D24S8 = 8,
+    PresentColor = 9 // Backend specific swapchain format
 };
 
 enum class TextureType : u8 {
-    Texture1D = 0,
-    Texture2D = 1,
-    Texture3D = 2,
-    Undefined = 255
+    Undefined = 0,
+    Texture1D = 1,
+    Texture2D = 2,
+    Texture3D = 3
 };
 
 enum class TextureViewType : u8 {
-    View1D = 0,
-    View2D = 1,
-    View3D = 2,
-    ViewCube = 3,
-    View1DArray = 4,
-    View2DArray = 5,
-    ViewCubeArray = 6,
-    Undefined = 255
+    Undefined = 0,
+    View1D = 1,
+    View2D = 2,
+    View3D = 3,
+    ViewCube = 4,
+    View1DArray = 5,
+    View2DArray = 6,
+    ViewCubeArray = 7,
 };
 
 /**
@@ -64,9 +64,7 @@ struct Rect2D {
     u32 height = 0;
 };
 
-/**
- * Information about a texture packed to 8 bytes
- */
+// Information about a texture packed to 8 bytes
 struct TextureInfo {
     u16 width = 0;
     u16 height = 0;
@@ -92,11 +90,16 @@ static_assert(std::is_standard_layout_v<TextureInfo>, "TextureInfo is not a stan
 class TextureBase;
 using TextureHandle = IntrusivePtr<TextureBase>;
 
-class TextureBase : public IntrusivePtrEnabled<TextureBase> {
+struct TextureDeleter;
+
+class TextureBase : public IntrusivePtrEnabled<TextureBase, TextureDeleter> {
 public:
     TextureBase() = default;
     TextureBase(const TextureInfo& info) : info(info) {}
     virtual ~TextureBase() = default;
+
+    // This method is called by TextureDeleter. Forward to the derived pool!
+    virtual void Free() = 0;
 
     // Disable copy constructor
     TextureBase(const TextureBase&) = delete;
@@ -111,9 +114,8 @@ public:
                           u32 level = 0) {};
 
     // Copies the rectangle area specified to the destionation texture
-    virtual void BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect,
-                        u32 src_level = 0, u32 dest_level = 0,
-                        u32 src_layer = 0, u32 dest_layer = 0) {};
+    virtual void BlitTo(TextureHandle dest, Common::Rectangle<u32> source_rect, Common::Rectangle<u32> dest_rect,
+                        u32 src_level = 0, u32 dest_level = 0, u32 src_layer = 0, u32 dest_layer = 0) {};
 
     // Copies texture data from the source texture
     virtual void CopyFrom(TextureHandle source) {};
@@ -155,6 +157,14 @@ protected:
     TextureInfo info;
 };
 
+// Foward pointer to its parent pool
+struct TextureDeleter {
+    void operator()(TextureBase* texture) {
+        texture->Free();
+    }
+};
+
+// Information about a sampler
 struct SamplerInfo {
     Pica::TextureFilter mag_filter;
     Pica::TextureFilter min_filter;
@@ -173,10 +183,15 @@ struct SamplerInfo {
     }
 };
 
-class SamplerBase : public IntrusivePtrEnabled<SamplerBase> {
+struct SamplerDeleter;
+
+class SamplerBase : public IntrusivePtrEnabled<SamplerBase, SamplerDeleter> {
 public:
     SamplerBase(SamplerInfo info) : info(info) {}
     virtual ~SamplerBase() = default;
+
+    // This method is called by SamplerDeleter. Forward to the derived pool!
+    virtual void Free() = 0;
 
     // Disable copy constructor
     SamplerBase(const SamplerBase&) = delete;
@@ -184,6 +199,13 @@ public:
 
 protected:
     SamplerInfo info{};
+};
+
+// Foward pointer to its parent pool
+struct SamplerDeleter {
+    void operator()(SamplerBase* sampler) {
+        sampler->Free();
+    }
 };
 
 using SamplerHandle = IntrusivePtr<SamplerBase>;

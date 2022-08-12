@@ -22,9 +22,7 @@ enum class LoadOp : u8 {
     Clear = 1
 };
 
-/**
- * Information about a framebuffer
- */
+// Information about a framebuffer
 struct FramebufferInfo {
     TextureHandle color;
     TextureHandle depth_stencil;
@@ -39,11 +37,16 @@ struct FramebufferInfo {
     }
 };
 
+struct FramebufferDeleter;
+
 // A framebuffer is a collection of render targets and their configuration
-class FramebufferBase : public IntrusivePtrEnabled<FramebufferBase> {
+class FramebufferBase : public IntrusivePtrEnabled<FramebufferBase, FramebufferDeleter> {
 public:
     FramebufferBase(const FramebufferInfo& info) : info(info) {}
     virtual ~FramebufferBase() = default;
+
+    // This method is called by FramebufferDeleter. Forward to the derived pool!
+    virtual void Free() = 0;
 
     // Disable copy constructor
     FramebufferBase(const FramebufferBase&) = delete;
@@ -98,6 +101,13 @@ protected:
     u8 clear_stencil_value = 0;
     Common::Rectangle<u32> draw_rect;
     FramebufferInfo info;
+};
+
+// Foward pointer to its parent pool
+struct FramebufferDeleter {
+    void operator()(FramebufferBase* framebuffer) {
+        framebuffer->Free();
+    }
 };
 
 using FramebufferHandle = IntrusivePtr<FramebufferBase>;

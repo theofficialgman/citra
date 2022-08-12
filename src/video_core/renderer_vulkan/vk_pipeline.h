@@ -8,6 +8,10 @@
 #include "video_core/common/pipeline.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
+namespace VideoCore {
+class PoolManager;
+}
+
 namespace VideoCore::Vulkan {
 
 class Instance;
@@ -82,10 +86,11 @@ private:
 
 class Pipeline : public VideoCore::PipelineBase {
 public:
-    Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwner& owner,
-             PipelineType type, PipelineInfo info,
-             vk::RenderPass renderpass, vk::PipelineCache cache);
+    Pipeline(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager, PipelineOwner& owner,
+             PipelineType type, PipelineInfo info, vk::RenderPass renderpass, vk::PipelineCache cache);
     ~Pipeline() override;
+
+    void Free() override;
 
     void BindTexture(u32 group, u32 slot, TextureHandle handle) override;
     void BindBuffer(u32 group, u32 slot, BufferHandle handle,
@@ -111,6 +116,9 @@ public:
 private:
     Instance& instance;
     CommandScheduler& scheduler;
+    PoolManager& pool_manager;
+
+    // The owner of this pipeline
     PipelineOwner& owner;
     vk::Pipeline pipeline;
 };

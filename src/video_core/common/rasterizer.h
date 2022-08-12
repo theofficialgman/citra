@@ -236,7 +236,7 @@ private:
     std::array<Common::Vec4f, 256> proctex_diff_lut_data{};
 
     // Texture unit sampler cache
-    SamplerInfo texture_cube_sampler;
+    SamplerHandle texture_cube_sampler;
     std::array<SamplerInfo, 3> texture_samplers;
     std::unordered_map<SamplerInfo, SamplerHandle> sampler_cache;
 

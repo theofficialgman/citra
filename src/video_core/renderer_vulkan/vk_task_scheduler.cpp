@@ -4,6 +4,7 @@
 
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include "common/logging/log.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/vk_task_scheduler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
@@ -16,7 +17,9 @@ constexpr BufferInfo STAGING_INFO = {
     .usage = BufferUsage::Staging
 };
 
-CommandScheduler::CommandScheduler(Instance& instance) : instance(instance) {
+CommandScheduler::CommandScheduler(Instance& instance, PoolManager& pool_manager) : instance(instance),
+    pool_manager(pool_manager) {
+
     vk::Device device = instance.GetDevice();
     const vk::CommandPoolCreateInfo pool_info = {
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
@@ -43,7 +46,7 @@ CommandScheduler::CommandScheduler(Instance& instance) : instance(instance) {
             .upload_command_buffer = command_buffers[2 * i + 1],
         };
 
-        commands[i].upload_buffer = std::make_unique<Buffer>(instance, *this, STAGING_INFO);
+        commands[i].upload_buffer = pool_manager.Allocate<Buffer>(instance, *this, pool_manager, STAGING_INFO);
     }
 
     const vk::CommandBufferBeginInfo begin_info = {
@@ -103,9 +106,11 @@ void CommandScheduler::Synchronize() {
     completed_fence_counter = now_fence_counter;
 }
 
-void CommandScheduler::Submit(bool wait_completion,
-                              vk::Semaphore wait_semaphore,
-                              vk::Semaphore signal_semaphore) {
+void CommandScheduler::SetSwitchCallback(std::function<void(u32)> callback) {
+    switch_callback = callback;
+}
+
+void CommandScheduler::Submit(bool wait_completion, vk::Semaphore wait_semaphore, vk::Semaphore signal_semaphore) {
     const CommandSlot& command = commands[current_command];
 
     // End command buffers
@@ -149,8 +154,8 @@ void CommandScheduler::Submit(bool wait_completion,
     SwitchSlot();
 }
 
-void CommandScheduler::Schedule(Deleter&& func) {
-    auto& command = commands[current_command];
+void CommandScheduler::Schedule(std::function<void(vk::Device, VmaAllocator)>&& func) {
+    CommandSlot& command = commands[current_command];
     command.cleanups.push_back(func);
 }
 
@@ -174,6 +179,9 @@ void CommandScheduler::SwitchSlot() {
 
     // Wait for the GPU to finish with all resources for this command.
     Synchronize();
+
+    // Invoke the callback function
+    switch_callback(current_command);
 
     const vk::CommandBufferBeginInfo begin_info = {
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit

@@ -4,6 +4,7 @@
 
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include "common/logging/log.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/pica_to_vulkan.h"
 #include "video_core/renderer_vulkan/vk_pipeline.h"
 #include "video_core/renderer_vulkan/vk_shader.h"
@@ -186,10 +187,9 @@ PipelineOwner::~PipelineOwner() {
     }
 }
 
-Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PipelineOwner& owner,
-                   PipelineType type, PipelineInfo info,
-                   vk::RenderPass renderpass, vk::PipelineCache cache) : PipelineBase(type, info),
-    instance(instance), scheduler(scheduler), owner(owner) {
+Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager, PipelineOwner& owner,
+                   PipelineType type, PipelineInfo info, vk::RenderPass renderpass, vk::PipelineCache cache) :
+    PipelineBase(type, info), instance(instance), scheduler(scheduler), pool_manager(pool_manager), owner(owner) {
 
     vk::Device device = instance.GetDevice();
 
@@ -382,6 +382,9 @@ Pipeline::~Pipeline() {
     device.destroyPipeline(pipeline);
 }
 
+void Pipeline::Free() {
+    pool_manager.Free<Pipeline>(this);
+}
 
 void Pipeline::BindTexture(u32 group, u32 slot, TextureHandle handle) {
     Texture* texture = static_cast<Texture*>(handle.Get());

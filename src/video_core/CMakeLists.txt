@@ -33,6 +33,7 @@ add_library(video_core STATIC
     common/pica_uniforms.h
     common/pipeline_cache.cpp
     common/pipeline_cache.h
+    common/pool_manager.h
     common/rasterizer.cpp
     common/rasterizer.h
     common/rasterizer_cache.cpp

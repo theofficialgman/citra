@@ -12,20 +12,20 @@
 namespace VideoCore {
 
 enum class BufferUsage : u8 {
-    Vertex = 0,
-    Index = 1,
-    Uniform = 2,
-    Texel = 3,
-    Staging = 4,
-    Undefined = 255
+    Undefined = 0,
+    Vertex = 1,
+    Index = 2,
+    Uniform = 3,
+    Texel = 4,
+    Staging = 5
 };
 
 enum class ViewFormat : u8 {
-    R32Float = 0,
-    R32G32Float = 1,
-    R32G32B32Float = 2,
-    R32G32B32A32Float = 3,
-    Undefined = 255
+    Undefined = 0,
+    R32Float = 1,
+    R32G32Float = 2,
+    R32G32B32Float = 3,
+    R32G32B32A32Float = 4,
 };
 
 constexpr u32 MAX_BUFFER_VIEWS = 3;
@@ -33,7 +33,7 @@ constexpr u32 MAX_BUFFER_VIEWS = 3;
 struct BufferInfo {
     u32 capacity = 0;
     BufferUsage usage = BufferUsage::Undefined;
-    std::array<ViewFormat, MAX_BUFFER_VIEWS> views{ViewFormat::Undefined};
+    std::array<ViewFormat, MAX_BUFFER_VIEWS> views{};
 
     auto operator<=>(const BufferInfo& info) const = default;
 
@@ -45,11 +45,16 @@ struct BufferInfo {
 static_assert(sizeof(BufferInfo) == 8, "BufferInfo not packed!");
 static_assert(std::is_standard_layout_v<BufferInfo>, "BufferInfo is not a standard layout!");
 
-class BufferBase : public IntrusivePtrEnabled<BufferBase> {
+struct BufferDeleter;
+
+class BufferBase : public IntrusivePtrEnabled<BufferBase, BufferDeleter> {
 public:
     BufferBase() = default;
     BufferBase(const BufferInfo& info) : info(info) {}
     virtual ~BufferBase() = default;
+
+    // This method is called by BufferDeleter. Forward to the derived pool!
+    virtual void Free() = 0;
 
     // Disable copy constructor
     BufferBase(const BufferBase&) = delete;
@@ -93,6 +98,13 @@ protected:
     BufferInfo info{};
     u32 buffer_offset = 0;
     bool invalid = false;
+};
+
+// Foward pointer to its parent pool
+struct BufferDeleter {
+    void operator()(BufferBase* buffer) {
+        buffer->Free();
+    }
 };
 
 using BufferHandle = IntrusivePtr<BufferBase>;

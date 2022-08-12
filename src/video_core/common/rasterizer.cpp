@@ -186,6 +186,17 @@ Rasterizer::Rasterizer(Frontend::EmuWindow& emu_window, std::unique_ptr<BackendB
     texel_buffer_lut = backend->CreateBuffer(TEXEL_BUFFER_INFO);
     texel_buffer_lut_lf = backend->CreateBuffer(TEXEL_BUFFER_LF_INFO);
 
+    const SamplerInfo cube_sampler_info = {
+        .mag_filter = Pica::TextureFilter::Linear,
+        .min_filter = Pica::TextureFilter::Linear,
+        .mip_filter = Pica::TextureFilter::Linear,
+        .wrap_s = Pica::WrapMode::ClampToEdge,
+        .wrap_t = Pica::WrapMode::ClampToEdge
+    };
+
+    // TODO: Texture cubes
+    texture_cube_sampler = backend->CreateSampler(cube_sampler_info);
+
     // TODO: Have the backend say this
     uniform_buffer_alignment = 64;
     uniform_size_aligned_vs = Common::AlignUp<std::size_t>(sizeof(VSUniformData), uniform_buffer_alignment);
@@ -794,8 +805,9 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
             if (auto iter = sampler_cache.find(key); iter != sampler_cache.end()) {
                 raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, iter->second);
             } else {
-                auto result = sampler_cache.emplace(key, backend->CreateSampler(key));
-                raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, result.first->second);
+                SamplerHandle texture_sampler = backend->CreateSampler(key);
+                auto result = sampler_cache.emplace(key, texture_sampler);
+                raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, texture_sampler);
             }
 
             Surface surface = res_cache.GetTextureSurface(texture);
@@ -815,8 +827,15 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
         } else {
             //state.texture_units[texture_index].texture_2d = 0;
             raster_pipeline->BindTexture(TEXTURE_GROUP, texture_index, clear_texture);
+            raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, texture_cube_sampler);
         }
     }
+
+    // TODO: Implement texture cubes
+    raster_pipeline->BindTexture(TEXTURE_GROUP, 3, clear_texture);
+
+    // TODO: Implement texture cubes
+    raster_pipeline->BindSampler(SAMPLER_GROUP, 3, texture_cube_sampler);
 
     // Sync the LUTs within the texture buffer
     SyncAndUploadLUTs();
@@ -1921,7 +1940,9 @@ void Rasterizer::SyncAndUploadLUTsLF() {
         uniform_block_data.fog_lut_dirty = false;
     }
 
-    texel_buffer_lut_lf->Commit(bytes_used);
+    if (bytes_used > 0) {
+        texel_buffer_lut_lf->Commit(bytes_used);
+    }
 }
 
 void Rasterizer::SyncAndUploadLUTs() {
@@ -2022,7 +2043,9 @@ void Rasterizer::SyncAndUploadLUTs() {
         uniform_block_data.proctex_diff_lut_dirty = false;
     }
 
-    texel_buffer_lut->Commit(bytes_used);
+    if (bytes_used > 0) {
+        texel_buffer_lut->Commit(bytes_used);
+    }
 }
 
 void Rasterizer::UploadUniforms(PipelineHandle pipeline, bool accelerate_draw) {
@@ -2040,28 +2063,30 @@ void Rasterizer::UploadUniforms(PipelineHandle pipeline, bool accelerate_draw) {
     const bool invalidate = uniform_buffer->IsInvalid();
     const u32 offset = uniform_buffer->GetCurrentOffset();
 
+    // Re-bind uniform buffer with the new range
+    pipeline->BindBuffer(UTILITY_GROUP, 0, uniform_buffer, offset + used_bytes, sizeof(VSUniformData));
+
     if (sync_vs) {
         VSUniformData vs_uniforms;
         vs_uniforms.uniforms.SetFromRegs(Pica::g_state.regs.vs, Pica::g_state.vs);
         std::memcpy(uniforms.data() + used_bytes, &vs_uniforms, sizeof(vs_uniforms));
 
-        // Re-bind uniform buffer with the new range
-        pipeline->BindBuffer(UTILITY_GROUP, 0, uniform_buffer, offset + used_bytes, sizeof(VSUniformData));
-
         used_bytes += uniform_size_aligned_vs;
     }
 
+    // Re-bind uniform buffer with the new range
+    pipeline->BindBuffer(UTILITY_GROUP, 1, uniform_buffer, offset + used_bytes, sizeof(UniformData));
+
     if (sync_fs || invalidate) {
         std::memcpy(uniforms.data() + used_bytes, &uniform_block_data.data, sizeof(UniformData));
-
-        // Re-bind uniform buffer with the new range
-        pipeline->BindBuffer(UTILITY_GROUP, 1, uniform_buffer, offset + used_bytes, sizeof(UniformData));
 
         uniform_block_data.dirty = false;
         used_bytes += uniform_size_aligned_fs;
     }
 
-    uniform_buffer->Commit(used_bytes);
+    if (used_bytes > 0) {
+        uniform_buffer->Commit(used_bytes);
+    }
 }
 
 } // namespace VideoCore

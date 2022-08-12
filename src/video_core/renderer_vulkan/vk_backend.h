@@ -66,6 +66,8 @@ private:
     // Begins the renderpass for the provided framebuffer
     void BeginRenderpass(FramebufferHandle framebuffer);
 
+    void OnCommandSwitch(u32 new_slot);
+
 private:
     Instance instance;
     CommandScheduler scheduler;

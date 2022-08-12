@@ -7,15 +7,21 @@
 #include "video_core/common/shader.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
+namespace VideoCore {
+class PoolManager;
+}
+
 namespace VideoCore::Vulkan {
 
 class Instance;
 
 class Shader : public VideoCore::ShaderBase {
 public:
-    Shader(Instance& instance, ShaderStage stage, std::string_view name,
+    Shader(Instance& instance, PoolManager& pool_manager, ShaderStage stage, std::string_view name,
            std::string&& source);
     ~Shader() override;
+
+    void Free() override;
 
     bool Compile(ShaderOptimization level) override;
 
@@ -26,6 +32,7 @@ public:
 
 private:
     Instance& instance;
+    PoolManager& pool_manager;
     vk::ShaderModule module;
 };
 

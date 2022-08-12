@@ -140,11 +140,16 @@ struct PipelineInfo {
 
 constexpr s32 WHOLE_SIZE = -1;
 
+struct PipelineDeleter;
+
 // An opaque handle to a backend specific program pipeline
-class PipelineBase : public IntrusivePtrEnabled<PipelineBase> {
+class PipelineBase : public IntrusivePtrEnabled<PipelineBase, PipelineDeleter> {
 public:
     PipelineBase(PipelineType type, PipelineInfo info) : type(type) {}
     virtual ~PipelineBase() = default;
+
+    // This method is called by PipelineDeleter. Forward to the derived pool!
+    virtual void Free() = 0;
 
     // Disable copy constructor
     PipelineBase(const PipelineBase&) = delete;
@@ -179,6 +184,13 @@ public:
 
 protected:
     PipelineType type = PipelineType::Graphics;
+};
+
+// Foward pointer to its parent pool
+struct PipelineDeleter {
+    void operator()(PipelineBase* pipeline) {
+        pipeline->Free();
+    }
 };
 
 using PipelineHandle = IntrusivePtr<PipelineBase>;

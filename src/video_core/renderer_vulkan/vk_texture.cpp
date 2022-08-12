@@ -5,6 +5,7 @@
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/pica_to_vulkan.h"
 #include "video_core/renderer_vulkan/vk_buffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
@@ -73,11 +74,9 @@ inline vk::ImageViewType ToVkImageViewType(TextureViewType view_type) {
     }
 }
 
-Texture::Texture(Instance& instance, CommandScheduler& scheduler) :
-    instance(instance), scheduler(scheduler) {}
-
-Texture::Texture(Instance& instance, CommandScheduler& scheduler, const TextureInfo& info) : TextureBase(info),
-    instance(instance), scheduler(scheduler) {
+Texture::Texture(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
+                 const TextureInfo& info) : TextureBase(info), instance(instance), scheduler(scheduler),
+    pool_manager(pool_manager) {
 
     // Convert the input format to another that supports attachments
     advertised_format = ToVkFormat(info.format);
@@ -118,7 +117,7 @@ Texture::Texture(Instance& instance, CommandScheduler& scheduler, const TextureI
         .image = image,
         .viewType = ToVkImageViewType(info.view_type),
         .format = internal_format,
-        .subresourceRange = {aspect, 0, info.levels, 0, 1}
+        .subresourceRange = {aspect, 0, 1, 0, 1} // Should this include the levels?
     };
 
     // Create image view
@@ -130,9 +129,9 @@ Texture::Texture(Instance& instance, CommandScheduler& scheduler, const TextureI
     Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal, 0, info.levels);
 }
 
-Texture::Texture(Instance& instance, CommandScheduler& scheduler, vk::Image image, vk::Format format,
-                 const TextureInfo& info) : TextureBase(info), instance(instance),
-    scheduler(scheduler), image(image), is_texture_owned(false) {
+Texture::Texture(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
+                 vk::Image image, vk::Format format, const TextureInfo& info) : TextureBase(info),
+    instance(instance), scheduler(scheduler), pool_manager(pool_manager), image(image), is_texture_owned(false) {
 
     advertised_format = internal_format = format;
     aspect = vk::ImageAspectFlagBits::eColor;
@@ -165,6 +164,10 @@ Texture::~Texture() {
         vk::Device device = instance.GetDevice();
         device.destroyImageView(image_view);
     }
+}
+
+void Texture::Free() {
+    pool_manager.Free<Texture>(this);
 }
 
 void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout, u32 level, u32 level_count) {
@@ -458,8 +461,8 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
     }
 }
 
-void Texture::BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect, u32 src_level, u32 dest_level,
-                     u32 src_layer, u32 dest_layer) {
+void Texture::BlitTo(TextureHandle dest, Common::Rectangle<u32> source_rect, Common::Rectangle<u32> dest_rect,
+                     u32 src_level, u32 dest_level, u32 src_layer, u32 dest_layer) {
 
     Texture* dest_texture = static_cast<Texture*>(dest.Get());
 
@@ -469,15 +472,13 @@ void Texture::BlitTo(TextureHandle dest, Rect2D source_rect, Rect2D dest_rect, u
     dest_texture->Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal);
 
     const std::array source_offsets = {
-        vk::Offset3D{source_rect.x, source_rect.y, 0},
-        vk::Offset3D{static_cast<s32>(source_rect.x + source_rect.width),
-                     static_cast<s32>(source_rect.y + source_rect.height), 1}
+        vk::Offset3D{static_cast<s32>(source_rect.left), static_cast<s32>(source_rect.bottom), 0},
+        vk::Offset3D{static_cast<s32>(source_rect.right), static_cast<s32>(source_rect.top), 1}
     };
 
     const std::array dest_offsets = {
-        vk::Offset3D{dest_rect.x, dest_rect.y, 0},
-        vk::Offset3D{static_cast<s32>(dest_rect.x + dest_rect.width),
-                     static_cast<s32>(dest_rect.y + dest_rect.height), 1}
+        vk::Offset3D{static_cast<s32>(dest_rect.left), static_cast<s32>(dest_rect.bottom), 0},
+        vk::Offset3D{static_cast<s32>(dest_rect.right), static_cast<s32>(dest_rect.top), 1}
     };
 
     const vk::ImageBlit blit_area = {
@@ -665,8 +666,8 @@ void StagingTexture::Commit(u32 size) {
     vmaFlushAllocation(allocator, allocation, 0, size);
 }
 
-Sampler::Sampler(Instance& instance, SamplerInfo info) :
-    SamplerBase(info), instance(instance) {
+Sampler::Sampler(Instance& instance, PoolManager& pool_manager, SamplerInfo info) :
+    SamplerBase(info), instance(instance), pool_manager(pool_manager) {
 
     auto properties = instance.GetPhysicalDevice().getProperties();
     const auto filtering = PicaToVK::TextureFilterMode(info.mag_filter,
@@ -695,4 +696,8 @@ Sampler::~Sampler() {
     device.destroySampler(sampler);
 }
 
-} // namespace Vulkan
+void Sampler::Free() {
+    pool_manager.Free<Sampler>(this);
+}
+
+} // namespace VideoCore::Vulkan
