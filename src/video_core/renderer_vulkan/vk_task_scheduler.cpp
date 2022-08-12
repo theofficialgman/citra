@@ -64,6 +64,9 @@ CommandScheduler::~CommandScheduler() {
     vk::Device device = instance.GetDevice();
     VmaAllocator allocator = instance.GetAllocator();
 
+    // Submit any remaining work
+    Submit(true, false);
+
     for (auto& command : commands) {
         device.destroyFence(command.fence);
 
@@ -110,10 +113,11 @@ void CommandScheduler::SetSwitchCallback(std::function<void(u32)> callback) {
     switch_callback = callback;
 }
 
-void CommandScheduler::Submit(bool wait_completion, vk::Semaphore wait_semaphore, vk::Semaphore signal_semaphore) {
-    const CommandSlot& command = commands[current_command];
+void CommandScheduler::Submit(bool wait_completion, bool begin_next,
+                              vk::Semaphore wait_semaphore, vk::Semaphore signal_semaphore) {
 
     // End command buffers
+    const CommandSlot& command = commands[current_command];
     command.render_command_buffer.end();
     if (command.use_upload_buffer) {
         command.upload_command_buffer.end();
@@ -126,9 +130,14 @@ void CommandScheduler::Submit(bool wait_completion, vk::Semaphore wait_semaphore
 
     const u32 signal_semaphore_count = signal_semaphore ? 1u : 0u;
     const u32 wait_semaphore_count = wait_semaphore ? 1u : 0u;
-    const u32 command_buffer_count = command.use_upload_buffer ? 2u : 1u;
-    const std::array command_buffers = { command.render_command_buffer,
-                                         command.upload_command_buffer };
+    u32 command_buffer_count = 0;
+    std::array<vk::CommandBuffer, 2> command_buffers;
+
+    if (command.use_upload_buffer) {
+        command_buffers[command_buffer_count++] = command.upload_command_buffer;
+    }
+
+    command_buffers[command_buffer_count++] = command.render_command_buffer;
 
     // Prepeare submit info
     const vk::SubmitInfo submit_info = {
@@ -151,7 +160,9 @@ void CommandScheduler::Submit(bool wait_completion, vk::Semaphore wait_semaphore
     }
 
     // Switch to next cmdbuffer.
-    SwitchSlot();
+    if (begin_next) {
+        SwitchSlot();
+    }
 }
 
 void CommandScheduler::Schedule(std::function<void(vk::Device, VmaAllocator)>&& func) {

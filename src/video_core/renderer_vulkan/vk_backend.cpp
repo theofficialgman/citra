@@ -81,7 +81,11 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
 }
 
 Backend::~Backend() {
+
+    // Wait for all GPU operations to finish before continuing
     vk::Device device = instance.GetDevice();
+    device.waitIdle();
+
     device.destroyPipelineCache(pipeline_cache);
 
     for (u32 pool = 0; pool < SCHEDULER_COMMAND_COUNT; pool++) {
@@ -100,8 +104,12 @@ bool Backend::BeginPresent() {
 }
 
 void Backend::EndPresent() {
-    scheduler.Submit(false, swapchain.GetAvailableSemaphore(), swapchain.GetPresentSemaphore());
+    scheduler.Submit(false, true, swapchain.GetAvailableSemaphore(), swapchain.GetPresentSemaphore());
     swapchain.Present();
+}
+
+void Backend::Flush() {
+    scheduler.Submit(true);
 }
 
 FramebufferHandle Backend::GetWindowFramebuffer() {

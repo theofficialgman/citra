@@ -36,7 +36,7 @@ private:
     // Special renderpass used for rendering to the swapchain
     vk::RenderPass present_renderpass;
     // [color_format][depth_format][is_clear_pass]
-    vk::RenderPass cached_renderpasses[MAX_COLOR_FORMATS][MAX_DEPTH_FORMATS][2];
+    vk::RenderPass cached_renderpasses[MAX_COLOR_FORMATS+1][MAX_DEPTH_FORMATS+1][2];
 };
 
 } // namespace VideoCore::Vulkan

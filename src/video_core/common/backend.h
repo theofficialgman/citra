@@ -32,6 +32,9 @@ public:
     // Triggers a swapchain buffer swap
     virtual void EndPresent() = 0;
 
+    // Submits any pending work and blocks the host until it completes
+    virtual void Flush() = 0;
+
     // Returns the framebuffer created from the swapchain images
     virtual FramebufferHandle GetWindowFramebuffer() = 0;
 

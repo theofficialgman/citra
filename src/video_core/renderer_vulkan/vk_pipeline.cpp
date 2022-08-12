@@ -183,7 +183,7 @@ PipelineOwner::~PipelineOwner() {
     u32 i = 0;
     while (set_layouts[i] && update_templates[i]) {
         device.destroyDescriptorSetLayout(set_layouts[i]);
-        device.destroyDescriptorUpdateTemplate(update_templates[i]);
+        device.destroyDescriptorUpdateTemplate(update_templates[i++]);
     }
 }
 

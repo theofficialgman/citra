@@ -19,7 +19,7 @@ endif()
 # Install a package using the command line interface
 function(vcpkg_add_package PKG_NAME)
     # Run the executable to install dependencies
-    set(VCPKG_TARGET_TRIPLET_FLAG "--triplet=${VCPKG_TARGET_TRIPLET}")
+    set(VCPKG_TARGET_TRIPLET_FLAG "--triplet=x64-windows-static")
     message(STATUS "VCPKG: Installing ${PKG_NAME}")
     execute_process(COMMAND ${VCPKG_EXECUTABLE} ${VCPKG_TARGET_TRIPLET_FLAG} ${VCPKG_RECURSE_REBUILD_FLAG} --disable-metrics install "${PKG_NAME}" WORKING_DIRECTORY ${CMAKE_SOURCE_DIR} RESULT_VARIABLE VCPKG_INSTALL_OK)
     if (NOT VCPKG_INSTALL_OK EQUAL "0")

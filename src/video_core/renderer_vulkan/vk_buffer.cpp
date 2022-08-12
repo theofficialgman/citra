@@ -148,7 +148,7 @@ void Buffer::Commit(u32 size) {
     if (info.usage == BufferUsage::Staging && size > 0) {
         vmaFlushAllocation(allocator, allocation, buffer_offset, size);
     } else {
-        vk::CommandBuffer command_buffer = scheduler.GetUploadCommandBuffer();
+        vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
         Buffer& staging = scheduler.GetCommandUploadBuffer();
 
         const vk::BufferCopy copy_region = {
@@ -158,6 +158,7 @@ void Buffer::Commit(u32 size) {
         };
 
         // Copy staging buffer to device local buffer
+        staging.Commit(size);
         command_buffer.copyBuffer(staging.GetHandle(), buffer, copy_region);
 
         vk::AccessFlags access_mask;
@@ -184,6 +185,8 @@ void Buffer::Commit(u32 size) {
         const vk::BufferMemoryBarrier buffer_barrier = {
             .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
             .dstAccessMask = access_mask,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .buffer = buffer,
             .offset = buffer_offset,
             .size = size

@@ -67,7 +67,7 @@ constexpr u32 PRESENT_PIPELINES = 3;
 class DisplayRenderer {
 public:
     DisplayRenderer(Frontend::EmuWindow& window);
-    ~DisplayRenderer() = default;
+    ~DisplayRenderer();
 
     void SwapBuffers();
     void TryPresent(int timeout_ms) {}
@@ -121,8 +121,8 @@ private:
     void LoadColorToActiveTexture(u8 color_r, u8 color_g, u8 color_b, const ScreenInfo& screen);
 
 private:
-    std::unique_ptr<VideoCore::Rasterizer> rasterizer;
     std::unique_ptr<BackendBase> backend;
+    std::unique_ptr<VideoCore::Rasterizer> rasterizer;
     Frontend::EmuWindow& render_window;
     Common::Vec4f clear_color;
     f32 m_current_fps = 0.0f;

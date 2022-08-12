@@ -21,11 +21,10 @@ public:
 
     bool BeginPresent() override;
     void EndPresent() override;
+    void Flush() override;
 
     FramebufferHandle GetWindowFramebuffer() override;
-
     u64 QueryDriver(Query query) override { return 0; }
-
     u64 PipelineInfoHash(const PipelineInfo& info) override;
 
     BufferHandle CreateBuffer(BufferInfo info) override;
@@ -40,10 +39,8 @@ public:
 
     void Draw(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
               u32 base_vertex, u32 num_vertices) override;
-
     void DrawIndexed(PipelineHandle pipeline, FramebufferHandle draw_framebuffer,
                      u32 base_index, u32 num_indices, u32 base_vertex) override;
-
     void DispatchCompute(PipelineHandle pipeline, Common::Vec3<u32> groupsize,
                          Common::Vec3<u32> groups) override {}
 

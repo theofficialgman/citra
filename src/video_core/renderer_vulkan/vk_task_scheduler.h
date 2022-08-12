@@ -37,8 +37,8 @@ public:
     void Schedule(std::function<void(vk::Device, VmaAllocator)>&& func);
 
     // Submits the current command to the graphics queue
-    void Submit(bool wait_completion = false, vk::Semaphore wait = VK_NULL_HANDLE,
-                vk::Semaphore signal = VK_NULL_HANDLE);
+    void Submit(bool wait_completion = false, bool begin_next = true,
+                vk::Semaphore wait = VK_NULL_HANDLE, vk::Semaphore signal = VK_NULL_HANDLE);
 
     // Returns the command buffer used for early upload operations.
     // This is useful for vertex/uniform buffer uploads that happen once per frame

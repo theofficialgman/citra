@@ -56,7 +56,8 @@ layout (std140, push_constant) uniform PresentUniformData {
 };
 
 void main() {
-    color = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
+    //color = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
+    color = vec4(1.f, 0.f, 0.f, 1.f);
 }
 )";
 
@@ -158,7 +159,7 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
 
     // Create vertex buffer for the screen rectangle
     const BufferInfo vertex_info = {
-        .capacity = sizeof(ScreenRectVertex) * 10,
+        .capacity = sizeof(ScreenRectVertex) * 16,
         .usage = BufferUsage::Vertex
     };
 
@@ -205,6 +206,11 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
 
     // Bind sampler. TODO: Sampler hot-reload?
     present_pipelines[0]->BindSampler(1, 0, screen_sampler);
+}
+
+DisplayRenderer::~DisplayRenderer() {
+    // Must flush the backend before destroying any pipelines!
+    backend->Flush();
 }
 
 void DisplayRenderer::PrepareRendertarget() {
@@ -387,8 +393,8 @@ void DisplayRenderer::DrawSingleScreen(u32 screen, bool rotate, float x, float y
     }
 
     const u32 size = sizeof(ScreenRectVertex) * vertices.size();
-    const u64 mapped_offset = vertex_buffer->GetCurrentOffset();
     auto vertex_data = vertex_buffer->Map(size);
+    const u64 mapped_offset = vertex_buffer->GetCurrentOffset();
 
     // Copy vertex data
     std::memcpy(vertex_data.data(), vertices.data(), size);

@@ -60,7 +60,9 @@ Instance::Instance(Frontend::EmuWindow& window) {
 
 Instance::~Instance() {
     device.waitIdle();
+    vmaDestroyAllocator(allocator);
     device.destroy();
+    instance.destroySurfaceKHR(surface);
     instance.destroy();
 }
 
