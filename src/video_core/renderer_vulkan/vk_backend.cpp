@@ -104,6 +104,11 @@ bool Backend::BeginPresent() {
 }
 
 void Backend::EndPresent() {
+    // Transition swapchain image to present layout
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    swapchain.GetCurrentImage()->Transition(command_buffer, vk::ImageLayout::ePresentSrcKHR);
+
+    // Submit and present
     scheduler.Submit(false, true, swapchain.GetAvailableSemaphore(), swapchain.GetPresentSemaphore());
     swapchain.Present();
 }

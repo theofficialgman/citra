@@ -16,10 +16,10 @@ class PoolManager;
 namespace VideoCore::Vulkan {
 
 class Instance;
-class Backend;
 class CommandScheduler;
-class Texture;
 class RenderpassCache;
+class Texture;
+class Framebuffer;
 
 class Swapchain {
 public:
@@ -36,9 +36,11 @@ public:
     // Presents the current image and move to the next one
     void Present();
 
-    FramebufferHandle GetCurrentFramebuffer() const {
-        return framebuffers[current_image];
-    }
+    // Returns the framebuffer the current image is attached to
+    FramebufferHandle GetCurrentFramebuffer();
+
+    // Returns the current swapchain image
+    Texture* GetCurrentImage();
 
     // Returns current swapchain state
     vk::Extent2D GetExtent() const {
@@ -68,11 +70,6 @@ public:
     // Returns the semaphore that will signal when the current image will be presented
     vk::Semaphore GetPresentSemaphore() const {
         return render_finished;
-    }
-
-    // Returns the current swapchain image
-    vk::Image GetCurrentImage() {
-        return vk_images[current_image];
     }
 
     // Returns true when the swapchain should be recreated

@@ -123,8 +123,7 @@ void CommandScheduler::Submit(bool wait_completion, bool begin_next,
         command.upload_command_buffer.end();
     }
 
-    constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks{
-        vk::PipelineStageFlagBits::eAllCommands,
+    const std::array<vk::PipelineStageFlags, 1> wait_stage_masks = {
         vk::PipelineStageFlagBits::eColorAttachmentOutput,
     };
 

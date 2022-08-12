@@ -33,39 +33,36 @@ public:
             vk::Image image, vk::Format format, const TextureInfo& info);
 
     ~Texture() override;
-
     void Free() override;
 
     void Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32 level = 0) override;
-
     void Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 level = 0) override;
-
     void BlitTo(TextureHandle dest, Common::Rectangle<u32> src_rectangle, Common::Rectangle<u32> dest_rect,
                 u32 src_level = 0, u32 dest_level = 0, u32 src_layer = 0, u32 dest_layer = 0) override;
 
     void CopyFrom(TextureHandle source) override;
-
     void GenerateMipmaps() override;
 
-    /// Overrides the layout of provided image subresource
+    // Overrides the layout of provided image subresource
     void SetLayout(vk::ImageLayout new_layout, u32 level = 0, u32 level_count = 1);
 
-    /// Transitions part of the image to the provided layout
-    void Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout, u32 level = 0,
-                    u32 level_count = 1);
+    // Transitions the image to the provided layout
+    void Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout);
+    void TransitionSubresource(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout,
+                               u32 level = 0, u32 level_count = 1);
 
-    /// Returns the underlying vulkan image handle
+    // Returns the underlying vulkan image handle
     vk::Image GetHandle() const {
         return image;
     }
 
-    /// Returns the Vulka image view
+    // Returns the Vulka image view
     vk::ImageView GetView() const {
         return image_view;
     }
 
-    /// Returns the internal format backing the texture.
-    /// It may not match the input pixel format.
+    // Returns the internal format backing the texture.
+    // It may not match the input pixel format.
     vk::Format GetInternalFormat() const {
         return internal_format;
     }
@@ -74,12 +71,12 @@ public:
         return aspect;
     }
 
-    /// Returns the current image layout
+    // Returns the current image layout
     vk::ImageLayout GetLayout(u32 level = 0) const {
-        return layouts.at(level);
+        return layout;
     }
 
-    /// Returns a rectangle that represents the complete area of the texture
+    // Returns a rectangle that represents the complete area of the texture
     vk::Rect2D GetArea() const {
         return {{0, 0},{info.width, info.height}};
     }
@@ -99,7 +96,7 @@ private:
     vk::Format advertised_format = vk::Format::eUndefined;
     vk::Format internal_format = vk::Format::eUndefined;
     vk::ImageAspectFlags aspect = vk::ImageAspectFlagBits::eNone;
-    std::array<vk::ImageLayout, TEXTURE_MAX_LEVELS> layouts{vk::ImageLayout::eUndefined};
+    vk::ImageLayout layout = vk::ImageLayout::eUndefined;
 };
 
 /**

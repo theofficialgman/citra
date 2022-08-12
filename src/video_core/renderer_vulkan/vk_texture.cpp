@@ -122,11 +122,6 @@ Texture::Texture(Instance& instance, CommandScheduler& scheduler, PoolManager& p
 
     // Create image view
     image_view = device.createImageView(view_info);
-
-    // NOTE: To prevent validation errors when using the image without uploading
-    // transition it now to VK_IMAGE_LAYOUT_SHADER_READONLY_OPTIMAL
-    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
-    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal, 0, info.levels);
 }
 
 Texture::Texture(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager,
@@ -170,19 +165,10 @@ void Texture::Free() {
     pool_manager.Free<Texture>(this);
 }
 
-void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout, u32 level, u32 level_count) {
-    ASSERT(level + level_count < TEXTURE_MAX_LEVELS);
-
-    // Ensure all miplevels in the range have the same layout
-    vk::ImageLayout old_layout = layouts[level];
-    if (old_layout != vk::ImageLayout::eUndefined) {
-        for (u32 i = 0; i < level_count; i++) {
-            ASSERT(layouts[level + i] == old_layout);
-        }
-    }
-
+void Texture::TransitionSubresource(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout,
+                                    u32 level, u32 level_count) {
     // Don't do anything if the image is already in the wanted layout
-    if (new_layout == old_layout) {
+    if (new_layout == layout) {
         return;
     }
 
@@ -245,13 +231,13 @@ void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_l
         return info;
     };
 
-    LayoutInfo source = GetLayoutInfo(old_layout);
+    LayoutInfo source = GetLayoutInfo(layout);
     LayoutInfo dest = GetLayoutInfo(new_layout);
 
     const vk::ImageMemoryBarrier barrier = {
         .srcAccessMask = source.access,
         .dstAccessMask = dest.access,
-        .oldLayout = old_layout,
+        .oldLayout = layout,
         .newLayout = new_layout,
         .image = image,
         .subresourceRange = {aspect, level, level_count, 0, 1}
@@ -263,11 +249,11 @@ void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_l
                                    {}, {}, barrier);
 
     // Update layouts
-    SetLayout(new_layout, level, level_count);
+    layout = new_layout;
 }
 
-void Texture::SetLayout(vk::ImageLayout new_layout, u32 level, u32 level_count) {
-    std::fill_n(layouts.begin() + level, level_count, new_layout);
+void Texture::Transition(vk::CommandBuffer command_buffer, vk::ImageLayout new_layout) {
+    TransitionSubresource(command_buffer, new_layout, 0, info.levels);
 }
 
 void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32 level) {
@@ -309,7 +295,7 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
         std::memcpy(staging.GetMappedPtr(), data.data(), byte_count);
         staging.Commit(byte_count);
 
-        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal, level);
+        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal);
 
         // Blit
         command_buffer.blitImage(staging.GetHandle(), vk::ImageLayout::eGeneral,
@@ -361,7 +347,7 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
         };
 
         vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
-        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal, level);
+        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal);
 
         // Copy staging buffer to the texture
         command_buffer.copyBufferToImage(staging.GetHandle(), image,
@@ -373,11 +359,10 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
 }
 
 void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 level) {
-    const u64 byte_count = data.size();
+    const std::size_t byte_count = data.size();
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
 
-    // If the adverised format supports blitting then use GPU accelerated
-    // format conversion.
+    // If the adverised format supports blitting use GPU accelerated format conversion.
     if (internal_format != advertised_format &&
         instance.IsFormatSupported(advertised_format, vk::FormatFeatureFlagBits::eBlitDst)) {
         // Creating a new staging texture for each upload/download is expensive
@@ -407,7 +392,7 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
             .dstOffsets = offsets
         };
 
-        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal, level);
+        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal);
 
         // Blit
         command_buffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
@@ -444,13 +429,11 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
             .imageExtent = {rectangle.width, rectangle.height, 1}
         };
 
-        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal, level);
+        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal);
 
         // Copy pixel data to the staging buffer
         command_buffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal,
                                          staging.GetHandle(), copy_region);
-
-        Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 
         // TODO: Async downloads
         scheduler.Submit(true);
@@ -459,6 +442,8 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
         auto memory = staging.Map(byte_count);
         std::memcpy(data.data(), memory.data(), byte_count);
     }
+
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 void Texture::BlitTo(TextureHandle dest, Common::Rectangle<u32> source_rect, Common::Rectangle<u32> dest_rect,
@@ -514,8 +499,8 @@ void Texture::GenerateMipmaps() {
 
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
     for (u32 i = 1; i < info.levels; i++) {
-        Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal, i - 1);
-        Transition(command_buffer, vk::ImageLayout::eTransferDstOptimal, i);
+        TransitionSubresource(command_buffer, vk::ImageLayout::eTransferSrcOptimal, i - 1);
+        TransitionSubresource(command_buffer, vk::ImageLayout::eTransferDstOptimal, i);
 
         const std::array source_offsets = {
             vk::Offset3D{0, 0, 0},
@@ -551,7 +536,7 @@ void Texture::GenerateMipmaps() {
     }
 
     // Prepare for shader reads
-    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal, 0, info.levels);
+    Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
 }
 
 void Texture::CopyFrom(TextureHandle source) {

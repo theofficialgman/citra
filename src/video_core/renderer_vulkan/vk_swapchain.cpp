@@ -7,9 +7,9 @@
 #include "video_core/common/pool_manager.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_backend.h"
 #include "video_core/renderer_vulkan/vk_framebuffer.h"
 #include "video_core/renderer_vulkan/vk_texture.h"
+#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
 
 namespace VideoCore::Vulkan {
 
@@ -165,6 +165,15 @@ void Swapchain::Present() {
     }
 
     current_frame = (current_frame + 1) % vk_images.size();
+}
+
+FramebufferHandle Swapchain::GetCurrentFramebuffer() {
+    return framebuffers[current_image];
+}
+
+// Returns the current swapchain image
+Texture* Swapchain::GetCurrentImage() {
+    return static_cast<Texture*>(textures[current_image].Get());
 }
 
 void Swapchain::Configure(u32 width, u32 height) {

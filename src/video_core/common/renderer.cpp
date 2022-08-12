@@ -56,8 +56,7 @@ layout (std140, push_constant) uniform PresentUniformData {
 };
 
 void main() {
-    //color = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
-    color = vec4(1.f, 0.f, 0.f, 1.f);
+    color = texture(sampler2D(top_screen, screen_sampler), frag_tex_coord);
 }
 )";
 
@@ -159,7 +158,7 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
 
     // Create vertex buffer for the screen rectangle
     const BufferInfo vertex_info = {
-        .capacity = sizeof(ScreenRectVertex) * 16,
+        .capacity = sizeof(ScreenRectVertex) * 4 * 4,
         .usage = BufferUsage::Vertex
     };
 
@@ -178,6 +177,11 @@ DisplayRenderer::DisplayRenderer(Frontend::EmuWindow& window) : render_window(wi
 
     // Set topology to strip
     present_pipeline_info.rasterization.topology.Assign(Pica::TriangleTopology::Strip);
+
+    // Disable blending, depth and stencil tests
+    present_pipeline_info.blending.blend_enable.Assign(0);
+    present_pipeline_info.depth_stencil.depth_test_enable.Assign(0);
+    present_pipeline_info.depth_stencil.stencil_test_enable.Assign(0);
 
     // Create screen sampler
     const SamplerInfo sampler_info = {

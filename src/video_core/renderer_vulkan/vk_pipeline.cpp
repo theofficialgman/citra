@@ -198,12 +198,11 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PoolManager&
     for (int i = 0; i < info.shaders.size(); i++) {
         auto& shader = info.shaders[i];
         if (!shader.IsValid()) {
-            shader_count = i;
-            break;
+            continue;
         }
 
         Shader* vk_shader = static_cast<Shader*>(shader.Get());
-        shader_stages[i] = vk::PipelineShaderStageCreateInfo{
+        shader_stages[shader_count++] = vk::PipelineShaderStageCreateInfo{
             .stage = ToVkShaderStage(shader->GetStage()),
             .module = vk_shader->GetHandle(),
             .pName = "main"
@@ -389,10 +388,15 @@ void Pipeline::Free() {
 void Pipeline::BindTexture(u32 group, u32 slot, TextureHandle handle) {
     Texture* texture = static_cast<Texture*>(handle.Get());
 
+    // NOTE: To prevent validation errors when using the image without uploading
+    // transition it now to VK_IMAGE_LAYOUT_SHADER_READONLY_OPTIMAL
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    texture->Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
+
     const DescriptorData data = {
         .image_info = vk::DescriptorImageInfo{
             .imageView = texture->GetView(),
-            .imageLayout = texture->GetLayout()
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal
         }
     };
 
