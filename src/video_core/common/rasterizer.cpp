@@ -182,7 +182,8 @@ Rasterizer::Rasterizer(Frontend::EmuWindow& emu_window, std::unique_ptr<BackendB
     // Create rasterizer buffers
     vertex_buffer = backend->CreateBuffer(VERTEX_BUFFER_INFO);
     index_buffer = backend->CreateBuffer(INDEX_BUFFER_INFO);
-    uniform_buffer = backend->CreateBuffer(UNIFORM_BUFFER_INFO);
+    uniform_buffer_vs = backend->CreateBuffer(UNIFORM_BUFFER_INFO);
+    uniform_buffer_fs = backend->CreateBuffer(UNIFORM_BUFFER_INFO);
     texel_buffer_lut = backend->CreateBuffer(TEXEL_BUFFER_INFO);
     texel_buffer_lut_lf = backend->CreateBuffer(TEXEL_BUFFER_LF_INFO);
 
@@ -806,7 +807,7 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
                 raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, iter->second);
             } else {
                 SamplerHandle texture_sampler = backend->CreateSampler(key);
-                auto result = sampler_cache.emplace(key, texture_sampler);
+                sampler_cache.emplace(key, texture_sampler);
                 raster_pipeline->BindSampler(SAMPLER_GROUP, texture_index, texture_sampler);
             }
 
@@ -2056,37 +2057,32 @@ void Rasterizer::UploadUniforms(PipelineHandle pipeline, bool accelerate_draw) {
         return;
     }
 
-    std::size_t uniform_size = uniform_size_aligned_vs + uniform_size_aligned_fs;
-    std::size_t used_bytes = 0;
-
-    auto uniforms = uniform_buffer->Map(uniform_size, uniform_buffer_alignment);
-    const bool invalidate = uniform_buffer->IsInvalid();
-    const u32 offset = uniform_buffer->GetCurrentOffset();
-
-    // Re-bind uniform buffer with the new range
-    pipeline->BindBuffer(UTILITY_GROUP, 0, uniform_buffer, offset + used_bytes, sizeof(VSUniformData));
-
     if (sync_vs) {
         VSUniformData vs_uniforms;
         vs_uniforms.uniforms.SetFromRegs(Pica::g_state.regs.vs, Pica::g_state.vs);
-        std::memcpy(uniforms.data() + used_bytes, &vs_uniforms, sizeof(vs_uniforms));
 
-        used_bytes += uniform_size_aligned_vs;
+        auto uniforms = uniform_buffer_vs->Map(uniform_size_aligned_vs, uniform_buffer_alignment);
+        uniform_block_data.current_vs_offset = uniform_buffer_vs->GetCurrentOffset();
+
+        std::memcpy(uniforms.data(), &vs_uniforms, sizeof(vs_uniforms));
+        uniform_buffer_vs->Commit(uniform_size_aligned_vs);
     }
 
-    // Re-bind uniform buffer with the new range
-    pipeline->BindBuffer(UTILITY_GROUP, 1, uniform_buffer, offset + used_bytes, sizeof(UniformData));
+    if (sync_fs) {
+        auto uniforms = uniform_buffer_fs->Map(uniform_size_aligned_fs, uniform_buffer_alignment);
+        uniform_block_data.current_fs_offset = uniform_buffer_fs->GetCurrentOffset();
 
-    if (sync_fs || invalidate) {
-        std::memcpy(uniforms.data() + used_bytes, &uniform_block_data.data, sizeof(UniformData));
+        std::memcpy(uniforms.data(), &uniform_block_data.data, sizeof(UniformData));
 
         uniform_block_data.dirty = false;
-        used_bytes += uniform_size_aligned_fs;
+        uniform_buffer_fs->Commit(uniform_size_aligned_fs);
     }
 
-    if (used_bytes > 0) {
-        uniform_buffer->Commit(used_bytes);
-    }
+    // Bind updated ranges
+    pipeline->BindBuffer(UTILITY_GROUP, 0, uniform_buffer_vs, uniform_block_data.current_vs_offset,
+                         sizeof(VSUniformData));
+    pipeline->BindBuffer(UTILITY_GROUP, 1, uniform_buffer_fs, uniform_block_data.current_fs_offset,
+                         sizeof(UniformData));
 }
 
 } // namespace VideoCore

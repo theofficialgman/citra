@@ -106,6 +106,11 @@ bool Backend::BeginPresent() {
 void Backend::EndPresent() {
     // Transition swapchain image to present layout
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    /*if (renderpass_active) {
+        command_buffer.endRenderPass();
+        renderpass_active = false;
+    }*/
+
     swapchain.GetCurrentImage()->Transition(command_buffer, vk::ImageLayout::ePresentSrcKHR);
 
     // Submit and present
@@ -291,7 +296,12 @@ void Backend::BindDescriptorSets(PipelineHandle handle) {
 }
 
 void Backend::BeginRenderpass(FramebufferHandle draw_framebuffer) {
+    /*if (draw_framebuffer == current_framebuffer && renderpass_active) {
+        return;
+    }*/
+
     Framebuffer* framebuffer = static_cast<Framebuffer*>(draw_framebuffer.Get());
+    //current_framebuffer = draw_framebuffer;
 
     u32 clear_value_count = 0;
     std::array<vk::ClearValue, 2> clear_values{};
@@ -323,7 +333,12 @@ void Backend::BeginRenderpass(FramebufferHandle draw_framebuffer) {
     };
 
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    /*if (renderpass_active) {
+        command_buffer.endRenderPass();
+    }
+    */
     command_buffer.beginRenderPass(renderpass_begin, vk::SubpassContents::eInline);
+    //renderpass_active = true;
 }
 
 void Backend::OnCommandSwitch(u32 new_slot) {

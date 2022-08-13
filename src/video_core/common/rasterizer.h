@@ -206,6 +206,8 @@ private:
         bool proctex_lut_dirty = true;
         bool proctex_diff_lut_dirty = true;
         bool dirty = true;
+        u32 current_vs_offset = 0;
+        u32 current_fs_offset = 0;
     } uniform_block_data{};
 
     // Pipeline information structure used to identify a rasterizer pipeline
@@ -223,7 +225,8 @@ private:
     std::size_t uniform_size_aligned_fs = 0;
 
     // Rasterizer used buffers (vertex, index, uniform, lut)
-    BufferHandle vertex_buffer, index_buffer, uniform_buffer;
+    BufferHandle vertex_buffer, index_buffer;
+    BufferHandle uniform_buffer_vs, uniform_buffer_fs;
     BufferHandle texel_buffer_lut_lf, texel_buffer_lut;
 
     // Pica lighting data
@@ -239,9 +242,6 @@ private:
     SamplerHandle texture_cube_sampler;
     std::array<SamplerInfo, 3> texture_samplers;
     std::unordered_map<SamplerInfo, SamplerHandle> sampler_cache;
-
-    // TODO: Remove this
-    bool allow_shadow = false;
 };
 
 } // namespace VideoCore

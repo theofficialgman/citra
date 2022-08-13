@@ -72,11 +72,10 @@ private:
     Swapchain swapchain;
     vk::PipelineCache pipeline_cache;
 
-    // A cache of pipeline owners
     std::unordered_map<u64, std::unique_ptr<PipelineOwner>, Common::IdentityHash> pipeline_owners;
-
-    // Descriptor pools
     std::array<vk::DescriptorPool, SCHEDULER_COMMAND_COUNT> descriptor_pools;
+    //FramebufferHandle current_framebuffer;
+    //bool renderpass_active = false;
 };
 
 } // namespace Vulkan
