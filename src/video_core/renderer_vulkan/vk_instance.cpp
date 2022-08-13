@@ -51,7 +51,7 @@ Instance::Instance(Frontend::EmuWindow& window) {
     surface = CreateSurface(instance, window);
 
     // TODO: GPU select dialog
-    physical_device = instance.enumeratePhysicalDevices()[1];
+    physical_device = instance.enumeratePhysicalDevices()[0];
     device_limits = physical_device.getProperties().limits;
 
     // Create logical device

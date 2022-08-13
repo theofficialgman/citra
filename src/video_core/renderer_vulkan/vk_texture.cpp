@@ -305,19 +305,20 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
     // Otherwise use normal staging buffer path with possible CPU conversion
     } else {
         Buffer& staging = scheduler.GetCommandUploadBuffer();
-        const u64 staging_offset = staging.GetCurrentOffset();
 
         // Copy pixels to the staging buffer
+        u64 staging_offset = 0;
         if (advertised_format == vk::Format::eR8G8B8Unorm) {
             const u32 new_byte_count = (byte_count / 3) * 4;
-            auto slice = staging.Map(new_byte_count);
+            auto memory = staging.Map(new_byte_count);
+            staging_offset = staging.GetCurrentOffset();
 
             u32 dst_offset = 0;
             for (u32 src_offset = 0; src_offset < byte_count; src_offset += 3) {
-                slice[dst_offset] = data[src_offset];
-                slice[dst_offset+1] = data[src_offset+1];
-                slice[dst_offset+2] = data[src_offset+2];
-                slice[dst_offset+3] = 255;
+                memory[dst_offset] = data[src_offset];
+                memory[dst_offset+1] = data[src_offset+1];
+                memory[dst_offset+2] = data[src_offset+2];
+                memory[dst_offset+3] = 255;
                 dst_offset += 4;
             }
 
@@ -327,8 +328,9 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
             ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
                    advertised_format == internal_format);
 
-            auto slice = staging.Map(byte_count);
-            std::memcpy(slice.data(), data.data(), byte_count);
+            auto memory = staging.Map(byte_count);
+            staging_offset = staging.GetCurrentOffset();
+            std::memcpy(memory.data(), data.data(), byte_count);
             staging.Commit(byte_count);
         }
 

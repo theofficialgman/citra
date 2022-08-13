@@ -255,7 +255,7 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PoolManager&
             .depthClampEnable = false,
             .rasterizerDiscardEnable = false,
             .cullMode = PicaToVK::CullMode(info.rasterization.cull_mode),
-            .frontFace = vk::FrontFace::eClockwise,
+            .frontFace = PicaToVK::FrontFace(info.rasterization.cull_mode),
             .depthBiasEnable = false,
             .lineWidth = 1.0f
         };

@@ -222,9 +222,19 @@ inline vk::CullModeFlags CullMode(Pica::CullMode mode) {
     case Pica::CullMode::KeepAll2:
         return vk::CullModeFlagBits::eNone;
     case Pica::CullMode::KeepClockWise:
-        return vk::CullModeFlagBits::eBack;
     case Pica::CullMode::KeepCounterClockWise:
-        return vk::CullModeFlagBits::eFront;
+        return vk::CullModeFlagBits::eBack;
+    }
+}
+
+inline vk::FrontFace FrontFace(Pica::CullMode mode) {
+    switch (mode) {
+    case Pica::CullMode::KeepAll:
+    case Pica::CullMode::KeepAll2:
+    case Pica::CullMode::KeepClockWise:
+        return vk::FrontFace::eCounterClockwise;
+    case Pica::CullMode::KeepCounterClockWise:
+        return vk::FrontFace::eClockwise;
     }
 }
 
