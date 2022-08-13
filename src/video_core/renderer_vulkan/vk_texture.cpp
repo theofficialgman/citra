@@ -411,11 +411,17 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
         Buffer& staging = scheduler.GetCommandUploadBuffer();
         const u64 staging_offset = staging.GetCurrentOffset();
 
-        // TODO: Handle format convertions and depth/stencil downloads
-        ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
+        if (advertised_format == vk::Format::eD24UnormS8Uint) {
+            ASSERT(16 * 1024 * 1024 - staging_offset >= data.size() * 2);
+        } else {
+            ASSERT(aspect == vk::ImageAspectFlagBits::eColor &&
                advertised_format == internal_format);
+        }
 
-        const vk::BufferImageCopy copy_region = {
+        u32 region_count = 0;
+        std::array<vk::BufferImageCopy, 2> copy_regions;
+
+        vk::BufferImageCopy copy_region = {
             .bufferOffset = staging_offset,
             .bufferRowLength = stride,
             .bufferImageHeight = rectangle.height,
@@ -429,18 +435,50 @@ void Texture::Download(Rect2D rectangle, u32 stride, std::span<u8> data, u32 lev
             .imageExtent = {rectangle.width, rectangle.height, 1}
         };
 
+        if (aspect & vk::ImageAspectFlagBits::eColor) {
+            copy_regions[region_count++] = copy_region;
+        } else if (aspect & vk::ImageAspectFlagBits::eStencil) {
+            // Depth aspect download
+            copy_region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
+            copy_regions[region_count++] = copy_region;
+
+            // Stencil aspect download
+            copy_region.bufferOffset += data.size();
+            copy_region.imageSubresource.aspectMask = vk::ImageAspectFlagBits::eStencil;
+            copy_regions[region_count++] = copy_region;
+        }
+
         Transition(command_buffer, vk::ImageLayout::eTransferSrcOptimal);
 
         // Copy pixel data to the staging buffer
         command_buffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal,
-                                         staging.GetHandle(), copy_region);
+                                         staging.GetHandle(), region_count, copy_regions.data());
 
         // TODO: Async downloads
         scheduler.Submit(true);
 
         // Copy data to the destination
-        auto memory = staging.Map(byte_count);
-        std::memcpy(data.data(), memory.data(), byte_count);
+        if (advertised_format == vk::Format::eD24UnormS8Uint) {
+            const u32 new_byte_count = data.size() + (data.size() / 4);
+            auto memory = staging.Map(new_byte_count);
+
+            u32 depth_offset = 0;
+            u32 stencil_offset = data.size();
+            for (u32 dst_offset = 0; dst_offset < byte_count; dst_offset += 4) {
+                float depth;
+                std::memcpy(&depth, memory.data() + depth_offset, sizeof(float));
+                u32 depth_uint = depth * 0xFFFFFF;
+
+                std::memcpy(data.data() + dst_offset, &depth_uint, 3);
+                data[dst_offset+3] = memory[stencil_offset];
+
+                depth_offset += 4;
+                stencil_offset += 1;
+            }
+        } else {
+            auto memory = staging.Map(byte_count);
+            std::memcpy(data.data(), memory.data(), byte_count);
+        }
     }
 
     Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);

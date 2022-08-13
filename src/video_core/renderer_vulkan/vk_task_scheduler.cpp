@@ -13,7 +13,7 @@ namespace VideoCore::Vulkan {
 
 // 16MB should be enough for a single frame
 constexpr BufferInfo STAGING_INFO = {
-    .capacity = 16 * 1024 * 1024,
+    .capacity = 32 * 1024 * 1024,
     .usage = BufferUsage::Staging
 };
 

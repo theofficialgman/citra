@@ -266,14 +266,15 @@ Pipeline::Pipeline(Instance& instance, CommandScheduler& scheduler, PoolManager&
         };
 
         const vk::PipelineColorBlendAttachmentState colorblend_attachment = {
-            .blendEnable = true,
+            .blendEnable = info.blending.blend_enable.Value(),
             .srcColorBlendFactor = PicaToVK::BlendFunc(info.blending.src_color_blend_factor),
             .dstColorBlendFactor = PicaToVK::BlendFunc(info.blending.dst_color_blend_factor),
             .colorBlendOp = PicaToVK::BlendEquation(info.blending.color_blend_eq),
             .srcAlphaBlendFactor = PicaToVK::BlendFunc(info.blending.src_alpha_blend_factor),
             .dstAlphaBlendFactor = PicaToVK::BlendFunc(info.blending.dst_alpha_blend_factor),
             .alphaBlendOp = PicaToVK::BlendEquation(info.blending.alpha_blend_eq),
-            .colorWriteMask = static_cast<vk::ColorComponentFlags>(info.blending.color_write_mask)
+            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                              vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA
         };
 
         const vk::PipelineColorBlendStateCreateInfo color_blending = {

@@ -110,7 +110,7 @@ void Framebuffer::PrepareAttachments() {
 
     if (info.depth_stencil.IsValid()) {
         Texture* depth_stencil = static_cast<Texture*>(info.depth_stencil.Get());
-        depth_stencil->Transition(command_buffer, vk::ImageLayout::eDepthAttachmentOptimal);
+        depth_stencil->Transition(command_buffer, vk::ImageLayout::eDepthStencilAttachmentOptimal);
     }
 }
 

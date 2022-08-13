@@ -83,7 +83,7 @@ vk::RenderPass RenderpassCache::GetRenderpass(TextureFormat color, TextureFormat
     const u32 color_index = static_cast<u32>(color);
     const u32 depth_index = (depth == TextureFormat::Undefined ? 0 : (static_cast<u32>(depth) - MAX_COLOR_FORMATS));
 
-    ASSERT(color_index < MAX_COLOR_FORMATS && depth_index < MAX_DEPTH_FORMATS);
+    ASSERT(color_index <= MAX_COLOR_FORMATS && depth_index <= MAX_DEPTH_FORMATS);
     return cached_renderpasses[color_index][depth_index][is_clear];
 }
 
@@ -137,19 +137,6 @@ vk::RenderPass RenderpassCache::CreateRenderPass(vk::Format color, vk::Format de
         use_depth = true;
     }
 
-    const vk::SubpassDependency subpass_dependency = {
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .dstSubpass = 0,
-        .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
-                        vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .srcAccessMask = vk::AccessFlagBits::eNone,
-        .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
-                         vk::AccessFlagBits::eDepthStencilAttachmentWrite,
-        .dependencyFlags = vk::DependencyFlagBits::eByRegion
-    };
-
     // We also require only one subpass
     const vk::SubpassDescription subpass = {
         .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
@@ -166,8 +153,8 @@ vk::RenderPass RenderpassCache::CreateRenderPass(vk::Format color, vk::Format de
         .pAttachments = attachments.data(),
         .subpassCount = 1,
         .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &subpass_dependency
+        .dependencyCount = 0,
+        .pDependencies = nullptr
     };
 
     // Create the renderpass
