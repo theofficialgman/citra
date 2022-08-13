@@ -208,7 +208,7 @@ target_link_libraries(video_core PRIVATE nihstro-headers glad::glad glm::glm Boo
 # Include Vulkan headers
 target_include_directories(video_core PRIVATE ../../externals/Vulkan-Headers/include)
 target_include_directories(video_core PRIVATE ../../externals/vma/include)
-target_link_libraries(video_core PRIVATE glslang SPIRV robin_hood::robin_hood)
+target_link_libraries(video_core PRIVATE glslang SPIRV)
 
 if (ARCHITECTURE_x86_64)
     target_link_libraries(video_core PUBLIC xbyak::xbyak)
