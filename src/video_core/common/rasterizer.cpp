@@ -605,6 +605,7 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
 
     // Retrieve the framebuffer assigned to the surfaces and update raster_info
     FramebufferHandle framebuffer = res_cache.GetFramebuffer(color_surface, depth_surface);
+    framebuffer->SetDrawRect(draw_rect);
     framebuffer->SetLoadOp(LoadOp::Load);
 
     raster_info.color_attachment = framebuffer->GetColorAttachment().IsValid() ?

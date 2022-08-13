@@ -47,6 +47,31 @@ inline vk::Format ToVkViewFormat(ViewFormat format) {
     }
 }
 
+inline auto ToVkAccessStageFlags(BufferUsage usage) {
+    std::pair<vk::AccessFlags, vk::PipelineStageFlags> result;
+    switch (usage) {
+    case BufferUsage::Vertex:
+        result = std::make_pair(vk::AccessFlagBits::eVertexAttributeRead,
+                                vk::PipelineStageFlagBits::eVertexInput);
+        break;
+    case BufferUsage::Index:
+        result = std::make_pair(vk::AccessFlagBits::eIndexRead,
+                                vk::PipelineStageFlagBits::eVertexInput);
+    case BufferUsage::Uniform:
+        result = std::make_pair(vk::AccessFlagBits::eUniformRead,
+                                vk::PipelineStageFlagBits::eVertexShader |
+                                vk::PipelineStageFlagBits::eFragmentShader);
+    case BufferUsage::Texel:
+        result = std::make_pair(vk::AccessFlagBits::eShaderRead,
+                                vk::PipelineStageFlagBits::eFragmentShader);
+        break;
+    default:
+        LOG_CRITICAL(Render_Vulkan, "Unknown BufferUsage flag!");
+    }
+
+    return result;
+}
+
 Buffer::Buffer(Instance& instance, CommandScheduler& scheduler, PoolManager& pool_manager, const BufferInfo& info)
     : BufferBase(info), instance(instance), scheduler(scheduler), pool_manager(pool_manager) {
 
@@ -132,6 +157,27 @@ std::span<u8> Buffer::Map(u32 size, u32 alignment) {
 
     // If the buffer is full, invalidate it
     if (buffer_offset + size > info.capacity) {
+        // When invalidating a GPU buffer insert a full pipeline barrier to ensure all reads
+        // have finished before reclaiming it
+        if (info.usage != BufferUsage::Staging) {
+            auto [access_mask, stage_mask] = ToVkAccessStageFlags(info.usage);
+
+            const vk::BufferMemoryBarrier buffer_barrier = {
+                .srcAccessMask = access_mask,
+                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .buffer = buffer,
+                .offset = 0,
+                .size = info.capacity
+            };
+
+            // Insert pipeline barrier
+            vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+            command_buffer.pipelineBarrier(stage_mask, vk::PipelineStageFlagBits::eTransfer,
+                                           vk::DependencyFlagBits::eByRegion, {}, buffer_barrier, {});
+        }
+
         Invalidate();
     }
 
@@ -148,7 +194,7 @@ void Buffer::Commit(u32 size) {
     if (info.usage == BufferUsage::Staging && size > 0) {
         vmaFlushAllocation(allocator, allocation, buffer_offset, size);
     } else {
-        vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+        vk::CommandBuffer command_buffer = scheduler.GetUploadCommandBuffer();
         Buffer& staging = scheduler.GetCommandUploadBuffer();
 
         const vk::BufferCopy copy_region = {
@@ -161,27 +207,7 @@ void Buffer::Commit(u32 size) {
         staging.Commit(size);
         command_buffer.copyBuffer(staging.GetHandle(), buffer, copy_region);
 
-        vk::AccessFlags access_mask;
-        vk::PipelineStageFlags stage_mask;
-        switch (info.usage) {
-        case BufferUsage::Vertex:
-            access_mask = vk::AccessFlagBits::eVertexAttributeRead;
-            stage_mask = vk::PipelineStageFlagBits::eVertexInput;
-            break;
-        case BufferUsage::Index:
-            access_mask = vk::AccessFlagBits::eIndexRead;
-            stage_mask = vk::PipelineStageFlagBits::eVertexInput;
-            break;
-        case BufferUsage::Uniform:
-        case BufferUsage::Texel:
-            access_mask = vk::AccessFlagBits::eUniformRead;
-            stage_mask = vk::PipelineStageFlagBits::eVertexShader |
-                    vk::PipelineStageFlagBits::eFragmentShader;
-            break;
-        default:
-            LOG_CRITICAL(Render_Vulkan, "Unknown BufferUsage flag!");
-        }
-
+        auto [access_mask, stage_mask] = ToVkAccessStageFlags(info.usage);
         const vk::BufferMemoryBarrier buffer_barrier = {
             .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
             .dstAccessMask = access_mask,
