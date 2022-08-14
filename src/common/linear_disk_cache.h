@@ -9,7 +9,7 @@
 #include "common/common_types.h"
 
 // defined in Version.cpp
-extern const char* scm_rev_git_str;
+const char* scm_rev_git_str = "DUMMY";
 
 // On disk format:
 // header{

@@ -656,6 +656,7 @@ bool Rasterizer::Draw(bool accelerate, bool is_indexed) {
 
     // Sync the viewport
     PipelineHandle raster_pipeline = pipeline_cache->GetPipeline(raster_info);
+    raster_pipeline->ApplyDynamic(raster_info);
     raster_pipeline->SetViewport(surfaces_rect.left + viewport_rect_unscaled.left * res_scale,
                                  surfaces_rect.bottom + viewport_rect_unscaled.bottom * res_scale,
                                  viewport_rect_unscaled.GetWidth() * res_scale,

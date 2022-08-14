@@ -271,7 +271,7 @@ void Texture::Upload(Rect2D rectangle, u32 stride, std::span<const u8> data, u32
         const std::array offsets = {
             vk::Offset3D{rectangle.x, rectangle.y, 0},
             vk::Offset3D{static_cast<s32>(rectangle.x + rectangle.width),
-                         static_cast<s32>(rectangle.y + rectangle.height), 0}
+                         static_cast<s32>(rectangle.y + rectangle.height), 1}
         };
 
         const vk::ImageBlit image_blit = {
@@ -525,7 +525,7 @@ void Texture::BlitTo(TextureHandle dest, Common::Rectangle<u32> source_rect, Com
 
     command_buffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal,
                              dest_texture->GetHandle(), vk::ImageLayout::eTransferDstOptimal,
-                             blit_area, vk::Filter::eNearest);
+                             blit_area, vk::Filter::eLinear);
 
     // Prepare for shader reads
     Transition(command_buffer, vk::ImageLayout::eShaderReadOnlyOptimal);
@@ -663,7 +663,7 @@ StagingTexture::StagingTexture(Instance& instance, CommandScheduler& scheduler, 
         .oldLayout = vk::ImageLayout::eUndefined,
         .newLayout = vk::ImageLayout::eGeneral,
         .image = image,
-        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, info.levels, 0, 1}
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
     };
 
     vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();

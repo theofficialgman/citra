@@ -70,8 +70,9 @@ private:
     CommandScheduler scheduler;
     RenderpassCache renderpass_cache;
     Swapchain swapchain;
-    vk::PipelineCache pipeline_cache;
 
+    vk::PipelineCache pipeline_cache;
+    std::string pipeline_cache_filename = "pipeline_cache.bin";
     std::unordered_map<u64, std::unique_ptr<PipelineOwner>, Common::IdentityHash> pipeline_owners;
     std::array<vk::DescriptorPool, SCHEDULER_COMMAND_COUNT> descriptor_pools;
     //FramebufferHandle current_framebuffer;

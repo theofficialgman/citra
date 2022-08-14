@@ -459,7 +459,25 @@ void Pipeline::SetScissor(s32 x, s32 y, u32 width, u32 height) {
 }
 
 void Pipeline::ApplyDynamic(const PipelineInfo& info) {
+    vk::CommandBuffer command_buffer = scheduler.GetRenderCommandBuffer();
+    command_buffer.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, info.depth_stencil.stencil_compare_mask);
+    command_buffer.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, info.depth_stencil.stencil_write_mask);
+    command_buffer.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, info.depth_stencil.stencil_reference);
 
+    if (instance.IsExtendedDynamicStateSupported()) {
+        command_buffer.setCullModeEXT(PicaToVK::CullMode(info.rasterization.cull_mode));
+        command_buffer.setDepthCompareOpEXT(PicaToVK::CompareFunc(info.depth_stencil.depth_compare_op));
+        command_buffer.setDepthTestEnableEXT(info.depth_stencil.depth_test_enable);
+        command_buffer.setDepthWriteEnableEXT(info.depth_stencil.depth_write_enable);
+        command_buffer.setFrontFaceEXT(PicaToVK::FrontFace(info.rasterization.cull_mode));
+        command_buffer.setPrimitiveTopologyEXT(PicaToVK::PrimitiveTopology(info.rasterization.topology));
+        command_buffer.setStencilTestEnableEXT(info.depth_stencil.stencil_test_enable);
+        command_buffer.setStencilOpEXT(vk::StencilFaceFlagBits::eFrontAndBack,
+                                       PicaToVK::StencilOp(info.depth_stencil.stencil_fail_op),
+                                       PicaToVK::StencilOp(info.depth_stencil.stencil_pass_op),
+                                       PicaToVK::StencilOp(info.depth_stencil.stencil_depth_fail_op),
+                                       PicaToVK::CompareFunc(info.depth_stencil.stencil_compare_op));
+    }
 }
 
 } // namespace VideoCore::Vulkan

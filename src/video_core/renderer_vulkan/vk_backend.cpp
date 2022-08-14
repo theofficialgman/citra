@@ -4,6 +4,8 @@
 
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #include <functional>
+#include "common/file_util.h"
+#include "common/linear_disk_cache.h"
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "video_core/renderer_vulkan/vk_backend.h"
@@ -42,6 +44,28 @@ constexpr vk::IndexType ToVkIndexType(AttribType type) {
     }
 }
 
+class PipelineCacheReadCallback : public LinearDiskCacheReader<u32, u8>
+{
+public:
+  PipelineCacheReadCallback(std::vector<u8>* data) : m_data(data) {}
+  void Read(const u32& key, const u8* value, u32 value_size) override
+  {
+    m_data->resize(value_size);
+    if (value_size > 0)
+      memcpy(m_data->data(), value, value_size);
+  }
+
+private:
+  std::vector<u8>* m_data;
+};
+
+class PipelineCacheReadIgnoreCallback : public LinearDiskCacheReader<u32, u8>
+{
+public:
+  void Read(const u32& key, const u8* value, u32 value_size) override {}
+};
+
+
 Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
     instance(window), scheduler(instance, pool_manager), renderpass_cache(instance),
     swapchain(instance, scheduler, renderpass_cache, pool_manager, instance.GetSurface()) {
@@ -53,9 +77,26 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
     telemetry_session.AddField(user_system, "GPU_Model", "GTX 1650");
     telemetry_session.AddField(user_system, "GPU_Vulkan_Version", "Vulkan 1.3");
 
+    vk::PipelineCacheCreateInfo cache_info{};
+
+    std::vector<u8> disk_data;
+    LinearDiskCache<u32, u8> disk_cache;
+    PipelineCacheReadCallback read_callback(&disk_data);
+    if (disk_cache.OpenAndRead(pipeline_cache_filename.c_str(), read_callback) != 1) {
+        disk_data.clear();
+    }
+
+    if (!disk_data.empty()) {
+        // Don't use this data. In fact, we should delete it to prevent it from being used next time.
+        FileUtil::Delete(pipeline_cache_filename);
+    } else {
+        cache_info.initialDataSize = disk_data.size();
+        cache_info.pInitialData = disk_data.data();
+    }
+
     // Create pipeline cache object
     vk::Device device = instance.GetDevice();
-    pipeline_cache = device.createPipelineCache({});
+    pipeline_cache = device.createPipelineCache(cache_info);
 
     constexpr std::array pool_sizes = {
         vk::DescriptorPoolSize{vk::DescriptorType::eUniformBuffer, 1024},
@@ -81,10 +122,23 @@ Backend::Backend(Frontend::EmuWindow& window) : BackendBase(window),
 }
 
 Backend::~Backend() {
-
     // Wait for all GPU operations to finish before continuing
     vk::Device device = instance.GetDevice();
     device.waitIdle();
+
+    auto data = device.getPipelineCacheData(pipeline_cache);
+
+    // Delete the old cache and re-create.
+    FileUtil::Delete(pipeline_cache_filename);
+
+    // We write a single key of 1, with the entire pipeline cache data.
+    // Not ideal, but our disk cache class does not support just writing a single blob
+    // of data without specifying a key.
+    LinearDiskCache<u32, u8> disk_cache;
+    PipelineCacheReadIgnoreCallback callback;
+    disk_cache.OpenAndRead(pipeline_cache_filename.c_str(), callback);
+    disk_cache.Append(1, data.data(), static_cast<u32>(data.size()));
+    disk_cache.Close();
 
     device.destroyPipelineCache(pipeline_cache);
 
